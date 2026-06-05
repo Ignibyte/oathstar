@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Oathstar</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="game-shell" aria-label="Oathstar game">
+      <section class="terminal-panel" aria-label="Adventure log">
+        <header class="terminal-header">
+          <div class="brand-lockup">
+            <img src="./assets/oathstar-sigil.svg" alt="" class="brand-sigil" />
+            <div>
+              <h1>Oathstar</h1>
+              <p id="room-kicker">Starfall Gate</p>
+            </div>
+          </div>
+          <div class="header-actions" aria-label="Game actions">
+            <button id="save-button" type="button" title="Save">
+              <span aria-hidden="true">S</span>
+            </button>
+            <button id="load-button" type="button" title="Load">
+              <span aria-hidden="true">L</span>
+            </button>
+            <button id="new-button" type="button" title="New">
+              <span aria-hidden="true">N</span>
+            </button>
+          </div>
+        </header>
+
+        <div id="log" class="log" aria-live="polite"></div>
+
+        <form id="command-form" class="command-form" autocomplete="off">
+          <span class="prompt" aria-hidden="true">&gt;</span>
+          <label class="sr-only" for="command-input">Command</label>
+          <input
+            id="command-input"
+            name="command"
+            type="text"
+            spellcheck="false"
+            placeholder="enter a command"
+            autofocus
+          />
+          <button type="submit" title="Send">
+            <span aria-hidden="true">Enter</span>
+          </button>
+        </form>
+      </section>
+
+      <aside class="side-panel" aria-label="Character and world state">
+        <section class="status-strip" aria-label="Character status">
+          <div class="meter">
+            <div class="meter-label">
+              <span>Health</span>
+              <strong id="hp-value">18/18</strong>
+            </div>
+            <div class="meter-track">
+              <div id="hp-bar" class="meter-fill hp"></div>
+            </div>
+          </div>
+          <div class="meter">
+            <div class="meter-label">
+              <span>Focus</span>
+              <strong id="focus-value">5/5</strong>
+            </div>
+            <div class="meter-track">
+              <div id="focus-bar" class="meter-fill focus"></div>
+            </div>
+          </div>
+        </section>
+
+        <section aria-label="Location">
+          <div class="panel-title">
+            <h2 id="room-name">Starfall Gate</h2>
+            <span id="turn-count">Turn 0</span>
+          </div>
+          <p id="room-description" class="room-description"></p>
+          <div id="exits" class="exit-grid"></div>
+        </section>
+
+        <section aria-label="Map">
+          <div class="panel-title">
+            <h2>Map</h2>
+            <span id="map-label">Gatehouse</span>
+          </div>
+          <div id="map" class="map-grid"></div>
+        </section>
+
+        <section aria-label="Inventory">
+          <div class="panel-title">
+            <h2>Inventory</h2>
+            <span id="inventory-count">0 items</span>
+          </div>
+          <div id="inventory" class="chip-list"></div>
+        </section>
+
+        <section aria-label="Nearby">
+          <div class="panel-title">
+            <h2>Nearby</h2>
+            <span id="nearby-count">0 things</span>
+          </div>
+          <div id="nearby" class="chip-list"></div>
+        </section>
+
+        <section aria-label="Oaths">
+          <div class="panel-title">
+            <h2>Oaths</h2>
+            <span id="quest-count">0/0</span>
+          </div>
+          <ol id="quests" class="quest-list"></ol>
+        </section>
+
+        <section aria-label="Commands">
+          <div class="panel-title">
+            <h2>Commands</h2>
+            <span id="command-context">Ready</span>
+          </div>
+          <div id="quick-commands" class="quick-grid"></div>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+[package]
+name = "oathstar-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oathstar-protocol = { path = "../oathstar-protocol" }
+serde.workspace = true

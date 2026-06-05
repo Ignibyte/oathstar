@@ -1,0 +1,125 @@
+[[rooms]]
+id = "hollowmere_square"
+title = "Hollowmere Square"
+region = "hollowmere"
+subregion = "town"
+description = "A rain-dark square gathers around a silent bell frame. Villagers keep glancing at the northern road."
+x = 0
+y = 0
+z = 0
+glyph = "+"
+passable = true
+
+[rooms.exits]
+north = "north_gate"
+east = "candle_shop"
+up = "bell_frame"
+
+[[rooms]]
+id = "candle_shop"
+title = "Mara's Candle Shop"
+region = "hollowmere"
+subregion = "town"
+description = "Shelves of tallow candles lean toward a chained ledger. Mara watches the door like it owes her money."
+x = 1
+y = 0
+z = 0
+glyph = "S"
+passable = true
+
+[rooms.exits]
+west = "hollowmere_square"
+
+[[rooms]]
+id = "bell_frame"
+title = "Silent Bell Frame"
+region = "hollowmere"
+subregion = "town"
+description = "The bell hangs above the square, whole but voiceless. Its clapper is missing."
+x = 0
+y = 0
+z = 1
+glyph = "^"
+passable = true
+
+[rooms.exits]
+down = "hollowmere_square"
+
+[[rooms]]
+id = "north_gate"
+title = "North Gate"
+region = "hollowmere"
+subregion = "wall"
+description = "The town gate opens onto the Ashen Road. Old claw marks score the posts at shoulder height."
+x = 0
+y = -1
+z = 0
+glyph = "G"
+passable = true
+
+[rooms.exits]
+south = "hollowmere_square"
+north = "ashen_road"
+
+[[rooms]]
+id = "ashen_road"
+title = "Ashen Road"
+region = "ashen_road"
+subregion = "wilds"
+description = "Ash drifts across the road in slow gray sheets. Something small and hungry moves between the stones."
+x = 0
+y = -2
+z = 0
+glyph = "."
+passable = true
+
+[rooms.exits]
+south = "north_gate"
+north = "tower_foot"
+
+[[rooms]]
+id = "tower_foot"
+title = "Old Bell Tower Foot"
+region = "old_bell_tower"
+subregion = "tower"
+description = "The old tower rises from a ring of nettles. The missing clapper must be somewhere above."
+x = 0
+y = -3
+z = 0
+glyph = "T"
+passable = true
+
+[rooms.exits]
+south = "ashen_road"
+up = "tower_landing"
+
+[[rooms]]
+id = "tower_landing"
+title = "Tower Landing"
+region = "old_bell_tower"
+subregion = "tower"
+description = "A cramped landing creaks underfoot. Broken ropes sway overhead like hanged questions."
+x = 0
+y = -3
+z = 1
+glyph = "T"
+passable = true
+
+[rooms.exits]
+down = "tower_foot"
+up = "bell_eater_roost"
+
+[[rooms]]
+id = "bell_eater_roost"
+title = "Bell-Eater Roost"
+region = "old_bell_tower"
+subregion = "boss"
+description = "The roofless chamber smells of copper and wet feathers. The Bell-Eater crouches beside the stolen clapper."
+x = 0
+y = -3
+z = 2
+glyph = "B"
+passable = true
+
+[rooms.exits]
+down = "tower_landing"

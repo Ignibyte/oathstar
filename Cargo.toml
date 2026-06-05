@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/oathstar-core",
+    "crates/oathstar-protocol",
+    "crates/oathstar-storage",
+    "crates/oathstar-content",
+    "crates/oathstar-server"
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+authors = ["Oathstar"]
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+async-stream = "0.3"
+axum = "0.8"
+futures-core = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.9"

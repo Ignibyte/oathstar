@@ -1,0 +1,13 @@
+id = "oathstar.beginner"
+name = "The Bell At Hollowmere"
+version = "0.1.0"
+description = "A beginner proof-of-concept module: local town, first oath, outside road, tower, and boss hook."
+author = "Oathstar"
+category = "world"
+required_engine = ">=0.1.0"
+enabled_by_default = true
+start_room_id = "hollowmere_square"
+
+hooks = []
+dependencies = []
+conflicts = []

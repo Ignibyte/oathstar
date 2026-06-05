@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Oathstar sigil</title>
+  <desc id="desc">A brass star over a green glass ring.</desc>
+  <defs>
+    <radialGradient id="glass" cx="50%" cy="50%" r="55%">
+      <stop offset="0" stop-color="#b9f0d6" />
+      <stop offset="0.48" stop-color="#5f9d8a" />
+      <stop offset="1" stop-color="#183a35" />
+    </radialGradient>
+    <linearGradient id="brass" x1="20%" x2="80%" y1="18%" y2="88%">
+      <stop offset="0" stop-color="#fff1b8" />
+      <stop offset="0.45" stop-color="#c99a45" />
+      <stop offset="1" stop-color="#6e4722" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="22" fill="#151514" />
+  <circle cx="64" cy="64" r="45" fill="none" stroke="url(#glass)" stroke-width="8" />
+  <path
+    d="M64 16 74.5 51.5 112 50 81 70.5 94 106 64 82 34 106 47 70.5 16 50 53.5 51.5Z"
+    fill="url(#brass)"
+    stroke="#f5df93"
+    stroke-width="2"
+    stroke-linejoin="round"
+  />
+  <circle cx="64" cy="64" r="9" fill="#f7ead0" />
+  <path d="M64 31v22M64 75v22M31 64h22M75 64h22" stroke="#f7ead0" stroke-width="4" stroke-linecap="round" />
+</svg>
