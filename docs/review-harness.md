@@ -21,22 +21,33 @@ Codex review should check:
 Before blessing implementation work, run:
 
 ```bash
-npm run verify
+bin/gate.sh
 ```
 
-This currently runs:
+This is the canonical full gate and currently runs:
 
 - `cargo fmt --all -- --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
+- strict `cargo clippy`
 - `cargo test --workspace`
 - `npm test`
-- `npm run build`
+- `cargo audit`
+- `cargo deny check`
+- `cargo machete`
+- `gitleaks`
+- `shellcheck`
+- no-suppressions/source-ban/lint-allowlist/doc gates
+- Rust coverage (≥94% lines)
+- JS coverage (≥75% lines)
+- mutation testing (100% MSI)
 
 For fast iteration, run:
 
 ```bash
-npm run verify:quick
+bin/gate.sh --fast
 ```
+
+`npm run verify` and `npm run verify:quick` are wrappers around those same
+commands for convenience.
 
 ## API Smoke Checks
 
