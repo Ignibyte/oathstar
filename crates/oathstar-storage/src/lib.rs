@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use serde::{de::DeserializeOwned, Serialize};
 
 /// Why a save slot id was rejected before it could become a filesystem path.
@@ -17,6 +17,10 @@ pub enum SaveSlotError {
     Traversal { name: String },
     /// The slot id contained a character outside the allowed set.
     DisallowedCharacter { name: String, character: char },
+    /// The slot id was longer than [`MAX_SAVE_SLOT_LEN`].
+    TooLong { name: String, max: usize },
+    /// The slot id matched a reserved device name (e.g. Windows `CON`/`NUL`).
+    ReservedName { name: String },
 }
 
 impl std::fmt::Display for SaveSlotError {
@@ -34,11 +38,21 @@ impl std::fmt::Display for SaveSlotError {
                 f,
                 "save slot id '{name}' contains disallowed character '{character}'"
             ),
+            Self::TooLong { name, max } => write!(
+                f,
+                "save slot id '{name}' is longer than the {max}-character maximum"
+            ),
+            Self::ReservedName { name } => {
+                write!(f, "save slot id '{name}' is a reserved device name")
+            }
         }
     }
 }
 
 impl std::error::Error for SaveSlotError {}
+
+/// The longest permitted save slot id (kept well under filesystem name limits).
+pub const MAX_SAVE_SLOT_LEN: usize = 64;
 
 /// Validate a caller-supplied save slot id before it is used to build a path.
 ///
@@ -52,6 +66,12 @@ impl std::error::Error for SaveSlotError {}
 pub fn validate_save_slot_name(name: &str) -> Result<(), SaveSlotError> {
     if name.is_empty() {
         return Err(SaveSlotError::Empty);
+    }
+    if name.len() > MAX_SAVE_SLOT_LEN {
+        return Err(SaveSlotError::TooLong {
+            name: name.to_owned(),
+            max: MAX_SAVE_SLOT_LEN,
+        });
     }
     if name.contains('/') || name.contains('\\') {
         return Err(SaveSlotError::ContainsSeparator {
@@ -71,7 +91,30 @@ pub fn validate_save_slot_name(name: &str) -> Result<(), SaveSlotError> {
             });
         }
     }
+    if is_reserved_device_name(name) {
+        return Err(SaveSlotError::ReservedName {
+            name: name.to_owned(),
+        });
+    }
     Ok(())
+}
+
+/// Whether `name` matches a Windows reserved device name (case-insensitive):
+/// `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`. Rejected on every
+/// platform so save files stay portable.
+fn is_reserved_device_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    for prefix in ["COM", "LPT"] {
+        if let Some(rest) = upper.strip_prefix(prefix) {
+            if rest.len() == 1 && matches!(rest.chars().next(), Some('1'..='9')) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 pub trait SaveStore {
@@ -98,6 +141,18 @@ impl FileSaveStore {
         validate_save_slot_name(name)?;
         Ok(self.root.join(format!("{name}.json")))
     }
+
+    /// Defense-in-depth: refuse a save target that is a symlink, so a planted
+    /// symlink in the save directory cannot redirect a read or write outside the
+    /// save root. (Full TOCTOU safety would need `O_NOFOLLOW`/`openat`.)
+    fn ensure_not_symlink(&self, path: &Path) -> anyhow::Result<()> {
+        if let Ok(meta) = fs::symlink_metadata(path) {
+            if meta.file_type().is_symlink() {
+                bail!("refusing save slot: '{}' is a symlink", path.display());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl SaveStore for FileSaveStore {
@@ -105,6 +160,7 @@ impl SaveStore for FileSaveStore {
         let path = self.path_for(name)?;
         fs::create_dir_all(&self.root)
             .with_context(|| format!("failed to create save directory {}", self.root.display()))?;
+        self.ensure_not_symlink(&path)?;
         let json = serde_json::to_string_pretty(value).context("failed to serialize save JSON")?;
         fs::write(&path, json).with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
@@ -112,6 +168,7 @@ impl SaveStore for FileSaveStore {
 
     fn read_json<T: DeserializeOwned>(&self, name: &str) -> anyhow::Result<T> {
         let path = self.path_for(name)?;
+        self.ensure_not_symlink(&path)?;
         let json = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
         serde_json::from_str(&json).with_context(|| format!("failed to parse {}", path.display()))
@@ -352,5 +409,119 @@ mod tests {
             err.to_string().contains("save slot id"),
             "unexpected error: {err}"
         );
+    }
+
+    // Hardening: length cap (boundary at MAX_SAVE_SLOT_LEN).
+    #[test]
+    fn validate_rejects_too_long() {
+        let max = super::MAX_SAVE_SLOT_LEN;
+        assert_eq!(validate_save_slot_name(&"a".repeat(max)), Ok(()));
+        let too_long = "a".repeat(max + 1);
+        assert_eq!(
+            validate_save_slot_name(&too_long),
+            Err(SaveSlotError::TooLong {
+                name: too_long.clone(),
+                max,
+            })
+        );
+    }
+
+    // Hardening: Windows reserved device names (case-insensitive) are rejected.
+    #[test]
+    fn validate_rejects_reserved_names() {
+        for reserved in [
+            "con", "CON", "Nul", "aux", "prn", "COM1", "com9", "lpt1", "LPT9",
+        ] {
+            assert_eq!(
+                validate_save_slot_name(reserved),
+                Err(SaveSlotError::ReservedName {
+                    name: reserved.to_string(),
+                }),
+                "{reserved} should be rejected as reserved"
+            );
+        }
+    }
+
+    // Hardening: near-misses are NOT reserved (exactness, not substring).
+    #[test]
+    fn validate_allows_reserved_lookalikes() {
+        for ok in ["console", "com0", "com10", "lpt", "connection"] {
+            assert_eq!(
+                validate_save_slot_name(ok),
+                Ok(()),
+                "{ok} should be allowed"
+            );
+        }
+    }
+
+    // Hardening: Display for the two new variants.
+    #[test]
+    fn hardening_error_messages_render() {
+        let too_long = SaveSlotError::TooLong {
+            name: "x".to_string(),
+            max: 64,
+        }
+        .to_string();
+        assert!(too_long.contains("'x'") && too_long.contains("64") && too_long.contains("longer"));
+        let reserved = SaveSlotError::ReservedName {
+            name: "CON".to_string(),
+        }
+        .to_string();
+        assert!(reserved.contains("'CON'") && reserved.contains("reserved device name"));
+    }
+
+    // Hardening: writing through a planted symlink is refused (no escape).
+    #[cfg(unix)]
+    #[test]
+    fn write_json_rejects_symlink_target() {
+        use std::os::unix::fs::symlink;
+        let dir = scratch_dir("symlink-write");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("make root");
+        let outside = scratch_dir("symlink-write-outside");
+        std::fs::remove_file(&outside).ok();
+        symlink(&outside, dir.join("hero.json")).expect("plant a symlink at the save path");
+        let store = FileSaveStore::new(&dir);
+        let err = store
+            .write_json(
+                "hero",
+                &Hero {
+                    name: "x".to_string(),
+                    level: 1,
+                },
+            )
+            .expect_err("writing through a symlink must be refused");
+        assert!(
+            err.to_string().contains("symlink"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !outside.exists(),
+            "the symlink target outside the root was not written"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_file(&outside).ok();
+    }
+
+    // Hardening: reading through a planted symlink is refused.
+    #[cfg(unix)]
+    #[test]
+    fn read_json_rejects_symlink_target() {
+        use std::os::unix::fs::symlink;
+        let dir = scratch_dir("symlink-read");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("make root");
+        let outside = scratch_dir("symlink-read-outside");
+        std::fs::write(&outside, b"{}").expect("seed an outside file");
+        symlink(&outside, dir.join("hero.json")).expect("plant a symlink at the save path");
+        let store = FileSaveStore::new(&dir);
+        let result: anyhow::Result<Hero> = store.read_json("hero");
+        let err = result.expect_err("reading through a symlink must be refused");
+        assert!(
+            err.to_string().contains("symlink"),
+            "unexpected error: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_file(&outside).ok();
     }
 }
