@@ -61,7 +61,7 @@ Each criterion is one observable behavior with a verification method.
 ## Linked Artifacts
 - Design docs: `docs/module-system.md`, `docs/technical-architecture.md`, `docs/map-system.md`
 - Intake doc: none (the only intake item is unrelated — swappable rulesets)
-- Ticket doc: `docs/planning/tickets/open/TICKET-2-harden-core-world-initialization.md`
+- Ticket doc: `docs/planning/tickets/closed/TICKET-2-harden-core-world-initialization.md`
 - Forge ticket: `99619421-df57-4aec-976f-a4139eafd469` (#2)
 - AAR: `fa4ac433-a861-4278-afec-343044afbe6c`
 

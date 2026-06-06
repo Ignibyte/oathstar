@@ -752,4 +752,56 @@ mod tests {
             .expect("start room present in map");
         assert!(start.discovered, "start room is discovered at construction");
     }
+
+    // Empty input is rejected with a prompt and changes nothing.
+    #[test]
+    fn empty_command_input_waits() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("   "));
+        assert!(!response.accepted, "blank input is not accepted");
+        assert!(response.events.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::LogMessage { text, .. } if text.contains("The world waits")
+        )));
+    }
+
+    // Moving in a direction the room has no exit for is refused, room unchanged.
+    #[test]
+    fn move_with_no_exit_is_refused() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("north"));
+        assert!(response.events.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::LogMessage { text, .. } if text.contains("cannot go that way")
+        )));
+        assert_eq!(
+            response.snapshot.current_room_id, "a",
+            "a refused move does not change the current room"
+        );
+    }
+
+    // Moving into an impassable (but existing) room is blocked, room unchanged.
+    #[test]
+    fn move_into_impassable_room_is_blocked() {
+        let mut rooms = BTreeMap::new();
+        rooms.insert(
+            "a".to_string(),
+            room_with(
+                "a",
+                true,
+                BTreeMap::from([("east".to_string(), "c".to_string())]),
+            ),
+        );
+        rooms.insert("c".to_string(), room_with("c", false, BTreeMap::new()));
+        let mut engine = Engine::try_new(world_with("a", rooms)).expect("valid world");
+        let response = engine.handle_command(cmd("east"));
+        assert!(response.events.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::LogMessage { text, .. } if text.contains("Something blocks that way")
+        )));
+        assert_eq!(
+            response.snapshot.current_room_id, "a",
+            "a blocked move does not change the current room"
+        );
+    }
 }

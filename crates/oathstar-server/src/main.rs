@@ -284,4 +284,46 @@ mod tests {
             .expect("broadcast channel stays open");
         assert!(matches!(event.kind, GameEventKind::Tick { .. }));
     }
+
+    fn test_app_state() -> AppState {
+        let world = oathstar_content::load_beginner_world().expect("beginner world loads");
+        let (events, _rx) = broadcast::channel(16);
+        AppState {
+            engine: Arc::new(Mutex::new(
+                Engine::try_new(world).expect("valid beginner world"),
+            )),
+            events,
+        }
+    }
+
+    #[tokio::test]
+    async fn health_reports_ok() {
+        let body = health().await;
+        assert_eq!(body.0["ok"], true);
+        assert_eq!(body.0["service"], "oathstar-server");
+    }
+
+    #[tokio::test]
+    async fn state_snapshot_returns_engine_state() {
+        let snapshot = state_snapshot(State(test_app_state())).await;
+        assert_eq!(snapshot.0.current_room_id, "hollowmere_square");
+    }
+
+    #[tokio::test]
+    async fn command_processes_and_broadcasts() {
+        let app = test_app_state();
+        let mut rx = app.events.subscribe();
+        let response = command(
+            State(app),
+            Json(CommandRequest {
+                input: "look".to_string(),
+                actor_id: None,
+            }),
+        )
+        .await;
+        assert!(response.0.accepted, "a known command is accepted");
+        assert!(!response.0.events.is_empty(), "the command emits events");
+        rx.try_recv()
+            .expect("the command's events are broadcast to subscribers");
+    }
 }

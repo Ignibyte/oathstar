@@ -135,4 +135,27 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn load_rejects_malformed_module_toml() {
+        // `x = ` is a TOML syntax error (no value), so the module never parses.
+        let err = load_world_from_toml("x = ", ONE_ROOM)
+            .expect_err("malformed module TOML must be rejected");
+        assert!(
+            err.to_string().contains("invalid module TOML"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn load_rejects_malformed_rooms_toml() {
+        // Module parses; rooms is the wrong shape (a string, not an array of tables).
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
+        let err = load_world_from_toml(module, "rooms = \"not a table array\"")
+            .expect_err("malformed rooms TOML must be rejected");
+        assert!(
+            err.to_string().contains("invalid rooms TOML"),
+            "unexpected error: {err}"
+        );
+    }
 }
