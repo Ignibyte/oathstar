@@ -1,12 +1,12 @@
 ---
 title: TICKET-3-validate-save-slot-names
-status: open
+status: done
 ticket: e58bad86-b2e6-4e97-b36e-10c6bf63491d
 ticket_number: 3
 type: chore
 created: 2026-06-06
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-validate-save-slot-names.spec.md
 ---
 
 # TICKET-3-validate-save-slot-names
