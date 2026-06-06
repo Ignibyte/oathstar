@@ -8,3 +8,6 @@ license.workspace = true
 [dependencies]
 oathstar-protocol = { path = "../oathstar-protocol" }
 serde.workspace = true
+
+[lints]
+workspace = true

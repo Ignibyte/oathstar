@@ -23,3 +23,30 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.9"
+
+# Strict lint policy (CONSTITUTION §0) — the PHPStan-L10 / PHPMD equivalent.
+# clippy `all` + `pedantic` + `nursery` are DENY; the gate fails on any. The
+# allow-list below is the *justified ratchet backlog* — debatable lints for a
+# small game engine, to be fixed and removed over time (not blanket
+# suppressions). New code is expected to comply without adding to this list.
+# priority = -1 lets the specific allows override the group denies.
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+# — ratchet backlog (justified) —
+missing_errors_doc = "allow"          # # Errors docs: ratchet in as the API stabilizes
+missing_panics_doc = "allow"          # # Panics docs: same
+must_use_candidate = "allow"          # #[must_use] noise on a game engine's getters
+module_name_repetitions = "allow"     # oathstar_core::OathstarThing reads fine
+unused_self = "allow"                  # method-shape consistency in the engine API
+needless_pass_by_value = "allow"      # by-value request DTOs are an intentional API choice
+significant_drop_tightening = "allow" # nursery; finicky with Mutex guards in the server loop
+assigning_clones = "allow"            # micro-perf; ratchet later
+needless_continue = "allow"           # readability in the SSE match arms
+# — restriction lints (SAST-style bans; = aic semgrep no-eval / no-debug) —
+dbg_macro = "deny"                     # no stray dbg!() in committed code
+todo = "deny"                          # no todo!() placeholders ship
+unimplemented = "deny"                 # no unimplemented!() ship
+print_stdout = "allow"                 # the server legitimately prints to stdout
+mem_forget = "deny"                    # no leaks via mem::forget

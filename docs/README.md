@@ -2,6 +2,7 @@
 
 This folder is the planning home for Oathstar.
 
+- [Team Handbook](./team-handbook.md) is the shared project brief for goals, team roles, workflow, current priorities, and guardrails.
 - [Game Overview](./game-overview.md) defines the concept, tone, player promise, pillars, and rough scope.
 - [Mechanics And Systems](./mechanics-and-systems.md) captures the current mechanical direction and the decisions we still need to make.
 - [Entity Model](./entity-model.md) describes shared entities, actor roles, contracts, and code-behind behavior hooks.
@@ -18,5 +19,6 @@ This folder is the planning home for Oathstar.
 - [Protocol And Output](./protocol-and-output.md) describes typed domain events, JSON/HTML representations, and componentized interactive output.
 - [Review Harness](./review-harness.md) describes the verification gate and Codex review workflow for implementation work.
 - [Design Decisions](./decisions.md) records locked choices and the next mechanic decisions.
+- [Planning Workspace](./planning/README.md) describes intake docs, forge ticket docs, pipeline docs, and EARS requirements templates.
 
 These documents are living drafts. They should change as the game gets sharper.

@@ -1,0 +1,37 @@
+{
+  "_comment": "Oathstar pipeline enforcement. PreToolUse gates code writes by phase + recall + forge config, and blocks `git commit` of code without a green gate; Stop gates leaving a phase on tasks/tests/format/knowledge-capture/doc-status. Gates arm on pipeline intent (active phase or active doc) — not just forge usage — and otherwise no-op during normal chat. See CONSTITUTION.md.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/enforce-mcp-config.sh", "timeout": 20 }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/enforce-commit-gate.sh", "timeout": 20 }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/enforce-phase-gate.sh", "timeout": 20 },
+          { "type": "command", "command": "bash .claude/hooks/enforce-docs-before-code.sh", "timeout": 20 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/enforce-pipeline-completion.sh", "timeout": 20 },
+          { "type": "command", "command": "bash .claude/hooks/enforce-phase-tasks.sh", "timeout": 20 },
+          { "type": "command", "command": "bash .claude/hooks/enforce-tests-ran.sh", "timeout": 30 },
+          { "type": "command", "command": "bash .claude/hooks/enforce-quality.sh", "timeout": 60 },
+          { "type": "command", "command": "bash .claude/hooks/enforce-completion.sh", "timeout": 20 }
+        ]
+      }
+    ]
+  }
+}

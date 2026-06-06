@@ -1,0 +1,16 @@
+# Canonical clippy allow-list baseline (gate:12, the NoBaselinesGate analogue).
+# One lint name per line — every `= "allow"` (or `level = "allow"`) entry under
+# [workspace.lints.clippy] in Cargo.toml. gate:12 fails if the live allow-list
+# differs from this file, so the "justified ratchet backlog" cannot quietly grow
+# into a de-facto baseline: adding/removing an allow MUST also update this file
+# in the same commit (visible, reviewable). CONSTITUTION §0.
+assigning_clones
+missing_errors_doc
+missing_panics_doc
+module_name_repetitions
+must_use_candidate
+needless_continue
+needless_pass_by_value
+print_stdout
+significant_drop_tightening
+unused_self

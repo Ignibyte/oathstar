@@ -1,0 +1,39 @@
+# =============================================================================
+# .gitleaks.toml — secret-scanning config for Oathstar (gate:8)
+# =============================================================================
+# Extends gitleaks' default ruleset and adds the secret shapes this project
+# actually handles — Anthropic API keys and the oathstar-forge sidecar bearer —
+# which the default rules MISS. The gate scans both committed history
+# (`gitleaks detect -s .`) and the working tree per source dir (`gitleaks dir`),
+# so an uncommitted secret is caught in the same change that introduces it.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key (sk-ant-...)"
+regex = '''sk-ant-(?:api03|admin01)?-[A-Za-z0-9_-]{24,}'''
+keywords = ["sk-ant-"]
+
+[[rules]]
+id = "oathstar-forge-bearer"
+description = "oathstar-forge sidecar admin bearer (forge_pk_...)"
+regex = '''forge_pk_[A-Za-z0-9_]{8,}'''
+keywords = ["forge_pk_"]
+
+# Build output, vendored deps, and the owner-managed local .mcp.json (gitignored,
+# never committed — it legitimately holds the dev bearer) are not source and must
+# not trip the gate. This filters findings by path; the gate also avoids walking
+# target/ by scanning specific source dirs rather than `.`.
+[allowlist]
+description = "build output, deps, and the gitignored owner-managed .mcp.json"
+paths = [
+  '''(^|/)target/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+  '''(^|/)\.git/''',
+  '''(^|/)mutants\.out/''',
+  '''\.rmeta$''',
+  '''(^|/)\.mcp\.json$''',
+  '''(^|/)\.mcp\.json\.example$''',
+]

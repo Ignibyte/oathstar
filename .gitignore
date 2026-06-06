@@ -4,3 +4,11 @@ target/
 src-tauri/target/
 .DS_Store
 *.log
+
+# Local MCP server registration holds the forge sidecar admin bearer — never
+# commit. Share .mcp.json.example (placeholder) instead.
+.mcp.json
+
+# mutation testing output
+mutants.out/
+mutants.out.old/

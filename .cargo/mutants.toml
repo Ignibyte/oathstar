@@ -1,0 +1,13 @@
+# cargo-mutants configuration.
+#
+# Exclude the single irreducible composition root from mutation: `fn main` binds
+# a TCP socket and runs the server until shutdown — it has no unit-testable
+# return contract, so a "replace body with Ok(())" mutant can never be killed by
+# a test. This mirrors aic scoping Infection to domain `src/`, not the server
+# bootstrap. Everything main WIRES UP — the world loader, the engine, the router
+# handlers, render_event_html/escape_html, root, and spawn_tick_loop — is
+# mutation-tested on its own. Recorded in CONSTITUTION §0 ("Known scope") so the
+# exclusion is explicit, not silent.
+exclude_re = [
+    "src/main\\.rs.*replace main ->",
+]

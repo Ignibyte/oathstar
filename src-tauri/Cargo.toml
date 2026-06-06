@@ -17,3 +17,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# serde/serde_json are not yet referenced by the stock shell but are required
+# the moment a `#[tauri::command]` lands (IPC arg/return serialization). Kept +
+# justified-ignored rather than churned. Remove the ignore once a command uses them.
+[package.metadata.cargo-machete]
+ignored = ["serde", "serde_json"]

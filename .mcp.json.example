@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to .mcp.json (gitignored) and set the bearer to match oathstar-forge/.env FORGE_ADMIN_BEARER. Requires the forge sidecar running: ~/Projects/oathstar-forge/scripts/start-all.sh",
+  "mcpServers": {
+    "forge": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp/forge",
+      "headers": {
+        "Authorization": "Bearer forge_pk_REPLACE_ME"
+      }
+    }
+  }
+}

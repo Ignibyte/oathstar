@@ -10,3 +10,6 @@ anyhow.workspace = true
 oathstar-core = { path = "../oathstar-core" }
 serde.workspace = true
 toml.workspace = true
+
+[lints]
+workspace = true

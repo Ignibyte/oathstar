@@ -31,6 +31,49 @@ Examples:
 
 This lets a player start simple and later replay with more systems enabled.
 
+## Swappable Rule Systems
+
+The long-term target is not only content modules. Oathstar should strive toward
+rule-system modularity: a roleplaying runtime where major systems can be swapped
+or composed for different campaigns.
+
+Potentially swappable systems:
+
+- Battle system
+- Player stats and attributes
+- Progression and skill advancement
+- Inventory and equipment model
+- Class/transformation rules
+- Oath and quest logic
+- Region standing and faction rules
+- Economy/trade/crafting rules
+- World/director behavior
+- DM and LLM director behavior
+- UI/rendering components
+
+This makes Oathstar closer to a roleplaying engine than a single fixed ruleset.
+One world might use fast MUD-style grinding, another could use tabletop-style
+turns, and another could use a social/investigation ruleset with little combat.
+
+The core should remain a small deterministic kernel:
+
+- Load modules and presets
+- Validate compatibility
+- Own the event lifecycle
+- Own save/load and migrations
+- Own authoritative state commits
+- Expose typed contracts for rule systems
+
+Rule modules should implement contracts rather than mutate state directly. For
+example, a combat module can resolve an encounter and submit validated change
+requests; a stats module can define attributes and derived values; a director
+module can schedule events. The core validates the requests, commits state, and
+emits typed events.
+
+Early implementation should still be conservative. We can start with one
+official built-in ruleset while shaping contracts so the battle system, stats,
+progression, and inventory are not welded permanently into the kernel.
+
 ## Complexity Philosophy
 
 The game should be capable of Stellaris/Hearts of Iron levels of mastery, but not require that mastery on a first run.

@@ -75,6 +75,10 @@ Modules can eventually provide:
 - Rooms
 - Entities
 - Items
+- Battle systems
+- Stat models
+- Progression models
+- Inventory/equipment models
 - Skills
 - Oaths
 - Classes
@@ -100,6 +104,13 @@ Modules should also support optional complexity. A new game can enable only the 
 Modules should use core-validated state changes. They can register content and hooks, but the Rust core should validate and commit mutations.
 
 Future module authors may get a lightweight interpreted scripting layer called Oathscript for simple lifecycle hooks without compiling Rust. Oathscript should remain sandboxed and core-validated.
+
+Long term, Oathstar should support swappable rule-system modules. The core
+runtime should avoid baking in one permanent combat, stat, progression, or
+inventory model. Instead, the runtime should expose typed contracts and module
+presets that choose compatible implementations for a given world or campaign.
+The first implementation can ship one official ruleset, but it should keep the
+kernel small enough that alternate rulesets remain possible.
 
 ## Datastar And SSE Frontend Direction
 
