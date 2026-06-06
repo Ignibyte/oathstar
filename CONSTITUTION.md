@@ -16,8 +16,8 @@ there and recalls it on the next run.
 ## §0 — Quality Gates (binding)
 
 The canonical gate is **`bin/gate.sh`** — a Rust port of the aic PHP quality
-stack. The FULL gate (16 gates) must pass green before `/commit`; `--fast` runs
-the 13 static gates for a quick local loop but prints `GATE GREEN [fast]` — only
+stack. The FULL gate (17 gates) must pass green before `/commit`; `--fast` runs
+the 14 static gates for a quick local loop but prints `GATE GREEN [fast]` — only
 a FULL green writes the receipt the commit hook requires (§15), so `--fast`
 can't satisfy `/commit`.
 
@@ -36,9 +36,10 @@ gate:10 no-suppress    grep meta-gate (allow/expect + justify)  ← NoBaselinesG
 gate:11 source-bans    grep meta-gate (SAST primitives)         ← semgrep anti-patterns
 gate:12 lints-base     diff meta-gate (allow-list baseline)     ← NoBaselinesGate (config)
 gate:13 doc-todos      grep meta-gate                           ← doc-todos
-gate:14 rust coverage  cargo llvm-cov --fail-under-lines $RUST_COV_MIN   [FULL]
-gate:15 js coverage    node --experimental-test-coverage (floor $JS_COV_MIN) [FULL]
-gate:16 mutation       cargo mutants  (MSI ≥ $MUT_MSI_MIN%)     ← Infection MSI [FULL]
+gate:14 tauri shell    src-tauri: cargo fmt --check (both) + clippy -D warnings (FULL)
+gate:15 rust coverage  cargo llvm-cov --fail-under-lines $RUST_COV_MIN   [FULL]
+gate:16 js coverage    node --experimental-test-coverage (floor $JS_COV_MIN) [FULL]
+gate:17 mutation       cargo mutants  (MSI ≥ $MUT_MSI_MIN%)     ← Infection MSI [FULL]
 ```
 
 Strict static analysis lives in `[workspace.lints]` (Cargo.toml): clippy
@@ -64,14 +65,18 @@ bin/gate.sh` still enforces it. Mutation is at **100% MSI — parity with aic's
 Infection floor**; coverage actuals sit above the floors (~94% rust lines, ~75%
 js lines). Lowering a floor to pass is a charter violation — write the test.
 
-**Known scope (honest — not yet a complete 1:1 of aic).** Mutation (gate:16) is
+**Known scope (honest — not yet a complete 1:1 of aic).** Mutation (gate:17) is
 at MSI 100% over the whole workspace; the **sole excluded function is `fn main`**
 (the composition root — binds a socket and serves forever, no unit-testable
-contract; recorded in `.cargo/mutants.toml`). Coverage gate:14 is a *workspace
+contract; recorded in `.cargo/mutants.toml`). Coverage gate:15 is a *workspace
 line* floor, not aic's per-file 100% line+branch+function (branch coverage needs
-nightly llvm-cov and isn't gated yet). `src-tauri` (the Tauri shell) is outside
-the compile gates — it's built by `tauri` with its own toolchain — but its source
-is covered by the text gates (8/10/11). Not yet ported: architecture layering
+nightly llvm-cov and isn't gated yet). `src-tauri` (the Tauri shell) is a
+standalone crate (own `Cargo.lock` + `[workspace]`, built by `tauri`) gated by
+**gate:14** — `cargo fmt --check` in both modes, `cargo clippy -- -D warnings`
+in FULL. Coverage/mutation aren't gated (the first-party shell is a thin IPC
+wrapper), and its separate dependency tree (own `Cargo.lock`, ~400 crates) isn't
+yet audit/deny-gated — both future ratchet items. Its source is also covered by
+the text gates (8/10/11). Not yet ported: architecture layering
 (deptrac), refactor-drift (Rector), taint analysis (Psalm). These are the ratchet
 roadmap, recorded so the gap is explicit.
 

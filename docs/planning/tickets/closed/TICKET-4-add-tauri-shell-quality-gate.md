@@ -1,12 +1,13 @@
 ---
 title: TICKET-4-add-tauri-shell-quality-gate
-status: open
+status: done
 ticket: 2885b6ed-5deb-403b-afcb-67f80b35eb1d
 ticket_number: 4
 type: chore
 created: 2026-06-06
+closed: 2026-06-06
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-add-tauri-shell-quality-gate.spec.md
 ---
 
 # TICKET-4-add-tauri-shell-quality-gate
@@ -40,4 +41,4 @@ before the desktop client grows meaningful behavior.
 - Forge ticket: `2885b6ed-5deb-403b-afcb-67f80b35eb1d`
 - Related docs: `CONSTITUTION.md`, `docs/review-harness.md`, `docs/technical-architecture.md`
 - Promoted from intake:
-- Active pipeline:
+- Completed pipeline: docs/planning/pipeline/completed/WORK-add-tauri-shell-quality-gate.spec.md

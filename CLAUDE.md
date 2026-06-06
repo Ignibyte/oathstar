@@ -39,17 +39,18 @@ still recall from the forge first and capture lessons after.
 ## The gate — `bin/gate.sh` (binding: CONSTITUTION §0)
 
 The single source of truth for shippable — a Rust port of aic's PHP quality
-stack. Strict, no baselines, source-fix only. **16 gates**:
+stack. Strict, no baselines, source-fix only. **17 gates**:
 
 ```
 1 rustfmt   2 clippy(strict)  3 cargo test  4 node --test  5 cargo-audit
 6 cargo-deny  7 cargo-machete  8 gitleaks(history+worktree)  9 shellcheck
 10 no-suppressions  11 source-bans(SAST)  12 lints-allowlist  13 doc-todos
-[FULL] 14 rust coverage  15 js coverage  16 mutation (cargo-mutants)
+14 tauri-shell(fmt; +clippy FULL)
+[FULL] 15 rust coverage  16 js coverage  17 mutation (cargo-mutants)
 ```
 
-- `bin/gate.sh` — FULL (all 16, incl. coverage + mutation). Required before `/commit`.
-- `bin/gate.sh --fast` — the 13 static gates, for a quick loop (prints `GATE GREEN
+- `bin/gate.sh` — FULL (all 17, incl. coverage + mutation). Required before `/commit`.
+- `bin/gate.sh --fast` — the 14 static gates, for a quick loop (prints `GATE GREEN
   [fast]`). Only a FULL green writes the commit-gate receipt, so `--fast` can't
   satisfy `/commit`.
 - Strict clippy (pedantic+nursery+restriction) is in `[workspace.lints]`; gate:12

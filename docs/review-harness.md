@@ -36,6 +36,7 @@ This is the canonical full gate and currently runs:
 - `gitleaks`
 - `shellcheck`
 - no-suppressions/source-ban/lint-allowlist/doc gates
+- `src-tauri` shell crate — `cargo fmt --check` (both modes) + `cargo clippy -- -D warnings` (FULL only) (gate:14)
 - Rust coverage (≥94% lines)
 - JS coverage (≥75% lines)
 - mutation testing (100% MSI)

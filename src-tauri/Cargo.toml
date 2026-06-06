@@ -1,3 +1,11 @@
+# src-tauri is its own workspace root: it owns a separate Cargo.lock and builds
+# with the `tauri` toolchain, and is deliberately NOT a member of the root
+# workspace (crates/oathstar-*). This empty table declares that explicitly so
+# `cargo <cmd> --manifest-path src-tauri/Cargo.toml` works standalone — the
+# bin/gate.sh "tauri shell" gate (gate:14) — instead of erroring with
+# "current package believes it's in a workspace when it's not". (ticket #4)
+[workspace]
+
 [package]
 name = "oathstar"
 version = "0.1.0"

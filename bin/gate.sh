@@ -25,6 +25,7 @@
 #   source-bans  grep meta-gate     ← semgrep anti-pattern rules (gate:15)
 #   lints-base   diff meta-gate     ← NoBaselinesGate, config side (gate:21)
 #   doc-todos    grep meta-gate     ← doc-todos (gate:24)
+#   tauri-shell  fmt + clippy       ← src-tauri (standalone) compile gate
 #   [FULL] rust-cov  cargo-llvm-cov ← coverage floor (gate:20)
 #   [FULL] js-cov    node coverage  ← (JS coverage)
 #   [FULL] mutation  cargo-mutants  ← Infection MSI (gate:12)
@@ -203,21 +204,36 @@ doc_todos_g() {
 }
 run_gate "gate:13 doc-todos" doc_todos_g
 
+# ── 14. tauri shell — the standalone src-tauri crate (NOT a workspace member) ─
+# src-tauri is its own workspace root (own Cargo.lock), so gates 1-3's
+# --workspace/--all never reach it. fmt-check runs in BOTH modes (cheap, no
+# compile). clippy compiles the tauri dep tree, so it is FULL-only to keep
+# --fast painless. Default lints + -D warnings (the §14 baseline); the shell
+# crate does not inherit the workspace pedantic/nursery lints by design (#4).
+tauri_shell_g() {
+  local m="src-tauri/Cargo.toml"
+  [ -f "$m" ] || { echo "missing $m"; return 1; }
+  cargo fmt --manifest-path "$m" --check || return 1
+  [ "$MODE" = "full" ] || return 0
+  cargo clippy --manifest-path "$m" --all-targets -- -D warnings
+}
+run_gate "gate:14 tauri shell (fmt; +clippy full)" tauri_shell_g
+
 # ── FULL-only: coverage + mutation ───────────────────────────────────────────
 # FAST is a legitimate green-able quick loop, but it prints "GATE GREEN [fast]";
 # the enforce-commit-gate.sh hook requires a worktree-bound receipt that is only
 # written on a FULL green, so /commit can never be satisfied by a FAST run.
 if [ "$MODE" = "fast" ]; then
-  RESULTS+=("SKIP  gate:14-16 coverage+mutation (--fast) — run the FULL gate before /commit")
+  RESULTS+=("SKIP  gate:15-17 coverage+mutation (--fast) — run the FULL gate before /commit")
 else
-  # 14. rust line coverage floor
+  # 15. rust line coverage floor
   rust_cov() {
     need cargo-llvm-cov "cargo install cargo-llvm-cov" || return 1
     cargo llvm-cov --workspace --fail-under-lines "$RUST_COV_MIN"
   }
-  run_gate "gate:14 rust coverage (>= ${RUST_COV_MIN}% lines)" rust_cov
+  run_gate "gate:15 rust coverage (>= ${RUST_COV_MIN}% lines)" rust_cov
 
-  # 15. js line coverage floor
+  # 16. js line coverage floor
   js_cov() {
     local out pct
     shopt -s nullglob; set -- tests/*.test.js; shopt -u nullglob
@@ -229,9 +245,9 @@ else
       || { echo "JS line coverage ${pct}% < floor ${JS_COV_MIN}%"; return 1; }
     echo "JS line coverage ${pct}% >= ${JS_COV_MIN}%"
   }
-  run_gate "gate:15 js coverage (>= ${JS_COV_MIN}% lines)" js_cov
+  run_gate "gate:16 js coverage (>= ${JS_COV_MIN}% lines)" js_cov
 
-  # 16. mutation testing (MSI floor) — the Infection equivalent
+  # 17. mutation testing (MSI floor) — the Infection equivalent
   # Hardened against the stale-outcomes false green: the previous run's output
   # is removed first, the run's exit code is checked (a crash/build-fail is a
   # gate failure, not a vacuous green off a leftover file), and the result must
@@ -261,7 +277,7 @@ else
     awk -v m="$msi" -v min="$MUT_MSI_MIN" 'BEGIN{exit !(m+0 >= min+0)}' \
       || { echo "MSI ${msi}% < floor ${MUT_MSI_MIN}% — kill more mutants (write tests)"; return 1; }
   }
-  run_gate "gate:16 mutation (MSI >= ${MUT_MSI_MIN}%)" mutation_g
+  run_gate "gate:17 mutation (MSI >= ${MUT_MSI_MIN}%)" mutation_g
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
