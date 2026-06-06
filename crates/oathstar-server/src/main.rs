@@ -3,10 +3,7 @@ use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Duration};
 use async_stream::stream;
 use axum::{
     extract::State,
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        Html,
-    },
+    response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
@@ -27,7 +24,7 @@ struct AppState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let world = oathstar_content::load_beginner_world()?;
-    let engine = Engine::new(world);
+    let engine = Engine::try_new(world)?;
     let (events, _) = broadcast::channel(256);
 
     let app_state = AppState {
@@ -192,13 +189,99 @@ fn escape_html(input: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-#[allow(dead_code)]
-async fn _html_preview(State(app): State<AppState>) -> Html<String> {
-    let engine = app.engine.lock().await;
-    let snapshot = engine.snapshot();
-    Html(format!(
-        "<h1>{}</h1><p>{}</p>",
-        escape_html(&snapshot.room.title),
-        escape_html(&snapshot.room.description)
-    ))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oathstar_protocol::{EventChannel, OutputComponent};
+
+    #[test]
+    fn escape_html_neutralizes_markup() {
+        let out = escape_html(r#"<script>alert("x&y")</script>'"#);
+        assert!(!out.contains('<'), "no raw < survives");
+        assert!(!out.contains('>'), "no raw > survives");
+        assert_eq!(
+            out,
+            "&lt;script&gt;alert(&quot;x&amp;y&quot;)&lt;/script&gt;&#39;"
+        );
+    }
+
+    #[test]
+    fn escape_html_escapes_ampersand_first() {
+        // & must be escaped before the entities it introduces, else the output
+        // double-escapes; pin every replacement so a dropped one fails here.
+        assert_eq!(escape_html("a&b"), "a&amp;b");
+        assert_eq!(escape_html("<>"), "&lt;&gt;");
+        assert_eq!(escape_html("\"'"), "&quot;&#39;");
+        assert_eq!(escape_html("plain text"), "plain text");
+    }
+
+    #[tokio::test]
+    async fn root_serves_the_status_line() {
+        assert_eq!(
+            root().await,
+            "Oathstar server is running. Try GET /state, POST /command, or GET /events."
+        );
+    }
+
+    #[test]
+    fn render_event_html_escapes_log_messages() {
+        let event = GameEvent {
+            event_id: 7,
+            tick: 3,
+            channel: EventChannel::Narrative,
+            kind: GameEventKind::LogMessage {
+                component: OutputComponent::NarrativeMessage,
+                text: "<b>hi</b>".to_string(),
+            },
+        };
+        let html = render_event_html(&event);
+        assert!(html.contains(r#"data-event-id="7""#));
+        assert!(html.contains("&lt;b&gt;hi&lt;/b&gt;"));
+        assert!(!html.contains("<b>hi"));
+    }
+
+    #[test]
+    fn render_event_html_renders_tick_and_room_entered() {
+        let tick = GameEvent {
+            event_id: 1,
+            tick: 1,
+            channel: EventChannel::Debug,
+            kind: GameEventKind::Tick { value: 9 },
+        };
+        let tick_html = render_event_html(&tick);
+        assert!(tick_html.contains(r#"class="tick""#));
+        assert!(tick_html.contains(r#"data-tick="9""#));
+
+        let room = GameEvent {
+            event_id: 2,
+            tick: 1,
+            channel: EventChannel::Room,
+            kind: GameEventKind::RoomEntered {
+                room_id: "r1".to_string(),
+                title: "Hall <x>".to_string(),
+            },
+        };
+        let room_html = render_event_html(&room);
+        assert!(room_html.contains(r#"data-room-id="r1""#));
+        assert!(room_html.contains("Entered Hall &lt;x&gt;"));
+    }
+
+    #[tokio::test]
+    async fn spawn_tick_loop_broadcasts_ticks() {
+        let world = oathstar_content::load_beginner_world().expect("beginner world loads");
+        let (events, _initial_rx) = broadcast::channel(16);
+        let state = AppState {
+            engine: Arc::new(Mutex::new(
+                Engine::try_new(world).expect("valid beginner world"),
+            )),
+            events: events.clone(),
+        };
+        let mut rx = events.subscribe();
+        spawn_tick_loop(state);
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("a tick is broadcast within 2s")
+            .expect("broadcast channel stays open");
+        assert!(matches!(event.kind, GameEventKind::Tick { .. }));
+    }
 }

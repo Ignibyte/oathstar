@@ -29,6 +29,101 @@ pub struct RoomDefinition {
     pub passable: bool,
 }
 
+/// Why an out-of-spec [`WorldDefinition`] was rejected at construction.
+///
+/// Returned by [`WorldDefinition::validate`] and [`Engine::try_new`] so that
+/// malformed module data surfaces as a typed error at the construction boundary
+/// instead of a later panic deep in the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorldValidationError {
+    /// `start_room_id` is not a key in `rooms`.
+    StartRoomMissing { start_room_id: String },
+    /// The start room exists but is not passable; the player could never stand in it.
+    StartRoomImpassable { start_room_id: String },
+    /// A room exit points at a room id that does not exist in the world.
+    DanglingExit {
+        room_id: String,
+        direction: String,
+        target_room_id: String,
+    },
+    /// A room is stored under a map key that differs from its own `id`.
+    RoomKeyMismatch { key: String, room_id: String },
+}
+
+impl std::fmt::Display for WorldValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StartRoomMissing { start_room_id } => {
+                write!(f, "start room '{start_room_id}' does not exist")
+            }
+            Self::StartRoomImpassable { start_room_id } => {
+                write!(f, "start room '{start_room_id}' is not passable")
+            }
+            Self::DanglingExit {
+                room_id,
+                direction,
+                target_room_id,
+            } => write!(
+                f,
+                "room '{room_id}' exit '{direction}' points to missing room '{target_room_id}'"
+            ),
+            Self::RoomKeyMismatch { key, room_id } => {
+                write!(
+                    f,
+                    "room stored under key '{key}' has mismatched id '{room_id}'"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for WorldValidationError {}
+
+impl WorldDefinition {
+    /// Check every world invariant the engine relies on.
+    ///
+    /// # Errors
+    /// Returns a [`WorldValidationError`] when a room is stored under a key that
+    /// differs from its own id, the start room is missing or not passable, or
+    /// any room exit points to a room that does not exist.
+    pub fn validate(&self) -> Result<(), WorldValidationError> {
+        for (key, room) in &self.rooms {
+            if key != &room.id {
+                return Err(WorldValidationError::RoomKeyMismatch {
+                    key: key.clone(),
+                    room_id: room.id.clone(),
+                });
+            }
+        }
+
+        let start = self.rooms.get(&self.start_room_id).ok_or_else(|| {
+            WorldValidationError::StartRoomMissing {
+                start_room_id: self.start_room_id.clone(),
+            }
+        })?;
+
+        if !start.passable {
+            return Err(WorldValidationError::StartRoomImpassable {
+                start_room_id: self.start_room_id.clone(),
+            });
+        }
+
+        for room in self.rooms.values() {
+            for (direction, target_room_id) in &room.exits {
+                if !self.rooms.contains_key(target_room_id) {
+                    return Err(WorldValidationError::DanglingExit {
+                        room_id: room.id.clone(),
+                        direction: direction.clone(),
+                        target_room_id: target_room_id.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameState {
     pub tick: u64,
@@ -57,7 +152,18 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(world: WorldDefinition) -> Self {
+    /// Build an engine from a world after validating its invariants.
+    ///
+    /// This is the only constructor, so an `Engine` can never hold a world that
+    /// would later panic (e.g. a missing or impassable start room, or an exit
+    /// into a non-existent room).
+    ///
+    /// # Errors
+    /// Returns a [`WorldValidationError`] when `world` fails
+    /// [`WorldDefinition::validate`].
+    pub fn try_new(world: WorldDefinition) -> Result<Self, WorldValidationError> {
+        world.validate()?;
+
         let mut discovered_rooms = BTreeSet::new();
         discovered_rooms.insert(world.start_room_id.clone());
 
@@ -77,13 +183,14 @@ impl Engine {
             },
         };
 
-        Self {
+        Ok(Self {
             world,
             state,
             next_event_id: 1,
-        }
+        })
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> GameSnapshot {
         let room = self.current_room();
         let room_snapshot = self.room_snapshot(room);
@@ -109,7 +216,7 @@ impl Engine {
         }
     }
 
-    pub fn tick(&mut self) -> GameEvent {
+    pub const fn tick(&mut self) -> GameEvent {
         self.state.tick += 1;
         self.event(
             EventChannel::Debug,
@@ -240,10 +347,16 @@ impl Engine {
     }
 
     fn current_room(&self) -> &RoomDefinition {
+        // Invariant (ticket #2 / REQ-004): `current_room_id` is always a key in
+        // `world.rooms`. `Engine::try_new` rejects a world whose start room is
+        // missing, and `move_direction` only sets `current_room_id` to a room it
+        // has already fetched from `world.rooms`. This lookup is therefore
+        // unreachable-as-`None` for any constructed `Engine`, so it is not a
+        // malformed-data path.
         self.world
             .rooms
             .get(&self.state.current_room_id)
-            .expect("current room must exist in world definition")
+            .expect("current room is a try_new-validated invariant")
     }
 
     fn room_snapshot(&self, room: &RoomDefinition) -> RoomSnapshot {
@@ -304,7 +417,7 @@ impl Engine {
         )
     }
 
-    fn event(&mut self, channel: EventChannel, kind: GameEventKind) -> GameEvent {
+    const fn event(&mut self, channel: EventChannel, kind: GameEventKind) -> GameEvent {
         let event = GameEvent {
             event_id: self.next_event_id,
             tick: self.state.tick,
@@ -375,13 +488,17 @@ mod tests {
         }
     }
 
+    fn cmd(input: &str) -> CommandRequest {
+        CommandRequest {
+            input: input.to_string(),
+            actor_id: None,
+        }
+    }
+
     #[test]
     fn movement_discovers_rooms() {
-        let mut engine = Engine::new(test_world());
-        let response = engine.handle_command(CommandRequest {
-            input: "east".to_string(),
-            actor_id: None,
-        });
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("east"));
 
         assert_eq!(response.snapshot.current_room_id, "b");
         assert!(response
@@ -390,5 +507,249 @@ mod tests {
             .rooms
             .iter()
             .any(|room| room.id == "b" && room.discovered));
+    }
+
+    #[test]
+    fn tick_increments_and_reports_value() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let event = engine.tick();
+        assert!(matches!(event.kind, GameEventKind::Tick { value } if value == 1));
+        assert_eq!(engine.snapshot().tick, 1);
+    }
+
+    #[test]
+    fn event_ids_increment_sequentially() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let first = engine.tick();
+        let second = engine.tick();
+        assert_eq!(first.event_id, 1);
+        assert_eq!(second.event_id, 2);
+    }
+
+    #[test]
+    fn help_command_lists_directions() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("help"));
+        assert!(response.events.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::LogMessage { text, .. } if text.contains("look, north")
+        )));
+    }
+
+    #[test]
+    fn look_command_describes_current_room() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("look"));
+        assert!(response.events.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::LogMessage {
+                component: OutputComponent::RoomHeader,
+                text,
+            } if text.contains("A [test]")
+        )));
+    }
+
+    #[test]
+    fn go_prefix_moves_between_rooms() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("go east"));
+        assert_eq!(response.snapshot.current_room_id, "b");
+    }
+
+    #[test]
+    fn unknown_command_is_reported_and_does_not_move() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("xyzzy"));
+        assert!(response.events.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::LogMessage { text, .. } if text.contains("I do not know how to")
+        )));
+        assert_eq!(response.snapshot.current_room_id, "a");
+    }
+
+    #[test]
+    fn map_marks_only_the_current_room() {
+        let engine = Engine::try_new(test_world()).expect("valid test world");
+        let snapshot = engine.snapshot();
+        let current = snapshot
+            .map
+            .rooms
+            .iter()
+            .find(|room| room.id == "a")
+            .expect("start room present in map");
+        let other = snapshot
+            .map
+            .rooms
+            .iter()
+            .find(|room| room.id == "b")
+            .expect("other room present in map");
+        assert!(current.current, "the start room is marked current");
+        assert!(!other.current, "a non-start room is not marked current");
+    }
+
+    fn room_with(id: &str, passable: bool, exits: BTreeMap<String, String>) -> RoomDefinition {
+        RoomDefinition {
+            id: id.to_string(),
+            title: id.to_string(),
+            region: "test".to_string(),
+            subregion: None,
+            description: "d".to_string(),
+            exits,
+            x: 0,
+            y: 0,
+            z: 0,
+            glyph: '.',
+            passable,
+        }
+    }
+
+    fn world_with(start: &str, rooms: BTreeMap<String, RoomDefinition>) -> WorldDefinition {
+        WorldDefinition {
+            id: "w".to_string(),
+            title: "W".to_string(),
+            start_room_id: start.to_string(),
+            rooms,
+        }
+    }
+
+    // REQ-006: a world whose invariants all hold constructs (no false rejection).
+    #[test]
+    fn validate_accepts_valid_world() {
+        assert_eq!(test_world().validate(), Ok(()));
+    }
+
+    // REQ-005: a room stored under a key that differs from its own id is rejected.
+    #[test]
+    fn validate_rejects_key_id_mismatch() {
+        let mut rooms = BTreeMap::new();
+        rooms.insert(
+            "wrong_key".to_string(),
+            room_with("a", true, BTreeMap::new()),
+        );
+        assert_eq!(
+            world_with("a", rooms).validate(),
+            Err(WorldValidationError::RoomKeyMismatch {
+                key: "wrong_key".to_string(),
+                room_id: "a".to_string(),
+            })
+        );
+    }
+
+    // REQ-001: a missing start room is rejected.
+    #[test]
+    fn validate_rejects_missing_start_room() {
+        let mut rooms = BTreeMap::new();
+        rooms.insert("a".to_string(), room_with("a", true, BTreeMap::new()));
+        assert_eq!(
+            world_with("nope", rooms).validate(),
+            Err(WorldValidationError::StartRoomMissing {
+                start_room_id: "nope".to_string(),
+            })
+        );
+    }
+
+    // REQ-002: an impassable start room is rejected.
+    #[test]
+    fn validate_rejects_impassable_start_room() {
+        let mut rooms = BTreeMap::new();
+        rooms.insert("a".to_string(), room_with("a", false, BTreeMap::new()));
+        assert_eq!(
+            world_with("a", rooms).validate(),
+            Err(WorldValidationError::StartRoomImpassable {
+                start_room_id: "a".to_string(),
+            })
+        );
+    }
+
+    // REQ-003: an exit pointing at a non-existent room is rejected, naming the offender.
+    #[test]
+    fn validate_rejects_dangling_exit() {
+        let mut rooms = BTreeMap::new();
+        rooms.insert(
+            "a".to_string(),
+            room_with(
+                "a",
+                true,
+                BTreeMap::from([("north".to_string(), "ghost_room".to_string())]),
+            ),
+        );
+        assert_eq!(
+            world_with("a", rooms).validate(),
+            Err(WorldValidationError::DanglingExit {
+                room_id: "a".to_string(),
+                direction: "north".to_string(),
+                target_room_id: "ghost_room".to_string(),
+            })
+        );
+    }
+
+    // REQ-001/003 detail: every variant's Display names the offending entity.
+    #[test]
+    fn validation_error_messages_name_the_offender() {
+        assert!(WorldValidationError::StartRoomMissing {
+            start_room_id: "x".to_string(),
+        }
+        .to_string()
+        .contains("start room 'x' does not exist"));
+        assert!(WorldValidationError::StartRoomImpassable {
+            start_room_id: "x".to_string(),
+        }
+        .to_string()
+        .contains("start room 'x' is not passable"));
+        assert!(WorldValidationError::DanglingExit {
+            room_id: "a".to_string(),
+            direction: "north".to_string(),
+            target_room_id: "z".to_string(),
+        }
+        .to_string()
+        .contains("room 'a' exit 'north' points to missing room 'z'"));
+        assert!(WorldValidationError::RoomKeyMismatch {
+            key: "k".to_string(),
+            room_id: "i".to_string(),
+        }
+        .to_string()
+        .contains("room stored under key 'k' has mismatched id 'i'"));
+    }
+
+    // REQ-006 detail: try_new seeds the documented initial state.
+    #[test]
+    fn try_new_seeds_initial_state() {
+        let engine = Engine::try_new(test_world()).expect("valid test world");
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.tick, 0);
+        assert_eq!(snapshot.current_room_id, "a");
+        assert_eq!(snapshot.player.level, 1);
+        assert_eq!(snapshot.player.xp, 0);
+        assert_eq!(snapshot.player.hp, 20);
+        assert_eq!(snapshot.player.max_hp, 20);
+        assert_eq!(snapshot.player.focus, 5);
+        assert_eq!(snapshot.player.max_focus, 5);
+    }
+
+    // REQ-001/004: try_new surfaces the typed error instead of constructing+panicking.
+    #[test]
+    fn try_new_rejects_invalid_world() {
+        let mut rooms = BTreeMap::new();
+        rooms.insert("a".to_string(), room_with("a", true, BTreeMap::new()));
+        assert_eq!(
+            Engine::try_new(world_with("missing", rooms)).err(),
+            Some(WorldValidationError::StartRoomMissing {
+                start_room_id: "missing".to_string(),
+            })
+        );
+    }
+
+    // REQ-006 detail: the start room is discovered at construction.
+    #[test]
+    fn try_new_marks_start_discovered() {
+        let engine = Engine::try_new(test_world()).expect("valid test world");
+        let snapshot = engine.snapshot();
+        let start = snapshot
+            .map
+            .rooms
+            .iter()
+            .find(|room| room.id == "a")
+            .expect("start room present in map");
+        assert!(start.discovered, "start room is discovered at construction");
     }
 }

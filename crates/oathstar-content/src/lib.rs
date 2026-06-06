@@ -36,10 +36,21 @@ struct RoomToml {
 }
 
 pub fn load_beginner_world() -> anyhow::Result<WorldDefinition> {
-    let module: ModuleToml =
-        toml::from_str(BEGINNER_MODULE).context("invalid beginner module TOML")?;
-    let rooms_toml: RoomsToml =
-        toml::from_str(BEGINNER_ROOMS).context("invalid beginner rooms TOML")?;
+    load_world_from_toml(BEGINNER_MODULE, BEGINNER_ROOMS)
+}
+
+/// Parse, assemble, and validate a world from raw module + rooms TOML.
+///
+/// Split out from [`load_beginner_world`] so the loader's invariant branches
+/// (duplicate room id, then core validation) are reachable from tests with
+/// crafted input rather than only the embedded beginner module.
+///
+/// # Errors
+/// Returns an error if either TOML is malformed, two rooms share an id, or the
+/// assembled world fails [`WorldDefinition::validate`].
+fn load_world_from_toml(module_src: &str, rooms_src: &str) -> anyhow::Result<WorldDefinition> {
+    let module: ModuleToml = toml::from_str(module_src).context("invalid module TOML")?;
+    let rooms_toml: RoomsToml = toml::from_str(rooms_src).context("invalid rooms TOML")?;
 
     let mut rooms = BTreeMap::new();
     for room in rooms_toml.rooms {
@@ -65,48 +76,63 @@ pub fn load_beginner_world() -> anyhow::Result<WorldDefinition> {
         );
     }
 
-    validate_world(&module.start_room_id, &rooms)?;
-
-    Ok(WorldDefinition {
+    let world = WorldDefinition {
         id: module.id,
         title: module.name,
         start_room_id: module.start_room_id,
         rooms,
-    })
-}
+    };
 
-fn validate_world(
-    start_room_id: &str,
-    rooms: &BTreeMap<String, RoomDefinition>,
-) -> anyhow::Result<()> {
-    if !rooms.contains_key(start_room_id) {
-        bail!("start room '{}' does not exist", start_room_id);
-    }
+    // Validate through the core boundary — the single source of truth for world
+    // invariants (ticket #2 / REQ-007). A typed `WorldValidationError` converts
+    // into `anyhow::Error` via `?`.
+    world.validate()?;
 
-    for room in rooms.values() {
-        for (direction, target_room_id) in &room.exits {
-            if !rooms.contains_key(target_room_id) {
-                bail!(
-                    "room '{}' exit '{}' points to missing room '{}'",
-                    room.id,
-                    direction,
-                    target_room_id
-                );
-            }
-        }
-    }
-
-    Ok(())
+    Ok(world)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const ONE_ROOM: &str = "[[rooms]]\n\
+        id = \"a\"\ntitle = \"A\"\nregion = \"r\"\ndescription = \"d\"\n\
+        x = 0\ny = 0\nz = 0\nglyph = \".\"\npassable = true\n";
+
     #[test]
     fn beginner_world_loads() {
         let world = load_beginner_world().expect("beginner module should load");
         assert_eq!(world.start_room_id, "hollowmere_square");
         assert!(world.rooms.contains_key("bell_eater_roost"));
+    }
+
+    #[test]
+    fn load_rejects_duplicate_room_id() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"dup\"\n";
+        let rooms = "[[rooms]]\n\
+            id = \"dup\"\ntitle = \"A\"\nregion = \"r\"\ndescription = \"d\"\n\
+            x = 0\ny = 0\nz = 0\nglyph = \".\"\npassable = true\n\
+            [[rooms]]\n\
+            id = \"dup\"\ntitle = \"B\"\nregion = \"r\"\ndescription = \"d\"\n\
+            x = 1\ny = 0\nz = 0\nglyph = \".\"\npassable = true\n";
+        let err = load_world_from_toml(module, rooms).expect_err("duplicate id must be rejected");
+        assert!(
+            err.to_string().contains("duplicate room id 'dup'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn load_propagates_core_validation_error() {
+        // Valid TOML with unique ids, but the start room does not exist — the
+        // assembled world must be rejected by the core validator (REQ-007).
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"ghost\"\n";
+        let err =
+            load_world_from_toml(module, ONE_ROOM).expect_err("missing start must be rejected");
+        assert!(
+            err.to_string()
+                .contains("start room 'ghost' does not exist"),
+            "unexpected error: {err}"
+        );
     }
 }

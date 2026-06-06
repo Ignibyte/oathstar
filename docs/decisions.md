@@ -1320,6 +1320,62 @@ Revisit when:
 - Event schema becomes too broad.
 - Alternate clients require stricter protocol guarantees.
 
+## Decision 029: Long-Term Rule Systems Are Swappable
+
+Status: Accepted
+
+Oathstar should strive toward a modular roleplaying runtime where major rule
+systems can eventually be swapped or composed.
+
+Potentially swappable rule systems include:
+
+- Battle system
+- Player stats and attributes
+- Progression and skill advancement
+- Inventory and equipment model
+- Class/transformation rules
+- Oath and quest logic
+- Region standing and faction rules
+- Economy/trade/crafting rules
+- World/director behavior
+- DM and LLM director behavior
+- UI/rendering components
+
+The first implementation should still ship one official built-in ruleset. The
+important early constraint is architectural: do not permanently weld combat,
+stats, progression, inventory, worlds, or director behavior into the core
+kernel.
+
+The Rust core should own:
+
+- Module loading
+- Compatibility validation
+- Event ordering
+- Save/load and migrations
+- Authoritative state commits
+- Typed contracts for rule-system modules
+
+Rule modules should implement contracts and submit core-validated change
+requests. They should not freely mutate arbitrary state.
+
+Rationale:
+
+This keeps the Beginner module achievable while preserving the long-term dream:
+a choose-your-own-adventure and roleplaying experience for solo play, friends,
+DM-led campaigns, custom worlds, and eventually LLM-assisted directors.
+
+Implications:
+
+- Early systems should be built with clear boundaries.
+- The first combat/stat/progression implementation can be concrete, but it
+  should expose the shape of a future contract.
+- Module presets need compatibility validation before arbitrary combinations are
+  allowed.
+- Saves must eventually record active modules and rule-system versions.
+
+Do not overbuild this now. Let tickets extract the contracts as real systems are
+implemented.
+
 ## Nice To Have: Oathscript
 
 Status: Future idea, not locked implementation
@@ -1382,3 +1438,41 @@ Current stance:
 Rationale:
 
 Bundling a local AI runner is technically possible in Tauri through sidecars, and a Rust-native path may be attractive later. The larger risks are model size, model licensing, reliability, and making sure the parser game remains designed rather than improvised.
+
+## Decision 030: World Invariants Are Validated At The Core Construction Boundary
+
+Status: Locked
+
+Date: 2026-06-06
+
+Concretizes Decision 021 (core-validated state changes) and Decision 022 (TOML
+content with Rust validation) for engine startup.
+
+`oathstar-core` owns world-invariant validation. `WorldDefinition::validate()`
+checks the invariants, and `Engine::try_new(world) -> Result<_, WorldValidationError>`
+is the only constructor (the infallible `Engine::new` is removed), so a malformed
+world cannot construct an `Engine` that later panics. `oathstar-content` delegates
+to the core validator rather than keeping its own copy.
+
+Validated invariants:
+
+- Each room is stored under a map key equal to its own `id`.
+- The start room exists.
+- The start room is passable.
+- Every room exit targets an existing room.
+
+Rationale:
+
+- Malformed or untrusted module data must surface as a typed error at the
+  construction boundary, not a deferred panic — important as worlds become
+  swappable (Decision 029, module system).
+- Single source of truth for invariants; no duplicate validators.
+- The room key==id check is load-bearing: movement sets the current room from a
+  room's own `id` field, so without it the engine's current-room lookup could
+  fail.
+
+Revisit when:
+
+- World data gains new structural requirements (reachability, required entities),
+  or community modules require input-size / sandboxing limits at the loader
+  boundary.
