@@ -154,6 +154,13 @@ pub enum WorldValidationError {
         subregion_id: String,
         region: String,
     },
+    /// A room's own region disagrees with the parent region of its subregion.
+    RoomSubregionRegionMismatch {
+        room_id: String,
+        room_region: String,
+        subregion: String,
+        subregion_region: String,
+    },
     /// A room places an entity id that is not in the entity registry.
     RoomEntityMissing { room_id: String, entity_id: String },
     /// A room places an item id that is not in the item registry.
@@ -202,6 +209,15 @@ impl std::fmt::Display for WorldValidationError {
             } => write!(
                 f,
                 "subregion '{subregion_id}' references missing region '{region}'"
+            ),
+            Self::RoomSubregionRegionMismatch {
+                room_id,
+                room_region,
+                subregion,
+                subregion_region,
+            } => write!(
+                f,
+                "room '{room_id}' (region '{room_region}') references subregion '{subregion}' whose parent region is '{subregion_region}'"
             ),
             Self::RoomEntityMissing { room_id, entity_id } => {
                 write!(
@@ -305,6 +321,26 @@ impl WorldDefinition {
                     subregion_id: subregion_id.clone(),
                     region: subregion.region.clone(),
                 });
+            }
+        }
+
+        // Room↔subregion region coherence (ticket #11): a room's own region must
+        // match the parent region of its subregion. Checked after the subregion
+        // loop so a *missing* parent region surfaces as `SubregionRegionMissing`,
+        // not a mismatch. Subregion existence is already validated in the room loop.
+        for room in self.rooms.values() {
+            let Some(subregion_id) = &room.subregion else {
+                continue;
+            };
+            if let Some(subregion) = self.subregions.get(subregion_id) {
+                if subregion.region != room.region {
+                    return Err(WorldValidationError::RoomSubregionRegionMismatch {
+                        room_id: room.id.clone(),
+                        room_region: room.region.clone(),
+                        subregion: subregion_id.clone(),
+                        subregion_region: subregion.region.clone(),
+                    });
+                }
             }
         }
 
@@ -1266,6 +1302,10 @@ mod tests {
     #[test]
     fn rejects_missing_subregion_region() {
         let mut world = model_world();
+        // Room `a` references subregion `s1`, whose parent region is now missing.
+        // The subregion-parent check runs before the room↔subregion region-match
+        // check (ticket #11 review), so this is SubregionRegionMissing — the room
+        // stays attached to s1.
         world.subregions.get_mut("s1").expect("s1").region = "ghost".to_string();
         assert_eq!(
             world.validate(),
@@ -1861,6 +1901,61 @@ mod tests {
                     if text.contains("swear") && text.contains("confront")
             )),
             "help mentions swear and confront"
+        );
+    }
+
+    // ---- ticket #11: room region must match the subregion's parent region ----
+
+    // REQ-001: a room whose own region differs from its subregion's parent region
+    // is rejected with a typed error naming the room, its region, the subregion,
+    // and the subregion's parent region. Both regions exist, so this isolates the
+    // mismatch from RoomRegionMissing / SubregionRegionMissing.
+    #[test]
+    fn rejects_room_region_subregion_parent_mismatch() {
+        let mut world = model_world();
+        world.regions.insert("r2".to_string(), region("r2"));
+        // room `a` sits in subregion `s1` (parent region `r1`) but declares `r2`.
+        world.rooms.get_mut("a").expect("a").region = "r2".to_string();
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::RoomSubregionRegionMismatch {
+                room_id: "a".to_string(),
+                room_region: "r2".to_string(),
+                subregion: "s1".to_string(),
+                subregion_region: "r1".to_string(),
+            })
+        );
+    }
+
+    // REQ-002: when a room's region and its subregion's parent region agree, the
+    // world validates (no false rejection).
+    #[test]
+    fn accepts_room_region_subregion_parent_match() {
+        let world = model_world();
+        let room = world.rooms.get("a").expect("a");
+        let sub = world
+            .subregions
+            .get(room.subregion.as_deref().expect("subregion"))
+            .expect("s1");
+        assert_eq!(
+            room.region, sub.region,
+            "precondition: room and subregion-parent regions agree"
+        );
+        assert_eq!(world.validate(), Ok(()));
+    }
+
+    // REQ-001 detail: the mismatch error's Display names all four fields.
+    #[test]
+    fn room_subregion_region_mismatch_display_names_fields() {
+        assert_eq!(
+            WorldValidationError::RoomSubregionRegionMismatch {
+                room_id: "a".to_string(),
+                room_region: "x".to_string(),
+                subregion: "s".to_string(),
+                subregion_region: "y".to_string(),
+            }
+            .to_string(),
+            "room 'a' (region 'x') references subregion 's' whose parent region is 'y'"
         );
     }
 }

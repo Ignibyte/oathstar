@@ -1,6 +1,6 @@
 ---
 title: TICKET-11-enforce-room-region-matches-subregion-parent-region
-status: open
+status: done
 ticket: 5fd49448-bd4e-42a1-b900-e293b079e493
 ticket_number: 11
 type: chore
