@@ -19,17 +19,26 @@ use tokio::{
 struct AppState {
     engine: Arc<Mutex<Engine>>,
     events: broadcast::Sender<GameEvent>,
+    /// The opening-scene events from `Engine::begin()`, captured once at startup
+    /// and replayed at the head of every new `/events` subscription so a fresh
+    /// client renders the start room without sending `look` first (REQ-001 /
+    /// Decision 031: `try_new` emits nothing; `begin` is the on-start emitter).
+    opening: Arc<Vec<GameEvent>>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let world = oathstar_content::load_beginner_world()?;
-    let engine = Engine::try_new(world)?;
+    let mut engine = Engine::try_new(world)?;
+    // Emit the opening scene once, up front, and keep it to seed each new
+    // subscriber. begin() does not move the player, so /state stays consistent.
+    let opening = Arc::new(engine.begin());
     let (events, _) = broadcast::channel(256);
 
     let app_state = AppState {
         engine: Arc::new(Mutex::new(engine)),
         events,
+        opening,
     };
 
     spawn_tick_loop(app_state.clone());
@@ -90,13 +99,24 @@ async fn command(
 async fn events_json(
     State(app): State<AppState>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
+    let opening = Arc::clone(&app.opening);
     let mut receiver = app.events.subscribe();
 
     let stream = stream! {
+        // Seed the opening scene so a fresh subscriber renders the start room
+        // without sending `look` first (REQ-001 / Decision 031).
+        for event in opening.iter() {
+            if let Some(data) = event_to_json(event) {
+                yield Ok(Event::default()
+                    .event("game_event")
+                    .id(event.event_id.to_string())
+                    .data(data));
+            }
+        }
         loop {
             match receiver.recv().await {
                 Ok(event) => {
-                    let Ok(data) = serde_json::to_string(&event) else {
+                    let Some(data) = event_to_json(&event) else {
                         continue;
                     };
                     yield Ok(Event::default()
@@ -120,9 +140,18 @@ async fn events_json(
 async fn events_html(
     State(app): State<AppState>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
+    let opening = Arc::clone(&app.opening);
     let mut receiver = app.events.subscribe();
 
     let stream = stream! {
+        // Seed the opening scene as HTML fragments for a fresh subscriber
+        // (REQ-001 / Decision 031).
+        for event in opening.iter() {
+            yield Ok(Event::default()
+                .event("game_event_html")
+                .id(event.event_id.to_string())
+                .data(render_event_html(event)));
+        }
         loop {
             match receiver.recv().await {
                 Ok(event) => {
@@ -156,6 +185,13 @@ fn spawn_tick_loop(app: AppState) {
             let _ = app.events.send(event);
         }
     });
+}
+
+/// Serialize a [`GameEvent`] to its JSON wire form for the `/events` SSE stream.
+/// A named seam — used by both the opening-scene seed and the live broadcast
+/// loop — so the snake/camel wire split of Decision 031 is unit-testable.
+fn event_to_json(event: &GameEvent) -> Option<String> {
+    serde_json::to_string(event).ok()
 }
 
 fn render_event_html(event: &GameEvent) -> String {
@@ -281,11 +317,12 @@ mod tests {
     async fn spawn_tick_loop_broadcasts_ticks() {
         let world = oathstar_content::load_beginner_world().expect("beginner world loads");
         let (events, _initial_rx) = broadcast::channel(16);
+        let mut engine = Engine::try_new(world).expect("valid beginner world");
+        let opening = Arc::new(engine.begin());
         let state = AppState {
-            engine: Arc::new(Mutex::new(
-                Engine::try_new(world).expect("valid beginner world"),
-            )),
+            engine: Arc::new(Mutex::new(engine)),
             events: events.clone(),
+            opening,
         };
         let mut rx = events.subscribe();
         spawn_tick_loop(state);
@@ -299,11 +336,12 @@ mod tests {
     fn test_app_state() -> AppState {
         let world = oathstar_content::load_beginner_world().expect("beginner world loads");
         let (events, _rx) = broadcast::channel(16);
+        let mut engine = Engine::try_new(world).expect("valid beginner world");
+        let opening = Arc::new(engine.begin());
         AppState {
-            engine: Arc::new(Mutex::new(
-                Engine::try_new(world).expect("valid beginner world"),
-            )),
+            engine: Arc::new(Mutex::new(engine)),
             events,
+            opening,
         }
     }
 
@@ -460,6 +498,102 @@ mod tests {
                 .expect("oath present")
                 .status,
             OathStatus::Fulfilled
+        );
+    }
+
+    // ---- ticket #12: opening scene seeded onto new /events subscriptions ----
+
+    // REQ-001: the server captures begin()'s opening scene at startup so it can
+    // seed every new /events subscription (no `look` required).
+    #[test]
+    fn opening_scene_is_captured() {
+        let app = test_app_state();
+        assert!(
+            app.opening.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::RoomEntered { room_id, .. } if room_id == "hollowmere_square"
+            )),
+            "opening scene enters hollowmere_square"
+        );
+        assert!(
+            app.opening.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage {
+                    component: OutputComponent::RoomHeader,
+                    text,
+                } if text.contains("Hollowmere Square")
+            )),
+            "opening scene carries the Hollowmere Square room header"
+        );
+    }
+
+    // REQ-001 wire: the shared JSON serializer emits the Decision 031 wire shape
+    // (camelCase envelope, snake_case `type` tag + payload).
+    #[test]
+    fn event_to_json_emits_wire_shape() {
+        let event = GameEvent {
+            event_id: 1,
+            tick: 0,
+            channel: EventChannel::Room,
+            kind: GameEventKind::RoomEntered {
+                room_id: "hollowmere_square".to_string(),
+                title: "Hollowmere Square".to_string(),
+            },
+        };
+        let json = event_to_json(&event).expect("event serializes");
+        assert!(
+            json.contains(r#""type":"room_entered""#),
+            "snake_case type tag: {json}"
+        );
+        assert!(
+            json.contains(r#""room_id":"hollowmere_square""#),
+            "snake_case payload field: {json}"
+        );
+        assert!(
+            json.contains(r#""eventId":1"#),
+            "camelCase envelope: {json}"
+        );
+    }
+
+    // REQ-001: every captured opening event serializes, and the bytes seeded onto
+    // a new subscription name the start room (the same path the handler streams).
+    #[test]
+    fn opening_scene_seeds_serialize() {
+        let app = test_app_state();
+        let payloads: Vec<String> = app
+            .opening
+            .iter()
+            .map(|e| event_to_json(e).expect("opening event serializes"))
+            .collect();
+        assert!(!payloads.is_empty(), "opening scene is non-empty");
+        let joined = payloads.join("\n");
+        assert!(
+            joined.contains("hollowmere_square"),
+            "seeded bytes name the start room: {joined}"
+        );
+        assert!(
+            joined.contains("Hollowmere Square"),
+            "seeded bytes carry the room header: {joined}"
+        );
+    }
+
+    // REQ-001 (html variant): the html seed renders the opening room article.
+    #[test]
+    fn events_html_opening_renders_room() {
+        let app = test_app_state();
+        let html: String = app
+            .opening
+            .iter()
+            .map(render_event_html)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            html.contains("message-room"),
+            "html seed has a room article: {html}"
+        );
+        assert!(
+            html.contains("Hollowmere Square"),
+            "html seed names the start room: {html}"
         );
     }
 }

@@ -1530,3 +1530,56 @@ Revisit when:
 - Full combat replaces the boss placeholder (Decision 007 / 023).
 - A break path requires `OathStatus::Broken`.
 - A second oath or boss per room needs explicit targeting.
+
+## Decision 032: The First Playable Client Is A Framework-Free, Server-Authoritative Hypermedia Shell
+
+Status: Locked
+
+Date: 2026-06-07
+
+Implements ticket #12 (the beginner-slice Tauri + Datastar map-forward UI shell)
+and concretizes Decisions 015/016/028 (the Rust server is the authority; REST +
+SSE; hybrid typed events).
+
+The first client:
+
+- Is plain ES modules — no React, Vue, Svelte, or other SPA framework (REQ-008).
+- Is server-authoritative: it POSTs `/command`, consumes the `/events` SSE stream,
+  and renders `/state` snapshots. The Rust runtime owns all game state.
+- Splits pure render/logic (DOM-free, tested under `node --test`, in `src/client/`)
+  from a thin browser-only DOM/transport seam (`src/client-app.js`, smoke-verified).
+  This mirrors the prototype `engine.js` (tested) / `app.js` (glue) split and keeps
+  the JS coverage floor honest.
+- Renders typed events into componentized output (a structured article per event),
+  never a textarea, and never sets `innerHTML` from server data (XSS-safe by
+  construction — all `textContent`).
+- Owns its map render config (`{ tilePixels, mode }`) client-side; the server
+  `MapSnapshot` shape is unchanged (REQ-007). The minimap renders one z-plane (the
+  current room's floor) so rooms stacked at the same `(x, y)` never collide.
+
+The opening scene is delivered by replaying `Engine::begin()` onto every new
+`/events` subscription (Decision 031: `try_new` emits nothing). begin() is captured
+once at startup; the seed reuses the live serialization path.
+
+Deferred (separate tickets/decisions), NOT chosen here:
+
+- Vendoring the Datastar runtime + emitting Datastar-format SSE (`datastar-merge-*`)
+  from the server. The shell stays Datastar/SSE-compatible (the `ui-design.md`
+  guardrail) so adopting the library later is additive, not a rewrite.
+- Tauri server lifecycle (auto-spawn/sidecar) + cross-origin CORS. Dev uses a vite
+  proxy for same-origin; the client base URL is overridable (`VITE_OATHSTAR_API`)
+  for a Tauri loopback build (the client is Tauri-ready).
+
+Rationale:
+
+- "Smallest production-direction shell": prove the server-authoritative
+  command/event/render loop end-to-end without committing to a frontend framework
+  or a server-side Datastar rewrite.
+- The pure/glue split makes the render logic unit-testable under the strict gate
+  while the browser seam is smoke-verified.
+
+Revisit when:
+
+- A panel needs reactive server-driven DOM patching that hand-rolled glue makes
+  unwieldy → adopt the Datastar library + server-side Datastar SSE.
+- Tauri packaging needs the desktop shell to manage the local server lifecycle.

@@ -61,13 +61,58 @@ without rewriting the whole client. For example, a crafting module might add a
 
 Expected early content:
 
-- Nearby: actors, items, exits, and quick actions such as `talk`, `look`, and
+- Nearby: actors, items, fixtures, and quick actions such as `talk`, `look`, and
   `examine`.
 - Oaths: current oath state, witness, region impact, progress, and break/keep
   implications.
 - Gear: equipment slots such as main hand, off hand, body, left earring, right
   earring, and trinket.
 - Pack: inventory stacks, quick use/equip/drop actions, and item inspection.
+
+Exits are navigation, not Nearby content. Nearby should not render exits as
+cards once the Exit Pad exists. If the current snapshot does not yet expose room
+actors/items/fixtures, Nearby should show an honest empty state rather than
+inventing content.
+
+## Room And Exits
+
+The room surface should balance immersion and scanability.
+
+Rooms should support:
+
+- Title.
+- Short or summarized description.
+- Long description.
+- First-visit or state-specific description later.
+- Optional media hint later, such as a static image, animation, or ambient scene.
+
+The normal play surface should show the room title and enough description to
+orient the player without crowding the map, feed, and command controls. Long room
+text should be truncated or summarized at a polished breakpoint, with a focused
+action such as `View room` or `Expand` that opens the full room view.
+
+The full room view should be a focused modal/dialog. It can show the title, the
+full long description, exits, known contents, region/subregion context, and a
+future visual asset. The visual slot should be optional: a room can stay purely
+textual, show a static generated/curated image, or eventually show an animated
+ambient view. A warrior's grave, shrine, boss chamber, or strange outpost should
+be able to feel larger than one paragraph on the main screen.
+
+Exit controls should move out of Nearby and into the room/navigation area. The
+preferred control is a compact directional pad:
+
+```text
+    U
+    N
+W       E
+    S
+    D
+```
+
+Only available exits are active. Missing exits are disabled or visually quiet.
+Clicking a direction sends the same canonical text command (`north`, `up`,
+`down`) that the command prompt would send. The room text can still include a
+plain `Exits: east, north, up` line for MUD readability.
 
 ## Intent Panel
 
@@ -104,6 +149,22 @@ of interactive components:
 
 Interactive components can send commands back to the server, such as
 `look <mob>`, `talk <npc>`, `equip <item>`, or `swear <oath>`.
+
+Longer event sequences should eventually be grouped and collapsible. Combat,
+shop transactions, important dialogue, rituals, crafting, and oath scenes can
+stream detailed events while active, then collapse to a summary when complete.
+For example, a fight can show red combat events during the exchange and collapse
+to a result card such as victory, wounds, loot, and skill changes.
+
+Interaction surfaces should follow this policy:
+
+- Inline feed/card: small flavor dialogue, examine/look output, minor pickups,
+  simple confirmations, and low-stakes NPC comments.
+- Focused modal/view: combat, shops, major quest or oath scenes, irreversible
+  choices, important dialogue trees, and any interaction that benefits from a
+  larger scene.
+- Both: a modal interaction still emits feed events, and closing it should leave
+  behind a concise summary card.
 
 ## Map Direction
 
@@ -152,3 +213,27 @@ rules. The UI sends commands, receives state/events, and renders the result.
 - Keep the map renderer configurable so canvas/sprite work can arrive later.
 - Keep the client compatible with Datastar and SSE instead of drifting into a
   large SPA framework by accident.
+
+## Implementation Status
+
+As of ticket #12 the production client is implemented as a framework-free,
+server-authoritative hypermedia shell (see `docs/decisions.md` Decision 032):
+
+- `index.html` + `styles.css` carry the map-forward layout; `src/client-app.js`
+  is the browser entry that drives `/command` (POST), `/events` (SSE), and
+  `/state` (snapshot) against the local `oathstar-server`.
+- Render/logic lives in DOM-free, tested modules under `src/client/` (`wire`,
+  `components`, `snapshot`, `map`, `intent`); the prototype `src/app.js` /
+  `src/engine.js` remain as the in-browser visual/interaction reference.
+- The server delivers the opening scene on connect by replaying
+  `Engine::begin()` onto each new `/events` subscription — no `look` required.
+- The minimap renders the current room's z-plane (the beginner tower stacks
+  rooms at the same `(x, y)` on different floors).
+- Ticket #13 refined the play surface: Nearby lists room contents only (honest
+  empty state, no exits); a directional Exit Pad (`src/client/room.js`
+  `toExitPad`) sends the canonical movement commands; long room descriptions
+  truncate on the main surface (`toRoomDisplay`) with a focused full-room
+  `<dialog>` (title, full description, exits, reserved media area).
+- Run it locally: `npm run server:dev` (Rust server) + `npm run dev` (vite,
+  proxied to the server). The Datastar library and the Tauri server lifecycle
+  are deferred follow-ups.

@@ -1,9 +1,9 @@
 ---
 title: INTAKE-beginner-slice-ui-startup
-status: candidate
+status: promoted
 created: 2026-06-06
 ticket: a063dadb-6a68-4380-80b7-21c55966aead
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-tauri-datastar-map-forward-ui-shell.spec.md
 ---
 
 # INTAKE-beginner-slice-ui-startup
@@ -57,8 +57,8 @@ the full slice (swear → route → confront) through a rendered client:
 
 ## Promotion Checklist
 
-- [x] Forge ticket created.
-- [ ] Pipeline spec/notes pair created.
-- [ ] `ticket:` frontmatter updated.
-- [ ] `pipeline_spec:` frontmatter updated.
-- [ ] `status:` changed to `promoted`.
+- [x] Forge ticket created. (#12 — a063dadb-6a68-4380-80b7-21c55966aead)
+- [x] Pipeline spec/notes pair created. (WORK-tauri-datastar-map-forward-ui-shell)
+- [x] `ticket:` frontmatter updated.
+- [x] `pipeline_spec:` frontmatter updated.
+- [x] `status:` changed to `promoted`.

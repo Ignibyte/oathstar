@@ -1,12 +1,12 @@
 ---
 title: TICKET-12-build-tauri-datastar-map-forward-ui-shell
-status: open
+status: done
 ticket: a063dadb-6a68-4380-80b7-21c55966aead
 ticket_number: 12
 type: feature
 created: 2026-06-07
 intake: docs/planning/intake/INTAKE-beginner-slice-ui-startup.md
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-tauri-datastar-map-forward-ui-shell.spec.md
 ---
 
 # TICKET-12-build-tauri-datastar-map-forward-ui-shell
@@ -59,4 +59,4 @@ Tauri + Datastar architecture.
 - Prototype reference files: `index.html`, `styles.css`, `src/app.js`,
   `src/engine.js`
 - Promoted from intake: `docs/planning/intake/INTAKE-beginner-slice-ui-startup.md`
-- Active pipeline:
+- Pipeline (completed): `docs/planning/pipeline/completed/WORK-tauri-datastar-map-forward-ui-shell.spec.md`

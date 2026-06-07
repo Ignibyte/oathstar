@@ -67,9 +67,15 @@
         <div class="map-frame">
           <div id="map" class="map-grid"></div>
         </div>
-        <div class="room-brief" aria-label="Room description">
-          <p id="room-description" class="room-description"></p>
-          <div id="exits" class="exit-grid" aria-label="Exits"></div>
+        <div class="room-brief" aria-label="Room and navigation">
+          <div class="room-text">
+            <p id="room-description" class="room-description"></p>
+            <p id="exit-line" class="exit-line"></p>
+            <button id="view-room-button" class="view-room-button" type="button">
+              View room
+            </button>
+          </div>
+          <nav id="exit-pad" class="exit-pad" aria-label="Exits"></nav>
         </div>
       </section>
 
@@ -231,8 +237,25 @@
           <div id="quick-commands" class="quick-grid"></div>
         </section>
       </aside>
+
+      <dialog id="room-modal" class="room-modal" aria-labelledby="room-modal-title">
+        <form method="dialog" class="room-modal-form">
+          <header class="room-modal-header">
+            <h2 id="room-modal-title" class="room-modal-title"></h2>
+            <button class="room-modal-close" type="submit" aria-label="Close room view">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </header>
+          <div id="room-modal-media" class="room-modal-media" hidden></div>
+          <p id="room-modal-description" class="room-modal-description"></p>
+          <div class="room-modal-exits-wrap">
+            <h3 class="room-modal-subtitle">Exits</h3>
+            <div id="room-modal-exits" class="room-modal-exits"></div>
+          </div>
+        </form>
+      </dialog>
     </main>
 
-    <script type="module" src="./src/app.js"></script>
+    <script type="module" src="./src/client-app.js"></script>
   </body>
 </html>
