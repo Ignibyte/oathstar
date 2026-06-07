@@ -2,6 +2,11 @@
 
 Inventory and equipment should be robust and heavily inspired by ROT-style MUD systems.
 
+> **v1 implemented** (ticket #6): `oathstar-core::Item` is leaf data (id, name,
+> description, aliases). Placement is by reference — a room's `items` (ground) or
+> an entity's `inventory` (ownership). Equipment slots, weight, rarity, flags,
+> effects, elemental aspects, and code-behind item behavior below are future work.
+
 The player should manage worn equipment, carried items, item attributes, magical/elemental properties, and special item behavior.
 
 ## ROT Reference Direction

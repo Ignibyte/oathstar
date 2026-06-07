@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context};
-use oathstar_core::{RoomDefinition, WorldDefinition};
+use oathstar_core::{
+    Entity, Item, RegionDefinition, RoomDefinition, SubregionDefinition, WorldDefinition,
+};
 use serde::Deserialize;
 
 const BEGINNER_MODULE: &str = include_str!("../../../modules/beginner/module.toml");
 const BEGINNER_ROOMS: &str = include_str!("../../../modules/beginner/rooms.toml");
+const BEGINNER_WORLD: &str = include_str!("../../../modules/beginner/world.toml");
 
 #[derive(Debug, Deserialize)]
 struct ModuleToml {
@@ -33,24 +36,69 @@ struct RoomToml {
     passable: bool,
     #[serde(default)]
     exits: BTreeMap<String, String>,
+    #[serde(default)]
+    entities: Vec<String>,
+    #[serde(default)]
+    items: Vec<String>,
+}
+
+/// Regions, subregions, entities, and items for a module, deserialized directly
+/// into the core domain types. Every section is optional.
+#[derive(Debug, Default, Deserialize)]
+struct WorldToml {
+    #[serde(default)]
+    regions: Vec<RegionDefinition>,
+    #[serde(default)]
+    subregions: Vec<SubregionDefinition>,
+    #[serde(default)]
+    entities: Vec<Entity>,
+    #[serde(default)]
+    items: Vec<Item>,
 }
 
 pub fn load_beginner_world() -> anyhow::Result<WorldDefinition> {
-    load_world_from_toml(BEGINNER_MODULE, BEGINNER_ROOMS)
+    load_world_from_toml(BEGINNER_MODULE, BEGINNER_ROOMS, BEGINNER_WORLD)
 }
 
-/// Parse, assemble, and validate a world from raw module + rooms TOML.
+/// Index a list of id-bearing content items into a `BTreeMap`, rejecting any
+/// duplicate id with a typed error.
+///
+/// # Errors
+/// Returns an error if two items share an id.
+fn index_by_id<T>(
+    items: Vec<T>,
+    id_of: impl Fn(&T) -> String,
+    kind: &str,
+) -> anyhow::Result<BTreeMap<String, T>> {
+    let mut map = BTreeMap::new();
+    for item in items {
+        let id = id_of(&item);
+        if map.contains_key(&id) {
+            bail!("duplicate {kind} id '{id}'");
+        }
+        map.insert(id, item);
+    }
+    Ok(map)
+}
+
+/// Parse, assemble, and validate a world from raw module + rooms + world TOML.
 ///
 /// Split out from [`load_beginner_world`] so the loader's invariant branches
-/// (duplicate room id, then core validation) are reachable from tests with
+/// (duplicate ids, then core reference validation) are reachable from tests with
 /// crafted input rather than only the embedded beginner module.
 ///
 /// # Errors
-/// Returns an error if either TOML is malformed, two rooms share an id, or the
-/// assembled world fails [`WorldDefinition::validate`].
-fn load_world_from_toml(module_src: &str, rooms_src: &str) -> anyhow::Result<WorldDefinition> {
+/// Returns an error if any TOML is malformed, two rooms/regions/subregions/
+/// entities/items share an id, or the assembled world fails
+/// [`WorldDefinition::validate`].
+fn load_world_from_toml(
+    module_src: &str,
+    rooms_src: &str,
+    world_src: &str,
+) -> anyhow::Result<WorldDefinition> {
     let module: ModuleToml = toml::from_str(module_src).context("invalid module TOML")?;
     let rooms_toml: RoomsToml = toml::from_str(rooms_src).context("invalid rooms TOML")?;
+    let world_toml: WorldToml = toml::from_str(world_src).context("invalid world TOML")?;
 
     let mut rooms = BTreeMap::new();
     for room in rooms_toml.rooms {
@@ -72,6 +120,8 @@ fn load_world_from_toml(module_src: &str, rooms_src: &str) -> anyhow::Result<Wor
                 z: room.z,
                 glyph: room.glyph,
                 passable: room.passable,
+                entities: room.entities,
+                items: room.items,
             },
         );
     }
@@ -81,11 +131,15 @@ fn load_world_from_toml(module_src: &str, rooms_src: &str) -> anyhow::Result<Wor
         title: module.name,
         start_room_id: module.start_room_id,
         rooms,
+        regions: index_by_id(world_toml.regions, |r| r.id.clone(), "region")?,
+        subregions: index_by_id(world_toml.subregions, |s| s.id.clone(), "subregion")?,
+        entities: index_by_id(world_toml.entities, |e| e.id.clone(), "entity")?,
+        items: index_by_id(world_toml.items, |i| i.id.clone(), "item")?,
     };
 
     // Validate through the core boundary — the single source of truth for world
-    // invariants (ticket #2 / REQ-007). A typed `WorldValidationError` converts
-    // into `anyhow::Error` via `?`.
+    // invariants (ticket #2 / #6). A typed `WorldValidationError` converts into
+    // `anyhow::Error` via `?`.
     world.validate()?;
 
     Ok(world)
@@ -115,7 +169,8 @@ mod tests {
             [[rooms]]\n\
             id = \"dup\"\ntitle = \"B\"\nregion = \"r\"\ndescription = \"d\"\n\
             x = 1\ny = 0\nz = 0\nglyph = \".\"\npassable = true\n";
-        let err = load_world_from_toml(module, rooms).expect_err("duplicate id must be rejected");
+        let err =
+            load_world_from_toml(module, rooms, "").expect_err("duplicate id must be rejected");
         assert!(
             err.to_string().contains("duplicate room id 'dup'"),
             "unexpected error: {err}"
@@ -128,7 +183,7 @@ mod tests {
         // assembled world must be rejected by the core validator (REQ-007).
         let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"ghost\"\n";
         let err =
-            load_world_from_toml(module, ONE_ROOM).expect_err("missing start must be rejected");
+            load_world_from_toml(module, ONE_ROOM, "").expect_err("missing start must be rejected");
         assert!(
             err.to_string()
                 .contains("start room 'ghost' does not exist"),
@@ -139,7 +194,7 @@ mod tests {
     #[test]
     fn load_rejects_malformed_module_toml() {
         // `x = ` is a TOML syntax error (no value), so the module never parses.
-        let err = load_world_from_toml("x = ", ONE_ROOM)
+        let err = load_world_from_toml("x = ", ONE_ROOM, "")
             .expect_err("malformed module TOML must be rejected");
         assert!(
             err.to_string().contains("invalid module TOML"),
@@ -151,10 +206,58 @@ mod tests {
     fn load_rejects_malformed_rooms_toml() {
         // Module parses; rooms is the wrong shape (a string, not an array of tables).
         let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
-        let err = load_world_from_toml(module, "rooms = \"not a table array\"")
+        let err = load_world_from_toml(module, "rooms = \"not a table array\"", "")
             .expect_err("malformed rooms TOML must be rejected");
         assert!(
             err.to_string().contains("invalid rooms TOML"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // T7: the beginner world assembles its regions, subregions, and sample
+    // entity/item, and passes core validation.
+    #[test]
+    fn beginner_world_has_regions_entities_items() {
+        let world = load_beginner_world().expect("beginner module should load");
+        assert_eq!(world.regions.len(), 3);
+        assert!(world.regions.contains_key("hollowmere"));
+        assert_eq!(world.subregions.len(), 5);
+        assert!(world.entities.contains_key("mara"));
+        assert!(world.items.contains_key("candle"));
+    }
+
+    // T8: a dangling reference in assembled content is rejected through the loader
+    // (core validation runs inside the loader).
+    #[test]
+    fn load_rejects_missing_item_reference() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
+        let rooms = "[[rooms]]\n\
+            id = \"a\"\ntitle = \"A\"\nregion = \"r1\"\ndescription = \"d\"\n\
+            x = 0\ny = 0\nz = 0\nglyph = \".\"\npassable = true\n";
+        let world = "[[regions]]\nid = \"r1\"\nname = \"R1\"\n\
+            [[entities]]\nid = \"e1\"\nname = \"E\"\ndescription = \"d\"\n\
+            kind = \"actor\"\ninventory = [\"ghost\"]\n";
+        let err = load_world_from_toml(module, rooms, world)
+            .expect_err("missing item reference must be rejected");
+        assert!(
+            err.to_string().contains("references missing item 'ghost'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // T8b: a duplicate id within a registry is rejected (covers `index_by_id`).
+    #[test]
+    fn load_rejects_duplicate_region_id() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
+        let rooms = "[[rooms]]\n\
+            id = \"a\"\ntitle = \"A\"\nregion = \"r1\"\ndescription = \"d\"\n\
+            x = 0\ny = 0\nz = 0\nglyph = \".\"\npassable = true\n";
+        let world = "[[regions]]\nid = \"r1\"\nname = \"R1\"\n\
+            [[regions]]\nid = \"r1\"\nname = \"Dup\"\n";
+        let err = load_world_from_toml(module, rooms, world)
+            .expect_err("duplicate region id must be rejected");
+        assert!(
+            err.to_string().contains("duplicate region id 'r1'"),
             "unexpected error: {err}"
         );
     }

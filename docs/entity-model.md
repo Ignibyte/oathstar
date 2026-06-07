@@ -2,6 +2,11 @@
 
 This document describes the intended entity direction for Oathstar.
 
+> **v1 implemented** (ticket #6): `oathstar-core::Entity` provides the base shape
+> (id, name, description, aliases, `kind` = Actor/Fixture, `roles` tags,
+> `inventory`). Roles are free-form tags in v1; role contracts and the code-behind
+> behavior layer below are future work.
+
 ## Core Idea
 
 Rooms contain entities. An entity is anything the player can inspect, target, use, talk to, fight, buy from, open, bind, swear to, or otherwise interact with.

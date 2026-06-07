@@ -15,6 +15,14 @@ pub struct WorldDefinition {
     pub title: String,
     pub start_room_id: String,
     pub rooms: BTreeMap<String, RoomDefinition>,
+    #[serde(default)]
+    pub regions: BTreeMap<String, RegionDefinition>,
+    #[serde(default)]
+    pub subregions: BTreeMap<String, SubregionDefinition>,
+    #[serde(default)]
+    pub entities: BTreeMap<String, Entity>,
+    #[serde(default)]
+    pub items: BTreeMap<String, Item>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +38,71 @@ pub struct RoomDefinition {
     pub z: i32,
     pub glyph: char,
     pub passable: bool,
+    /// Ids of entities placed in this room (entity *placement* by reference).
+    #[serde(default)]
+    pub entities: Vec<String>,
+    /// Ids of items lying in this room (item *room-placement* by reference).
+    #[serde(default)]
+    pub items: Vec<String>,
+}
+
+/// A top-level region of the world. Rooms reference a region by id; the registry
+/// lets region-level systems (laws, hazards, labels) attach later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegionDefinition {
+    pub id: String,
+    pub name: String,
+}
+
+/// A subregion within a [`RegionDefinition`]. Rooms may reference a subregion by
+/// id; `region` is the parent region's id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubregionDefinition {
+    pub id: String,
+    pub name: String,
+    pub region: String,
+}
+
+/// What kind of thing an [`Entity`] is. Actors are person/creature-like (NPCs and
+/// enemies alike — the difference is *roles*, not kind); fixtures are
+/// interactable objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityKind {
+    Actor,
+    Fixture,
+}
+
+/// A world entity — one shared shape for NPCs, enemies, and interactables.
+///
+/// NPCs and enemies are both `Actor`s, distinguished by their `roles` (declared
+/// capability tags such as `"conversable"` or `"combatant"`); interactables are
+/// `Fixture`s. `inventory` holds the ids of items the entity owns. Behavior
+/// dispatch and role contracts are intentionally outside v1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entity {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    pub kind: EntityKind,
+    #[serde(default)]
+    pub roles: Vec<String>,
+    #[serde(default)]
+    pub inventory: Vec<String>,
+}
+
+/// A world item — leaf content data. Placement is by reference *from* a container
+/// (a room's `items` for ground placement, or an entity's `inventory` for
+/// ownership), so rooms never inline full item state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Item {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 /// Why an out-of-spec [`WorldDefinition`] was rejected at construction.
@@ -51,6 +124,21 @@ pub enum WorldValidationError {
     },
     /// A room is stored under a map key that differs from its own `id`.
     RoomKeyMismatch { key: String, room_id: String },
+    /// A room references a region id that is not in the region registry.
+    RoomRegionMissing { room_id: String, region: String },
+    /// A room references a subregion id that is not in the subregion registry.
+    RoomSubregionMissing { room_id: String, subregion: String },
+    /// A subregion references a parent region id that does not exist.
+    SubregionRegionMissing {
+        subregion_id: String,
+        region: String,
+    },
+    /// A room places an entity id that is not in the entity registry.
+    RoomEntityMissing { room_id: String, entity_id: String },
+    /// A room places an item id that is not in the item registry.
+    RoomItemMissing { room_id: String, item_id: String },
+    /// An entity owns an item id that is not in the item registry.
+    EntityItemMissing { entity_id: String, item_id: String },
 }
 
 impl std::fmt::Display for WorldValidationError {
@@ -76,6 +164,37 @@ impl std::fmt::Display for WorldValidationError {
                     "room stored under key '{key}' has mismatched id '{room_id}'"
                 )
             }
+            Self::RoomRegionMissing { room_id, region } => {
+                write!(f, "room '{room_id}' references missing region '{region}'")
+            }
+            Self::RoomSubregionMissing { room_id, subregion } => {
+                write!(
+                    f,
+                    "room '{room_id}' references missing subregion '{subregion}'"
+                )
+            }
+            Self::SubregionRegionMissing {
+                subregion_id,
+                region,
+            } => write!(
+                f,
+                "subregion '{subregion_id}' references missing region '{region}'"
+            ),
+            Self::RoomEntityMissing { room_id, entity_id } => {
+                write!(
+                    f,
+                    "room '{room_id}' references missing entity '{entity_id}'"
+                )
+            }
+            Self::RoomItemMissing { room_id, item_id } => {
+                write!(f, "room '{room_id}' references missing item '{item_id}'")
+            }
+            Self::EntityItemMissing { entity_id, item_id } => {
+                write!(
+                    f,
+                    "entity '{entity_id}' references missing item '{item_id}'"
+                )
+            }
         }
     }
 }
@@ -87,8 +206,9 @@ impl WorldDefinition {
     ///
     /// # Errors
     /// Returns a [`WorldValidationError`] when a room is stored under a key that
-    /// differs from its own id, the start room is missing or not passable, or
-    /// any room exit points to a room that does not exist.
+    /// differs from its own id, the start room is missing or not passable, any
+    /// room exit points to a room that does not exist, or any room/subregion/
+    /// entity references a missing region, subregion, entity, or item.
     pub fn validate(&self) -> Result<(), WorldValidationError> {
         for (key, room) in &self.rooms {
             if key != &room.id {
@@ -118,6 +238,56 @@ impl WorldDefinition {
                         room_id: room.id.clone(),
                         direction: direction.clone(),
                         target_room_id: target_room_id.clone(),
+                    });
+                }
+            }
+            if !self.regions.contains_key(&room.region) {
+                return Err(WorldValidationError::RoomRegionMissing {
+                    room_id: room.id.clone(),
+                    region: room.region.clone(),
+                });
+            }
+            if let Some(subregion) = &room.subregion {
+                if !self.subregions.contains_key(subregion) {
+                    return Err(WorldValidationError::RoomSubregionMissing {
+                        room_id: room.id.clone(),
+                        subregion: subregion.clone(),
+                    });
+                }
+            }
+            for entity_id in &room.entities {
+                if !self.entities.contains_key(entity_id) {
+                    return Err(WorldValidationError::RoomEntityMissing {
+                        room_id: room.id.clone(),
+                        entity_id: entity_id.clone(),
+                    });
+                }
+            }
+            for item_id in &room.items {
+                if !self.items.contains_key(item_id) {
+                    return Err(WorldValidationError::RoomItemMissing {
+                        room_id: room.id.clone(),
+                        item_id: item_id.clone(),
+                    });
+                }
+            }
+        }
+
+        for (subregion_id, subregion) in &self.subregions {
+            if !self.regions.contains_key(&subregion.region) {
+                return Err(WorldValidationError::SubregionRegionMissing {
+                    subregion_id: subregion_id.clone(),
+                    region: subregion.region.clone(),
+                });
+            }
+        }
+
+        for (entity_id, entity) in &self.entities {
+            for item_id in &entity.inventory {
+                if !self.items.contains_key(item_id) {
+                    return Err(WorldValidationError::EntityItemMissing {
+                        entity_id: entity_id.clone(),
+                        item_id: item_id.clone(),
                     });
                 }
             }
@@ -454,6 +624,8 @@ mod tests {
                 z: 0,
                 glyph: '.',
                 passable: true,
+                entities: Vec::new(),
+                items: Vec::new(),
             },
         );
         rooms.insert(
@@ -470,6 +642,17 @@ mod tests {
                 z: 0,
                 glyph: '.',
                 passable: true,
+                entities: Vec::new(),
+                items: Vec::new(),
+            },
+        );
+
+        let mut regions = BTreeMap::new();
+        regions.insert(
+            "test".to_string(),
+            RegionDefinition {
+                id: "test".to_string(),
+                name: "Test".to_string(),
             },
         );
 
@@ -478,6 +661,10 @@ mod tests {
             title: "Test".to_string(),
             start_room_id: "a".to_string(),
             rooms,
+            regions,
+            subregions: BTreeMap::new(),
+            entities: BTreeMap::new(),
+            items: BTreeMap::new(),
         }
     }
 
@@ -666,16 +853,297 @@ mod tests {
             z: 0,
             glyph: '.',
             passable,
+            entities: Vec::new(),
+            items: Vec::new(),
         }
     }
 
+    // Builds a world that auto-registers every region its rooms reference, so
+    // tests exercising other invariants aren't tripped by the region check.
     fn world_with(start: &str, rooms: BTreeMap<String, RoomDefinition>) -> WorldDefinition {
+        let regions = rooms
+            .values()
+            .map(|room| {
+                (
+                    room.region.clone(),
+                    RegionDefinition {
+                        id: room.region.clone(),
+                        name: room.region.clone(),
+                    },
+                )
+            })
+            .collect();
         WorldDefinition {
             id: "w".to_string(),
             title: "W".to_string(),
             start_room_id: start.to_string(),
             rooms,
+            regions,
+            subregions: BTreeMap::new(),
+            entities: BTreeMap::new(),
+            items: BTreeMap::new(),
         }
+    }
+
+    // ---- world-model v1 (ticket #6) helpers + tests ----
+
+    fn region(id: &str) -> RegionDefinition {
+        RegionDefinition {
+            id: id.to_string(),
+            name: id.to_string(),
+        }
+    }
+
+    fn subregion(id: &str, parent_region: &str) -> SubregionDefinition {
+        SubregionDefinition {
+            id: id.to_string(),
+            name: id.to_string(),
+            region: parent_region.to_string(),
+        }
+    }
+
+    fn entity(id: &str, kind: EntityKind, roles: &[&str], inventory: &[&str]) -> Entity {
+        Entity {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: "d".to_string(),
+            aliases: Vec::new(),
+            kind,
+            roles: roles.iter().copied().map(String::from).collect(),
+            inventory: inventory.iter().copied().map(String::from).collect(),
+        }
+    }
+
+    fn item(id: &str) -> Item {
+        Item {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: "d".to_string(),
+            aliases: Vec::new(),
+        }
+    }
+
+    // A fully-valid world exercising regions, subregions, entities, and items.
+    fn model_world() -> WorldDefinition {
+        let mut room = room_with("a", true, BTreeMap::new());
+        room.region = "r1".to_string();
+        room.subregion = Some("s1".to_string());
+        room.entities = vec!["npc".to_string()];
+        room.items = vec!["it1".to_string()];
+
+        let mut rooms = BTreeMap::new();
+        rooms.insert("a".to_string(), room);
+
+        let mut regions = BTreeMap::new();
+        regions.insert("r1".to_string(), region("r1"));
+
+        let mut subregions = BTreeMap::new();
+        subregions.insert("s1".to_string(), subregion("s1", "r1"));
+
+        let mut entities = BTreeMap::new();
+        entities.insert(
+            "npc".to_string(),
+            entity("npc", EntityKind::Actor, &["combatant"], &[]),
+        );
+        entities.insert(
+            "fix".to_string(),
+            entity("fix", EntityKind::Fixture, &[], &[]),
+        );
+        entities.insert(
+            "owner".to_string(),
+            entity("owner", EntityKind::Actor, &["conversable"], &["it2"]),
+        );
+
+        let mut items = BTreeMap::new();
+        items.insert("it1".to_string(), item("it1"));
+        items.insert("it2".to_string(), item("it2"));
+
+        WorldDefinition {
+            id: "w".to_string(),
+            title: "W".to_string(),
+            start_room_id: "a".to_string(),
+            rooms,
+            regions,
+            subregions,
+            entities,
+            items,
+        }
+    }
+
+    // T1 (REQ-001): a world with regions/subregions/entities/items validates, and
+    // a room resolves its region and subregion through the registries.
+    #[test]
+    fn model_world_is_valid_and_refs_resolve() {
+        let world = model_world();
+        assert_eq!(world.validate(), Ok(()));
+        let room = world.rooms.get("a").expect("room a");
+        assert!(world.regions.contains_key(&room.region));
+        assert!(world
+            .subregions
+            .contains_key(room.subregion.as_deref().expect("subregion")));
+    }
+
+    // T2 (REQ-002): the room model exposes title/description/passability/exits/
+    // map-position metadata.
+    #[test]
+    fn room_exposes_metadata() {
+        let world = model_world();
+        let room = world.rooms.get("a").expect("room a");
+        assert_eq!(room.title, "a");
+        assert_eq!(room.description, "d");
+        assert!(room.passable);
+        assert!(room.exits.is_empty());
+        assert_eq!((room.x, room.y, room.z), (0, 0, 0));
+        assert_eq!(room.glyph, '.');
+    }
+
+    // T3 (REQ-003): one Entity type represents an NPC, an enemy (actor + the
+    // combatant role), and an interactable (fixture) — distinguished by metadata.
+    #[test]
+    fn one_entity_type_carries_role_metadata() {
+        let world = model_world();
+        let actor = world.entities.get("npc").expect("npc");
+        let fixture = world.entities.get("fix").expect("fix");
+        assert_eq!(actor.kind, EntityKind::Actor);
+        assert!(actor.roles.iter().any(|r| r.as_str() == "combatant"));
+        assert_eq!(fixture.kind, EntityKind::Fixture);
+    }
+
+    // T4 (REQ-004): an item is referenced by a room (placement) and by an entity
+    // (ownership); the registry holds the data, the containers hold only ids.
+    #[test]
+    fn items_are_referenced_by_room_and_owner() {
+        let world = model_world();
+        let room = world.rooms.get("a").expect("room a");
+        assert_eq!(room.items, vec!["it1".to_string()]);
+        let owner = world.entities.get("owner").expect("owner");
+        assert_eq!(owner.inventory, vec!["it2".to_string()]);
+        assert!(world.items.contains_key("it1") && world.items.contains_key("it2"));
+    }
+
+    // T5a (REQ-005): a room referencing a missing region is rejected.
+    #[test]
+    fn rejects_missing_room_region() {
+        let mut world = model_world();
+        world.rooms.get_mut("a").expect("a").region = "ghost".to_string();
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::RoomRegionMissing {
+                room_id: "a".to_string(),
+                region: "ghost".to_string(),
+            })
+        );
+    }
+
+    // T5b (REQ-005): a room referencing a missing subregion is rejected.
+    #[test]
+    fn rejects_missing_room_subregion() {
+        let mut world = model_world();
+        world.rooms.get_mut("a").expect("a").subregion = Some("ghost".to_string());
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::RoomSubregionMissing {
+                room_id: "a".to_string(),
+                subregion: "ghost".to_string(),
+            })
+        );
+    }
+
+    // T5c (REQ-005): a subregion referencing a missing parent region is rejected.
+    #[test]
+    fn rejects_missing_subregion_region() {
+        let mut world = model_world();
+        world.subregions.get_mut("s1").expect("s1").region = "ghost".to_string();
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::SubregionRegionMissing {
+                subregion_id: "s1".to_string(),
+                region: "ghost".to_string(),
+            })
+        );
+    }
+
+    // T5d (REQ-005): a room placing a missing entity is rejected.
+    #[test]
+    fn rejects_missing_room_entity() {
+        let mut world = model_world();
+        world.rooms.get_mut("a").expect("a").entities = vec!["ghost".to_string()];
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::RoomEntityMissing {
+                room_id: "a".to_string(),
+                entity_id: "ghost".to_string(),
+            })
+        );
+    }
+
+    // T5e (REQ-005): a room placing a missing item is rejected.
+    #[test]
+    fn rejects_missing_room_item() {
+        let mut world = model_world();
+        world.rooms.get_mut("a").expect("a").items = vec!["ghost".to_string()];
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::RoomItemMissing {
+                room_id: "a".to_string(),
+                item_id: "ghost".to_string(),
+            })
+        );
+    }
+
+    // T5f (REQ-005): an entity owning a missing item is rejected.
+    #[test]
+    fn rejects_missing_entity_item() {
+        let mut world = model_world();
+        world.entities.get_mut("owner").expect("owner").inventory = vec!["ghost".to_string()];
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::EntityItemMissing {
+                entity_id: "owner".to_string(),
+                item_id: "ghost".to_string(),
+            })
+        );
+    }
+
+    // T6 (REQ-005): every new validation error's Display names the offending ids.
+    #[test]
+    fn new_validation_errors_name_the_offender() {
+        assert!(WorldValidationError::RoomRegionMissing {
+            room_id: "a".to_string(),
+            region: "r".to_string(),
+        }
+        .to_string()
+        .contains("room 'a' references missing region 'r'"));
+        assert!(WorldValidationError::RoomSubregionMissing {
+            room_id: "a".to_string(),
+            subregion: "s".to_string(),
+        }
+        .to_string()
+        .contains("room 'a' references missing subregion 's'"));
+        assert!(WorldValidationError::SubregionRegionMissing {
+            subregion_id: "s".to_string(),
+            region: "r".to_string(),
+        }
+        .to_string()
+        .contains("subregion 's' references missing region 'r'"));
+        assert!(WorldValidationError::RoomEntityMissing {
+            room_id: "a".to_string(),
+            entity_id: "e".to_string(),
+        }
+        .to_string()
+        .contains("room 'a' references missing entity 'e'"));
+        assert!(WorldValidationError::RoomItemMissing {
+            room_id: "a".to_string(),
+            item_id: "i".to_string(),
+        }
+        .to_string()
+        .contains("room 'a' references missing item 'i'"));
+        assert!(WorldValidationError::EntityItemMissing {
+            entity_id: "e".to_string(),
+            item_id: "i".to_string(),
+        }
+        .to_string()
+        .contains("entity 'e' references missing item 'i'"));
     }
 
     // REQ-006: a world whose invariants all hold constructs (no false rejection).

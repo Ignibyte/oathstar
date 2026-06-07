@@ -1,12 +1,13 @@
 ---
 title: TICKET-6-model-rooms-regions-entities-and-items-v1
-status: open
+status: done
 ticket: f4fe738e-ae33-42c8-8dcd-185fa724afab
 ticket_number: 6
 type: feature
 created: 2026-06-06
+closed: 2026-06-06
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-world-model-v1.spec.md
 ---
 
 # TICKET-6-model-rooms-regions-entities-and-items-v1
@@ -43,4 +44,4 @@ hardcoding beginner-module assumptions.
 - Forge ticket: `f4fe738e-ae33-42c8-8dcd-185fa724afab`
 - Related docs: `docs/map-system.md`, `docs/entity-model.md`, `docs/inventory-and-items.md`, `docs/module-system.md`
 - Promoted from intake:
-- Active pipeline:
+- Completed pipeline: docs/planning/pipeline/completed/WORK-world-model-v1.spec.md docs/planning/pipeline/active/WORK-world-model-v1.spec.md

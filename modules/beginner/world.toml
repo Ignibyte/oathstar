@@ -1,0 +1,57 @@
+# Regions, subregions, and sample entity/item content for the beginner module.
+# Rooms (rooms.toml) reference regions/subregions by id; these define them, and
+# the core validator (WorldDefinition::validate) rejects any dangling reference.
+
+[[regions]]
+id = "hollowmere"
+name = "Hollowmere"
+
+[[regions]]
+id = "ashen_road"
+name = "The Ashen Road"
+
+[[regions]]
+id = "old_bell_tower"
+name = "The Old Bell Tower"
+
+[[subregions]]
+id = "town"
+name = "Hollowmere Town"
+region = "hollowmere"
+
+[[subregions]]
+id = "wall"
+name = "Town Wall"
+region = "hollowmere"
+
+[[subregions]]
+id = "wilds"
+name = "Roadside Wilds"
+region = "ashen_road"
+
+[[subregions]]
+id = "tower"
+name = "Bell Tower"
+region = "old_bell_tower"
+
+[[subregions]]
+id = "boss"
+name = "Bell Eater's Roost"
+region = "old_bell_tower"
+
+# A sample actor (NPC) that owns a sample item — exercises the entity model and
+# the entity→item ownership reference. Placement into a room is a future ticket.
+[[entities]]
+id = "mara"
+name = "Mara Candlekeep"
+description = "A severe woman with wax on her sleeves and a ledger chained to her belt."
+aliases = ["mara", "shopkeeper", "candlekeep"]
+kind = "actor"
+roles = ["conversable", "shopkeeper"]
+inventory = ["candle"]
+
+[[items]]
+id = "candle"
+name = "Black Candle"
+description = "A squat black candle that smells faintly of brine and old promises."
+aliases = ["candle", "black candle"]

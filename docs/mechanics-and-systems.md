@@ -71,6 +71,16 @@ Should oath-related verbs be explicit commands like `swear mercy` and `break vow
 
 Room structure is locked in [Decision 003](./decisions.md#decision-003-rooms-are-described-entity-containers-with-optional-attributes).
 
+> **Status — v1 implemented** (ticket #6): the world *data model* lives in
+> `oathstar-core` — `RegionDefinition`/`SubregionDefinition` registries on
+> `WorldDefinition`; `RoomDefinition` (title/description/passability/exits/x,y,z/
+> glyph + `entities`/`items` id-lists); `Entity` (Actor/Fixture + role tags +
+> `inventory`); `Item` (leaf data). Placement is by reference (containers hold
+> ids — rooms never inline item state). `WorldDefinition::validate` rejects any
+> dangling region/subregion/room/entity/item reference with a typed error;
+> `oathstar-content` loads it all from module TOML. Behaviors, role contracts,
+> item flags/slots/elements, and player inventory are future tickets.
+
 ### Rooms
 
 Rooms are the primary units of space and interaction.
@@ -117,6 +127,12 @@ Room entities can include:
 ## Entity Model
 
 The entity model is locked in [Decision 004](./decisions.md#decision-004-entities-use-shared-data-with-role-contracts-and-code-behind-behaviors). The working detail lives in [Entity Model](./entity-model.md).
+
+> **Status — v1 implemented** (ticket #6): `oathstar-core::Entity` is the shared
+> shape (kind `Actor`/`Fixture`, free-form `roles` tags, `inventory` of owned item
+> ids) — an "enemy" is an Actor with a `combatant` role, not a separate type. The
+> code-behind behavior dispatch and role-contract validation described below are
+> not yet implemented.
 
 Core direction:
 
