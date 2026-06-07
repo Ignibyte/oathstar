@@ -2,7 +2,7 @@
 title: INTAKE-beginner-slice-ui-startup
 status: candidate
 created: 2026-06-06
-ticket:
+ticket: a063dadb-6a68-4380-80b7-21c55966aead
 pipeline_spec:
 ---
 
@@ -57,7 +57,7 @@ the full slice (swear → route → confront) through a rendered client:
 
 ## Promotion Checklist
 
-- [ ] Forge ticket created.
+- [x] Forge ticket created.
 - [ ] Pipeline spec/notes pair created.
 - [ ] `ticket:` frontmatter updated.
 - [ ] `pipeline_spec:` frontmatter updated.

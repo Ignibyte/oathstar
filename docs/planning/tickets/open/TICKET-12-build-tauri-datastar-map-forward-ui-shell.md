@@ -1,7 +1,7 @@
 ---
 title: TICKET-12-build-tauri-datastar-map-forward-ui-shell
 status: open
-ticket:
+ticket: a063dadb-6a68-4380-80b7-21c55966aead
 ticket_number: 12
 type: feature
 created: 2026-06-07
@@ -51,7 +51,7 @@ Tauri + Datastar architecture.
 
 ## Notes
 
-- Forge ticket:
+- Forge ticket: `a063dadb-6a68-4380-80b7-21c55966aead` (#12)
 - Related docs: `docs/ui-design.md`, `docs/technical-architecture.md`,
   `docs/protocol-and-output.md`, `docs/map-system.md`, `docs/decisions.md`
 - Design artifacts: `artifacts/oathstar-desktop.png`,
