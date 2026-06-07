@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/oathstar-core",
     "crates/oathstar-protocol",
+    "crates/oathstar-datastar",
     "crates/oathstar-storage",
     "crates/oathstar-content",
     "crates/oathstar-server"

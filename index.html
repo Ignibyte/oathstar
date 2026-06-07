@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Oathstar</title>
     <link rel="stylesheet" href="./styles.css" />
+    <!-- Datastar runtime: vendored + self-hosted, see public/vendor/datastar/PROVENANCE.md
+         (ticket #15, Decision 034). Loaded through the project build (vite serves
+         public/ verbatim), not a runtime CDN. -->
+    <script type="module" src="/vendor/datastar/datastar.js"></script>
   </head>
   <body>
     <main class="game-shell" aria-label="Oathstar game">
@@ -83,7 +87,15 @@
           <h2>Event Feed</h2>
           <span id="command-context">Ready</span>
         </header>
-        <div id="log" class="log" aria-live="polite"></div>
+        <!-- Datastar owns the event feed (ticket #15, REQ-003): on init it opens the
+             server's Datastar SSE stream, which appends server-rendered fragments here
+             via datastar-patch-elements. Command echoes are still appended by the glue. -->
+        <div
+          id="log"
+          class="log"
+          aria-live="polite"
+          data-init="@get('/events/datastar')"
+        ></div>
 
         <div class="command-area">
           <form id="command-form" class="command-form" autocomplete="off">

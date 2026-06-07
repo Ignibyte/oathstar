@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "start": "npm run dev",
     "build": "vite build",
+    "vendor:datastar": "curl -g -fsSL https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.2/bundles/datastar.js -o public/vendor/datastar/datastar.js && echo '2837d87acf6ee0ba8e4e63765926c25a98d63883b02f88be194a86b81d3fd24a  public/vendor/datastar/datastar.js' | shasum -a 256 -c -",
     "preview": "vite preview --host 127.0.0.1",
     "server:dev": "cargo run -p oathstar-server",
     "verify": "bin/gate.sh",

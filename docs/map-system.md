@@ -1,6 +1,8 @@
 # Map And Minimap System
 
-Oathstar's map/minimap should start text-first but be designed as a square grid that can later support richer visual rendering.
+Oathstar's map/minimap should start text-first but be designed as a square grid
+that can later support richer visual rendering. The long-term direction is an
+actual tile grid, not freeform room rectangles.
 
 ## Core Direction
 
@@ -73,6 +75,16 @@ Later:
 - Enemy/event markers
 - DM/debug overlays
 - Denser ASCII/tile layouts with walls and walkable spaces
+
+Canvas/grid target:
+
+- Use square cells.
+- Default tile size is 32x32 pixels.
+- Keep tile size configurable so accessibility, zoom, and sprite-pack choices can
+  use 8px, 16px, 32px, or larger tiles.
+- Draw from renderer-agnostic JSON map data.
+- Keep the first renderer small and first-party rather than adopting a full HTML5
+  game engine.
 
 ## Passability And Collision
 
@@ -160,6 +172,12 @@ Guardrail:
 
 The map data should remain renderer-agnostic. The server should send structured JSON, not frontend-specific canvas instructions.
 
+The v1 canvas renderer should be built in-house around the Oathstar grid model.
+External libraries or engines can be reconsidered when the renderer needs sprite
+batching, camera transforms, animation timelines, particles, or a map editor. For
+now, a full game engine such as Kiwi.js is more coupling than value for a
+server-authoritative MUD/grid surface.
+
 ## Design Guardrails
 
 - Keep navigation readable.
@@ -169,3 +187,4 @@ The map data should remain renderer-agnostic. The server should send structured 
 - Support passable/non-passable map cells.
 - Keep the backend renderer-agnostic.
 - Allow text, canvas, and sprite renderers to use the same map payload.
+- Default to a 32x32 tile grid when canvas rendering begins.

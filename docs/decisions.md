@@ -1583,3 +1583,134 @@ Revisit when:
 - A panel needs reactive server-driven DOM patching that hand-rolled glue makes
   unwieldy → adopt the Datastar library + server-side Datastar SSE.
 - Tauri packaging needs the desktop shell to manage the local server lifecycle.
+
+## Decision 033: Player Client And Host Manager Are Separate Web Surfaces, Packaged By Tauri Later
+
+Status: Locked
+
+Date: 2026-06-07
+
+Oathstar will keep the Rust game server, the player client, and the host/server
+manager as separate responsibilities.
+
+The runtime topology is:
+
+- `oathstar-server`: the headless Rust authority for world state, rules, saves,
+  ticks, modules, REST/SSE transports, and future DM/LLM integration points.
+- Player Client: a pure game UI that connects to a compatible server URL, sends
+  commands, receives UI/state/event streams, and renders play. It does not own
+  server lifecycle or host administration.
+- Host Manager / Director Console: a separate web surface for local server
+  lifecycle, worlds/modules/saves, settings, connected players, DM controls,
+  tick control, and future automated director/LLM tools.
+
+Development is browser-first for both web surfaces. Tauri is a packaging and
+native-lifecycle layer, not the source of gameplay authority. A desktop build may
+bundle a launcher, player client, host manager, and server sidecar for
+convenience, but the player client must remain able to connect to any compatible
+server.
+
+Rationale:
+
+- Browser iteration is faster than repeatedly validating desktop packaging while
+  the UI is still moving.
+- The split keeps local single-player, LAN/friends, dedicated-server, and DM modes
+  compatible instead of baking server management into the player UI.
+- Tauri-specific Rust should be used for native lifecycle, local files, tray/window
+  behavior, and sidecar management when packaging needs it. It should not move
+  rules or game state out of the server.
+
+Revisit when:
+
+- Tauri packaging requires shared launcher UX that intentionally combines host
+  and player entry points.
+- A mobile or terminal client requires a new adapter contract.
+
+## Decision 034: First-Party UI Uses Datastar SSE HTML By Default, With JSON Reserved For Renderer Data And Adapters
+
+Status: Locked
+
+Date: 2026-06-07
+
+Oathstar's first-party web UI will use Datastar plus SSE-delivered HTML fragments
+as the default UI component model. JSON remains available, but it is not the
+primary first-party UI rendering contract.
+
+Default transport responsibilities:
+
+- Datastar/SSE HTML: panels, event feed components, menus, oaths, inventory,
+  equipment, dialogue, shops, combat surfaces, host-manager controls, and other
+  ordinary UI fragments.
+- JSON: canvas/map/sprite renderer data, diagnostics, tests, machine-readable API
+  surfaces, and optional alternate-client adapters.
+
+The Rust backend should expose a Datastar presentation layer, preferably as a
+module/crate boundary, that maps core game state/events into Datastar-compatible
+HTML/SSE fragments. The core engine must not depend on Datastar directly.
+
+Styling direction:
+
+- Use project-owned CSS/component vocabulary for the player client first.
+- Do not adopt DaisyUI for the player client now; it risks making the game shell
+  feel generic and dashboard-like.
+- DaisyUI or another component kit can be reconsidered later for the Host Manager
+  if admin velocity matters more than bespoke presentation.
+
+Rationale:
+
+- We are intentionally optimizing for the Oathstar product, not for React/Vue
+  client neutrality.
+- Keeping Datastar in a presentation adapter preserves a clean core while letting
+  first-party UI move quickly with server-rendered components.
+- JSON is still kept where structured renderer data is truly useful, especially
+  maps/canvas/sprites.
+
+Revisit when:
+
+- A second real frontend needs a non-Datastar adapter.
+- Datastar cannot express an interaction surface cleanly enough without excessive
+  custom glue.
+
+## Decision 035: The Map Renderer Starts As A First-Party 32x32 Square-Grid Canvas, Not A Full Game Engine Dependency
+
+Status: Locked
+
+Date: 2026-06-07
+
+The visual map/minimap should evolve from node-like room cards into an actual
+square tile grid. The first canvas renderer should be a small first-party renderer
+that consumes server JSON and draws a 32x32 tile grid by default.
+
+Renderer direction:
+
+- Use square grid cells, not freeform rectangles.
+- Default tile size: 32x32 pixels.
+- Keep tile size configurable for accessibility and future sprite packs.
+- Preserve the current no-diagonal navigation model: north, south, east, west,
+  up, and down.
+- Represent passable and non-passable cells so rooms can become dense interiors
+  such as shops, towers, walls, and walkable floor tiles.
+- Keep server map payloads renderer-agnostic JSON; the server sends map state, not
+  canvas drawing commands.
+
+External game-engine dependencies such as Kiwi.js are deferred. The v1 renderer is
+small enough that a dedicated engine would add more coupling than value. Kiwi.js
+appears to be an older HTML5 engine, so it is not the right anchor for the first
+Oathstar grid renderer.
+
+Rationale:
+
+- The map is initially a tactical/navigation surface inside a Datastar UI, not a
+  full action game engine.
+- A first-party renderer lets us match the MUD/grid rules exactly and avoid
+  fighting an engine's scene/entity lifecycle before we need one.
+- Moving to Pixi.js, Phaser, MelonJS, or a custom WebGL path can remain a later
+  performance/art decision if sprite count, animation, lighting, or effects demand
+  it.
+
+Revisit when:
+
+- The canvas renderer needs animation batching, sprite atlases, particles, camera
+  transforms, or high entity counts.
+- Map tooling/editor needs become large enough to justify adopting a rendering
+  library.
