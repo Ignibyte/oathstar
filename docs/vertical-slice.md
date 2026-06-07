@@ -98,3 +98,9 @@ The Rust authority-path slice landed in **ticket #7** (`WORK-beginner-vertical-s
   progression, region standing, save/load of oath state, and the **Tauri/JS UI**
   that renders the slice — these are follow-up tickets. The boss is a scripted
   placeholder, not a combat encounter.
+- **Known startup gap:** `Engine::begin()` produces the opening room scene and is
+  tested, but the server does **not** yet call it — it neither broadcasts the
+  opening scene on a new `/events` subscription nor exposes a `begin` endpoint, so
+  a freshly connected client sees nothing until its first command. Wire this with
+  the UI/startup ticket — captured in
+  `docs/planning/intake/INTAKE-beginner-slice-ui-startup.md`.

@@ -6,7 +6,7 @@ ticket_number: 7
 type: feature
 created: 2026-06-06
 intake:
-pipeline_spec: docs/planning/pipeline/active/WORK-beginner-vertical-slice.spec.md
+pipeline_spec: docs/planning/pipeline/completed/WORK-beginner-vertical-slice.spec.md
 ---
 
 # TICKET-7-build-beginner-module-vertical-slice-in-rust

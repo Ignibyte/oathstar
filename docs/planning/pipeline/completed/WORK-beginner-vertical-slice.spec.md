@@ -113,7 +113,7 @@ status: Phase 5 — Complete PASS
   `crates/oathstar-server/src/main.rs` (`/command`/`/events`),
   `modules/beginner/{module,rooms,world}.toml`
 - Intake doc: none (ticket pre-existed)
-- Ticket doc: `docs/planning/tickets/open/TICKET-7-build-beginner-module-vertical-slice-in-rust.md`
+- Ticket doc: `docs/planning/tickets/closed/TICKET-7-build-beginner-module-vertical-slice-in-rust.md`
 - Forge ticket: `c1937d4e-2367-4884-a6e5-bcc7023f6a57` (#7)
 - AAR: `1a76f475-491d-4977-892f-1821c1187c61`
 
