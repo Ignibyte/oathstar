@@ -10,7 +10,6 @@
 // verified by smoke, mirroring the prototype `app.js` split.
 
 import { parseEvent } from "./client/wire.js";
-import { toComponent } from "./client/components.js";
 import { toHud, toMenuModel } from "./client/snapshot.js";
 import { toRoomDisplay, toExitPad } from "./client/room.js";
 import { toMapModel, DEFAULT_MAP_CONFIG } from "./client/map.js";
@@ -80,15 +79,12 @@ const el = {
 let latestSnapshot = null;
 const history = [];
 let historyIndex = 0;
-// Event ids already rendered into the feed. EventSource auto-reconnects and the
-// server re-seeds the opening scene on every subscription, so dedup by id keeps
-// the feed from duplicating the opening (or any event) across reconnects.
-const seenEventIds = new Set();
 
 boot();
 
 function boot() {
   bindEvents();
+  bindLogAutoscroll();
   setActiveMenuTab("nearby");
   refreshState();
   connectEvents();
@@ -146,6 +142,36 @@ function bindEvents() {
   });
 }
 
+function bindLogAutoscroll() {
+  if (!el.log || typeof MutationObserver !== "function") {
+    return;
+  }
+
+  let scheduled = false;
+  const scheduleScroll = () => {
+    if (scheduled) {
+      return;
+    }
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      el.log.scrollTop = el.log.scrollHeight;
+    });
+  };
+
+  const observer = new MutationObserver((mutations) => {
+    if (
+      mutations.some(
+        (mutation) => mutation.type === "childList" && mutation.addedNodes.length > 0,
+      )
+    ) {
+      scheduleScroll();
+    }
+  });
+
+  observer.observe(el.log, { childList: true });
+}
+
 // ---- transport ------------------------------------------------------------
 
 async function refreshState() {
@@ -169,18 +195,15 @@ function connectEvents() {
   });
 
   source.addEventListener("game_event", (event) => {
-    let raw;
+    // The event feed itself is now rendered server-side and patched into #log by
+    // Datastar (/events/datastar, ticket #15). This JSON stream is kept only to
+    // keep the HUD/map/panels in sync: refresh /state on state-affecting events.
+    let parsed;
     try {
-      raw = JSON.parse(event.data);
+      parsed = parseEvent(JSON.parse(event.data));
     } catch (_err) {
       return;
     }
-    const parsed = parseEvent(raw);
-    const descriptor = toComponent(parsed);
-    if (descriptor) {
-      appendComponent(descriptor);
-    }
-    // Refresh panels/map/HUD on state-affecting events (the feed already updated).
     if (
       parsed &&
       (parsed.type === "room_entered" ||
@@ -419,22 +442,6 @@ function renderIntent(snapshot) {
 }
 
 // ---- feed -----------------------------------------------------------------
-
-function appendComponent(descriptor) {
-  const eventId = descriptor.dataset.eventId;
-  if (eventId !== "" && eventId !== null && eventId !== undefined) {
-    if (seenEventIds.has(eventId)) {
-      return;
-    }
-    seenEventIds.add(eventId);
-  }
-  const entry = document.createElement("article");
-  entry.className = `log-entry ${descriptor.variant}`;
-  entry.dataset.eventId = String(descriptor.dataset.eventId);
-  entry.dataset.channel = descriptor.dataset.channel;
-  entry.dataset.component = descriptor.dataset.type;
-  appendEntry(entry, descriptor.label, descriptor.text);
-}
 
 function appendLine(variant, label, text) {
   const entry = document.createElement("article");

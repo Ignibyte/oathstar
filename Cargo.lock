@@ -314,6 +314,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "oathstar-datastar"
+version = "0.1.0"
+dependencies = [
+ "oathstar-protocol",
+]
+
+[[package]]
 name = "oathstar-protocol"
 version = "0.1.0"
 dependencies = [
@@ -330,6 +337,7 @@ dependencies = [
  "futures-core",
  "oathstar-content",
  "oathstar-core",
+ "oathstar-datastar",
  "oathstar-protocol",
  "serde_json",
  "tokio",

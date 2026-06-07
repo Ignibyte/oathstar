@@ -3,12 +3,14 @@ use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Duration};
 use async_stream::stream;
 use axum::{
     extract::State,
+    http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
 use oathstar_core::Engine;
-use oathstar_protocol::{CommandRequest, CommandResponse, GameEvent, GameEventKind, GameSnapshot};
+use oathstar_datastar::{feed_patch, opening_patches};
+use oathstar_protocol::{CommandRequest, CommandResponse, GameEvent, GameSnapshot};
 use tokio::{
     net::TcpListener,
     sync::{broadcast, Mutex},
@@ -50,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/command", post(command))
         .route("/events", get(events_json))
         .route("/events/json", get(events_json))
-        .route("/events/html", get(events_html))
+        .route("/events/datastar", get(events_datastar))
         .with_state(app_state);
 
     let addr: SocketAddr = std::env::var("OATHSTAR_ADDR")
@@ -137,29 +139,44 @@ async fn events_json(
     )
 }
 
-async fn events_html(
+/// The first-party Datastar feed stream: renders game events to Datastar
+/// `datastar-patch-elements` SSE patches that append HTML fragments into the
+/// player-client feed (`#log`). The Datastar-specific presentation lives in the
+/// `oathstar-datastar` crate (REQ-002); `oathstar-core` never sees it.
+///
+/// The opening scene is seeded at the head of a fresh subscription, but skipped
+/// when the client's `Last-Event-ID` shows it already has it — so a Datastar
+/// reconnect does not duplicate the opening (REQ-003). Live broadcast events are
+/// delivered once and never replayed.
+async fn events_datastar(
     State(app): State<AppState>,
+    headers: HeaderMap,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
-    let opening = Arc::clone(&app.opening);
     let mut receiver = app.events.subscribe();
 
+    let last_event_id = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let seed = opening_patches(&app.opening, last_event_id.as_deref());
+
     let stream = stream! {
-        // Seed the opening scene as HTML fragments for a fresh subscriber
-        // (REQ-001 / Decision 031).
-        for event in opening.iter() {
+        for (id, patch) in seed {
             yield Ok(Event::default()
-                .event("game_event_html")
-                .id(event.event_id.to_string())
-                .data(render_event_html(event)));
+                .event(patch.event)
+                .id(id.to_string())
+                .data(patch.data));
         }
         loop {
             match receiver.recv().await {
                 Ok(event) => {
-                    let html = render_event_html(&event);
+                    let Some(patch) = feed_patch(&event) else {
+                        continue;
+                    };
                     yield Ok(Event::default()
-                        .event("game_event_html")
+                        .event(patch.event)
                         .id(event.event_id.to_string())
-                        .data(html));
+                        .data(patch.data));
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -194,73 +211,10 @@ fn event_to_json(event: &GameEvent) -> Option<String> {
     serde_json::to_string(event).ok()
 }
 
-fn render_event_html(event: &GameEvent) -> String {
-    match &event.kind {
-        GameEventKind::LogMessage { component, text } => format!(
-            r#"<article class="message message-{channel}" data-event-id="{id}" data-component="{component:?}">{text}</article>"#,
-            channel = format!("{:?}", event.channel).to_lowercase(),
-            id = event.event_id,
-            component = component,
-            text = escape_html(text),
-        ),
-        GameEventKind::Tick { value } => format!(
-            r#"<span class="tick" data-event-id="{}" data-tick="{}"></span>"#,
-            event.event_id, value
-        ),
-        GameEventKind::RoomEntered { room_id, title } => format!(
-            r#"<article class="message message-room" data-event-id="{}" data-room-id="{}">Entered {}</article>"#,
-            event.event_id,
-            escape_html(room_id),
-            escape_html(title)
-        ),
-        GameEventKind::OathSworn { oath_id, title } => format!(
-            r#"<article class="message message-oath" data-event-id="{}" data-oath-id="{}">Sworn: {}</article>"#,
-            event.event_id,
-            escape_html(oath_id),
-            escape_html(title)
-        ),
-        GameEventKind::OathFulfilled { oath_id } => format!(
-            r#"<article class="message message-oath" data-event-id="{}" data-oath-id="{}">Oath fulfilled</article>"#,
-            event.event_id,
-            escape_html(oath_id)
-        ),
-    }
-}
-
-fn escape_html(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oathstar_protocol::{EventChannel, OathStatus, OutputComponent};
-
-    #[test]
-    fn escape_html_neutralizes_markup() {
-        let out = escape_html(r#"<script>alert("x&y")</script>'"#);
-        assert!(!out.contains('<'), "no raw < survives");
-        assert!(!out.contains('>'), "no raw > survives");
-        assert_eq!(
-            out,
-            "&lt;script&gt;alert(&quot;x&amp;y&quot;)&lt;/script&gt;&#39;"
-        );
-    }
-
-    #[test]
-    fn escape_html_escapes_ampersand_first() {
-        // & must be escaped before the entities it introduces, else the output
-        // double-escapes; pin every replacement so a dropped one fails here.
-        assert_eq!(escape_html("a&b"), "a&amp;b");
-        assert_eq!(escape_html("<>"), "&lt;&gt;");
-        assert_eq!(escape_html("\"'"), "&quot;&#39;");
-        assert_eq!(escape_html("plain text"), "plain text");
-    }
+    use oathstar_protocol::{EventChannel, GameEventKind, OathStatus, OutputComponent};
 
     #[tokio::test]
     async fn root_serves_the_status_line() {
@@ -268,49 +222,6 @@ mod tests {
             root().await,
             "Oathstar server is running. Try GET /state, POST /command, or GET /events."
         );
-    }
-
-    #[test]
-    fn render_event_html_escapes_log_messages() {
-        let event = GameEvent {
-            event_id: 7,
-            tick: 3,
-            channel: EventChannel::Narrative,
-            kind: GameEventKind::LogMessage {
-                component: OutputComponent::NarrativeMessage,
-                text: "<b>hi</b>".to_string(),
-            },
-        };
-        let html = render_event_html(&event);
-        assert!(html.contains(r#"data-event-id="7""#));
-        assert!(html.contains("&lt;b&gt;hi&lt;/b&gt;"));
-        assert!(!html.contains("<b>hi"));
-    }
-
-    #[test]
-    fn render_event_html_renders_tick_and_room_entered() {
-        let tick = GameEvent {
-            event_id: 1,
-            tick: 1,
-            channel: EventChannel::Debug,
-            kind: GameEventKind::Tick { value: 9 },
-        };
-        let tick_html = render_event_html(&tick);
-        assert!(tick_html.contains(r#"class="tick""#));
-        assert!(tick_html.contains(r#"data-tick="9""#));
-
-        let room = GameEvent {
-            event_id: 2,
-            tick: 1,
-            channel: EventChannel::Room,
-            kind: GameEventKind::RoomEntered {
-                room_id: "r1".to_string(),
-                title: "Hall <x>".to_string(),
-            },
-        };
-        let room_html = render_event_html(&room);
-        assert!(room_html.contains(r#"data-room-id="r1""#));
-        assert!(room_html.contains("Entered Hall &lt;x&gt;"));
     }
 
     #[tokio::test]
@@ -377,39 +288,6 @@ mod tests {
     }
 
     // ---- ticket #7: oath/boss render arms + begin + full-slice smoke ----
-
-    // REQ-005 (render): the new oath events render as oath articles with their
-    // ids/titles HTML-escaped.
-    #[test]
-    fn render_event_html_renders_oath_events_and_escapes() {
-        let sworn = GameEvent {
-            event_id: 5,
-            tick: 1,
-            channel: EventChannel::Oath,
-            kind: GameEventKind::OathSworn {
-                oath_id: "o<1>".to_string(),
-                title: "A&B".to_string(),
-            },
-        };
-        let html = render_event_html(&sworn);
-        assert!(html.contains("message-oath"), "oath article class: {html}");
-        assert!(html.contains(r#"data-event-id="5""#));
-        assert!(html.contains("Sworn: A&amp;B"), "title escaped: {html}");
-        assert!(html.contains("o&lt;1&gt;"), "oath id escaped: {html}");
-        assert!(!html.contains("A&B"), "no raw ampersand survives");
-
-        let fulfilled = GameEvent {
-            event_id: 6,
-            tick: 2,
-            channel: EventChannel::Oath,
-            kind: GameEventKind::OathFulfilled {
-                oath_id: "o1".to_string(),
-            },
-        };
-        let html = render_event_html(&fulfilled);
-        assert!(html.contains("Oath fulfilled"), "fulfilled text: {html}");
-        assert!(html.contains(r#"data-oath-id="o1""#));
-    }
 
     // REQ-001: begin() on the real beginner world produces the start-room event.
     #[test]
@@ -577,23 +455,30 @@ mod tests {
         );
     }
 
-    // REQ-001 (html variant): the html seed renders the opening room article.
+    // REQ-003 (datastar variant): the feed seed renders the opening room as a
+    // datastar-patch-elements append, via the oathstar-datastar crate.
     #[test]
-    fn events_html_opening_renders_room() {
+    fn events_datastar_opening_renders_room() {
         let app = test_app_state();
-        let html: String = app
-            .opening
+        let seed = opening_patches(&app.opening, None);
+        assert!(!seed.is_empty(), "opening seeds feed patches");
+        assert!(
+            seed.iter()
+                .all(|(_, patch)| patch.event == "datastar-patch-elements"),
+            "every seed patch is a datastar element patch"
+        );
+        let joined = seed
             .iter()
-            .map(render_event_html)
+            .map(|(_, patch)| patch.data.as_str())
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            html.contains("message-room"),
-            "html seed has a room article: {html}"
+            joined.contains("Hollowmere Square"),
+            "seed names the start room: {joined}"
         );
         assert!(
-            html.contains("Hollowmere Square"),
-            "html seed names the start room: {html}"
+            joined.contains("log-entry"),
+            "seed uses feed-entry markup: {joined}"
         );
     }
 }

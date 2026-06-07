@@ -4,17 +4,20 @@ This document captures the emerging technical direction for Oathstar.
 
 ## Current Direction
 
-Oathstar may become an open-source, module-friendly Tauri game with a Rust-first core and a simple hypermedia frontend.
+Oathstar may become an open-source, module-friendly game with a Rust-first core,
+browser-first web surfaces, and Tauri packaging later.
 
 The preferred shape is:
 
 - Standalone Rust game server/runtime
-- Tauri desktop shell that manages the local server for normal play
+- Pure Player Client web surface
+- Separate Host Manager / Director Console web surface
+- Tauri desktop packaging that can wrap one or both surfaces later
 - Rust game core
 - Event lifecycle around commands and world changes
 - Module/behavior registry for expansion
-- Datastar-style frontend if it proves practical
-- SSE streams for UI events and DOM/state updates
+- Datastar + SSE HTML as the first-party UI transport
+- JSON endpoints for canvas/map renderer data, diagnostics, tests, and adapters
 - Optional local AI hooks later
 
 The first playable target should still be a strong single-player authored experience. The architecture should avoid closing the door on broader modes such as multiplayer, dungeon-master control, LLM-assisted sessions, or swappable worlds.
@@ -114,15 +117,20 @@ kernel small enough that alternate rulesets remain possible.
 
 ## Datastar And SSE Frontend Direction
 
-Datastar is a candidate frontend technology because it keeps the UI simple and backend-driven.
+Datastar is the first-party frontend transport direction because it keeps the UI
+simple, backend-driven, and compatible with SSE-delivered HTML fragments.
 
-Possible shape:
+Default shape:
 
 - Rust core owns game state.
-- A small Rust HTTP/SSE layer exposes game endpoints.
-- Datastar components submit commands through `data-*` attributes.
-- Rust returns HTML patches or SSE event streams.
-- The browser UI morphs updated panels, logs, maps, inventory, and combat state.
+- A Rust HTTP/SSE layer exposes game endpoints.
+- A Datastar presentation module maps state/events into HTML fragments and SSE
+  patches.
+- Datastar components submit commands through attributes.
+- The browser UI morphs updated panels, logs, menus, inventory, combat, and host
+  manager state.
+- JSON remains available for maps/canvas/sprites, diagnostics, tests, and
+  alternate-client adapters.
 
 This fits:
 
@@ -135,6 +143,31 @@ This fits:
 
 In Tauri, this likely means running a local Rust HTTP server bound to loopback, or another Tauri-compatible bridge that can support SSE semantics.
 
+**Implemented (ticket #15 — first slice).** The presentation boundary is the
+`oathstar-datastar` crate (`oathstar-core` does not depend on it). `GET /events/datastar`
+streams the event feed as Datastar `datastar-patch-elements` SSE patches that append
+server-rendered, HTML-escaped `<article>` fragments into the player-client feed (`#log`).
+The Datastar runtime is vendored/self-hosted at `public/vendor/datastar/datastar.js`
+(pinned v1.0.2, see its `PROVENANCE.md`), loaded through the vite build — not a runtime
+CDN. The JSON endpoints (`/state`, `/events`, `/events/json`) are unchanged (Decision 034:
+JSON stays for renderer data, diagnostics, tests, and adapters).
+
+## Runtime Surfaces
+
+The project has three runtime responsibilities:
+
+- Game Server: headless Rust authority for state, rules, saves, modules, ticks,
+  REST/SSE transports, and future DM/LLM hooks.
+- Player Client: pure web game UI. It connects to a server and renders play. It
+  does not own server lifecycle.
+- Host Manager / Director Console: separate web UI for server lifecycle, module
+  selection, saves, settings, connected players, tick control, DM tools, and
+  future automated director/LLM controls.
+
+Development is browser-first for Player Client and Host Manager. Tauri can later
+package either or both surfaces and may manage a local server sidecar for a
+desktop build. Tauri is packaging/lifecycle, not gameplay authority.
+
 ## Rust Core Boundary
 
 The core engine and runtime should not depend directly on Datastar or Tauri.
@@ -146,8 +179,10 @@ Recommended layering:
 - `oathstar-server`: standalone Rust runtime, API, event streams, saves, module loading
 - `oathstar-storage`: file-first persistence and future database abstraction
 - `oathstar-content`: built-in content/modules/worlds
-- `oathstar-tauri`: desktop shell that launches/manages/connects to the local server
-- `oathstar-web`: Datastar/HTML render layer
+- `oathstar-datastar`: Datastar/HTML presentation adapter for first-party UI
+- `oathstar-tauri`: desktop packaging/lifecycle that can launch/manage/connect to the local server
+- `oathstar-web-player`: browser-first player client surface
+- `oathstar-web-host`: browser-first host/manager surface
 - `oathstar-ai`: optional local AI integration later
 
 This keeps the game open-source friendly and easier to test.
@@ -165,11 +200,13 @@ crates/
   oathstar-server/
   oathstar-storage/
   oathstar-content/
+  oathstar-datastar/
   oathstar-ai/
 
 apps/
+  web-player/
+  web-host/
   tauri/
-  web/
 
 modules/
   beginner/
@@ -211,8 +248,10 @@ Clients send commands and render results.
 
 Possible clients:
 
-- Tauri local player app
 - Browser client
+- Browser host manager
+- Tauri packaged player app
+- Tauri packaged host/launcher app
 - CLI client
 - DM console
 - Debug/admin tools
@@ -220,11 +259,13 @@ Possible clients:
 
 For normal local play:
 
-1. Player opens the Tauri app.
-2. Tauri starts or connects to a local `oathstar-server`.
-3. The frontend sends commands to the server.
-4. The server resolves actions and streams events.
-5. The frontend renders the game.
+1. Player opens a browser-first Player Client, or a Tauri package that wraps it.
+2. The Player Client connects to an `oathstar-server`.
+3. A separate Host Manager, launcher, CLI, or Tauri wrapper may start/manage the
+   server for local play.
+4. The frontend sends commands to the server.
+5. The server resolves actions and streams Datastar UI fragments/events.
+6. The frontend renders the game.
 
 ## API And Transport Direction
 
@@ -232,12 +273,15 @@ Oathstar should expose a local API from the Rust server.
 
 The server framework direction is Axum on Tokio.
 
-Protocol/output direction is hybrid: typed domain events can be exposed as JSON, rendered as Datastar/HTML fragments, or reduced to plain text. More detail lives in [Protocol And Output](./protocol-and-output.md).
+Protocol/output direction is Datastar-first for first-party UI, with JSON kept
+for renderer data, diagnostics, tests, and optional alternate-client adapters.
+More detail lives in [Protocol And Output](./protocol-and-output.md).
 
 Preferred first shape:
 
 - REST-style HTTP endpoints for commands, saves, settings, and snapshots
-- SSE for server-to-client event streams
+- Datastar-compatible SSE for first-party UI streams
+- JSON map/canvas endpoints where the renderer needs structured tile data
 
 Possible first endpoints:
 
@@ -248,6 +292,14 @@ Possible first endpoints:
 - `POST /load`
 - `GET /worlds`
 - `POST /worlds/select`
+
+Implemented today (Axum, `oathstar-server`):
+
+- `POST /command` — server-authoritative command handling
+- `GET /state` — JSON `GameSnapshot` (the map renderer data rides here as `map`)
+- `GET /events` and `GET /events/json` — JSON `game_event` SSE
+- `GET /events/datastar` — first-party Datastar SSE (`datastar-patch-elements`),
+  rendered by the `oathstar-datastar` crate
 
 SSE should be first-class because it fits game log/event streaming and Datastar-style UI updates.
 

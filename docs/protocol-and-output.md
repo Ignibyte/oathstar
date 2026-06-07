@@ -1,8 +1,12 @@
 # Protocol And Output
 
-Oathstar should use a hybrid protocol.
+Oathstar should use a Datastar-first protocol for first-party UI, with JSON kept
+for renderer data, diagnostics, tests, and alternate adapters.
 
-The Rust core emits typed domain events. The server can expose those events as structured JSON, rendered Datastar/HTML fragments, or plain text for simple clients.
+The Rust core emits typed domain events. A Datastar presentation layer renders
+those events into HTML fragments and SSE patches for first-party web surfaces.
+The same domain events can also be exposed as structured JSON or plain text for
+specialized clients and tooling.
 
 ## Core Direction
 
@@ -28,7 +32,8 @@ Those events can be rendered differently for different clients.
 
 ## Representations
 
-JSON representation:
+JSON representation, reserved for maps/canvas data, diagnostics, tests, and
+adapter clients:
 
 ```json
 {
@@ -40,7 +45,7 @@ JSON representation:
 }
 ```
 
-HTML/Datastar representation:
+HTML/Datastar representation, the first-party UI default:
 
 ```html
 <article class="message message-combat" data-event-id="evt_123">
@@ -113,21 +118,27 @@ Channels help clients render, filter, style, and persist output.
 
 ## API Shape
 
-Potential endpoints:
+Implemented endpoints (ticket #15):
 
-- `GET /events/json`
-- `GET /events/html`
-- `POST /command`
-- `GET /state`
-- `GET /components/:component`
+- `GET /events/datastar` — first-party Datastar SSE: `datastar-patch-elements`
+  patches that append server-rendered HTML fragments to the feed (`#log`)
+- `GET /events/json` (and `GET /events`) — JSON `game_event` SSE for diagnostics/tests/adapters
+- `POST /command` — server-authoritative
+- `GET /state` — JSON `GameSnapshot`; map renderer data rides here as `map`
+  (there is no separate `/map` route yet — Decision 035 keeps map payloads JSON)
 
-The exact paths can change. The important point is that JSON and HTML rendering are both supported from the same domain events.
+Aspirational: `GET /components/:component` and dedicated JSON renderer-data endpoints.
+
+The exact paths can change. The important point is that Datastar/HTML rendering
+is the first-party UI path, while JSON stays available from the same domain model
+where structured renderer or adapter data is the better contract.
 
 ## Design Guardrails
 
 - Domain events stay renderer-agnostic.
-- Datastar/HTML fragments are render adapters, not the core state model.
-- JSON remains available for alternate clients, debugging, DM tools, and tests.
+- Datastar/HTML fragments are the first-party UI adapter, not the core state model.
+- JSON remains available for maps/canvas/sprites, alternate clients, debugging, DM
+  tools, and tests.
 - Components should be interactive where useful, but not visually overwhelming.
 - The player should still be able to read the game like a MUD.
 
@@ -145,3 +156,10 @@ rest of the event catalog above is still aspirational. Channels and
 View/snapshot structs (`GameSnapshot`, `OathSnapshot`) are **camelCase**
 (`oathId`). So `/events` payloads use snake_case keys and `/state` snapshots use
 camelCase keys — see `docs/decisions.md` Decision 031.
+
+**Transport (ticket #15).** The first-party event feed is delivered as Datastar
+`datastar-patch-elements` SSE from `GET /events/datastar`, rendered by the
+`oathstar-datastar` crate (every server-provided string HTML-escaped). The JSON
+`/events`, `/events/json`, and `/state` endpoints are preserved for renderer data,
+tests, and adapters (Decisions 033/034). The vendored Datastar runtime lives at
+`public/vendor/datastar/datastar.js`.

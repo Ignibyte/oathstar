@@ -1,0 +1,12 @@
+[package]
+name = "oathstar-datastar"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oathstar-protocol = { path = "../oathstar-protocol" }
+
+[lints]
+workspace = true

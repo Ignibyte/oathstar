@@ -1,11 +1,13 @@
 # UI Design
 
-Oathstar's first playable UI should be map-forward, text-rich, and built for
-Tauri plus Datastar.
+Oathstar's first playable UI should be map-forward, text-rich, browser-first, and
+built around Datastar plus SSE HTML fragments.
 
 The current prototype is a design reference, not the final client architecture.
 The production client should keep the same player-facing shape while rendering
-from the Rust server through REST, SSE, and Datastar/HTML fragments.
+from the Rust server through REST, SSE, and Datastar/HTML fragments. Tauri can
+package the web surfaces later, but the player client should remain a pure client
+that connects to a compatible server.
 
 ## Design Reference
 
@@ -188,7 +190,8 @@ Interaction surfaces should follow this policy:
 ## Map Direction
 
 The first map can be an HTML/CSS or Datastar-rendered grid, but the data model
-must remain renderer-agnostic.
+must remain renderer-agnostic. When canvas begins, the target is an actual
+square-tile grid, defaulting to 32x32 cells, rather than freeform room rectangles.
 
 The backend should send structured map JSON and typed map events. It should not
 send canvas-specific drawing instructions.
@@ -209,19 +212,23 @@ placeholder. Production code should preserve that intent as an explicit map
 renderer configuration rather than hardcoding layout assumptions into world
 state.
 
-## Tauri And Datastar Target
+## Web, Tauri, And Datastar Target
 
 The preferred implementation target is:
 
 - Rust core/server remains the game authority.
-- Tauri is the desktop shell and local server manager.
-- Datastar/HTML fragments render live UI panels.
+- Player Client and Host Manager are separate browser-first web surfaces.
+- Tauri is packaging and native lifecycle later, not gameplay authority.
+- Datastar/HTML fragments render live first-party UI panels.
 - REST handles commands and snapshots.
 - SSE streams event and UI updates.
-- JSON remains available for tests, alternate clients, and debug tooling.
+- JSON remains available for maps/canvas/sprites, tests, alternate clients, and
+  debug tooling.
 
 The Tauri client should feel like a native game shell, but it should not own the
-rules. The UI sends commands, receives state/events, and renders the result.
+rules. The UI sends commands, receives state/events, and renders the result. A
+Tauri launcher may manage a local server sidecar, but the Player Client itself
+should not become the server manager.
 
 ## Guardrails
 
@@ -257,6 +264,19 @@ server-authoritative hypermedia shell (see `docs/decisions.md` Decision 032):
   movement commands from Intent (the Exit Pad is the single movement control;
   typed movement still works), and contained the shell to the viewport (`100dvh`,
   no page scroll on desktop) with a bounded, internally-scrolling event feed.
+- Decision 033 split the browser-first Player Client from the Host Manager, with
+  Tauri as later packaging/lifecycle.
+- Decision 034 made Datastar/SSE HTML the first-party UI transport default; JSON
+  stays for map/canvas renderer data, diagnostics, tests, and adapters.
+- Decision 035 made the future canvas map a first-party 32x32 square-grid renderer
+  instead of a full game-engine dependency.
 - Run it locally: `npm run server:dev` (Rust server) + `npm run dev` (vite,
-  proxied to the server). The Datastar library and the Tauri server lifecycle
-  are deferred follow-ups.
+  proxied to the server).
+- Ticket #15 landed the Datastar transport: the vendored runtime
+  (`public/vendor/datastar/datastar.js`, pinned v1.0.2) loads via the build, and the
+  event feed (`#log`) is now server-rendered — `data-init` opens the
+  `GET /events/datastar` SSE stream and the `oathstar-datastar` crate emits
+  `datastar-patch-elements` patches (every server string HTML-escaped). The JSON
+  `/state` + `/events` + `/events/json` endpoints are unchanged; the rest of the
+  client stays hand-rolled for now. Tauri server lifecycle and the canvas map
+  renderer remain follow-up tickets.

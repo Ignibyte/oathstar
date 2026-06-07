@@ -15,6 +15,13 @@ is_pipeline_session "$TRANSCRIPT_PATH" || exit 0
 PHASE=$(detect_active_command "$TRANSCRIPT_PATH")
 [ -n "$PHASE" ] || exit 0
 
+# A fully archived pipeline (the completer moved its doc to completed/) has no
+# open phase to enforce. Without this guard, a context-summarized transcript can
+# leave detect_active_command pinned to an old phase marker indefinitely, blocking
+# Stop on a pipeline that is already complete. In-flight pipelines always have an
+# active doc, so this does not weaken their enforcement.
+[ -n "$(get_active_pipeline_doc)" ] || exit 0
+
 IDX=$(index_of_latest_phase_advance "$TRANSCRIPT_PATH")
 [ -n "$IDX" ] || exit 0   # no phase advance recorded; nothing to scope
 
