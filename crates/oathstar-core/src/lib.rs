@@ -1,5 +1,8 @@
+pub mod command;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use command::{parse, Command, Direction};
 use oathstar_protocol::{
     CommandRequest, CommandResponse, EventChannel, GameEvent, GameEventKind, GameSnapshot,
     MapRoomSnapshot, MapSnapshot, OutputComponent, PlayerSnapshot, RoomSnapshot,
@@ -227,44 +230,46 @@ impl Engine {
     }
 
     pub fn handle_command(&mut self, request: CommandRequest) -> CommandResponse {
-        let input = request.input.trim();
         let mut events = Vec::new();
 
-        if input.is_empty() {
-            events.push(self.log(
-                EventChannel::System,
-                OutputComponent::SystemMessage,
-                "The world waits for a command.",
-            ));
-            return self.response(false, events);
-        }
-
-        let normalized = input.to_lowercase();
-        match normalized.as_str() {
-            "help" => {
+        match parse(&request.input) {
+            Command::Empty => {
+                events.push(self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    "The world waits for a command.",
+                ));
+                return self.response(false, events);
+            }
+            Command::Help => {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
                     "Try: look, north, south, east, west, up, down.",
                 ));
             }
-            "look" | "l" => {
+            Command::Look { target: None } => {
                 events.extend(self.describe_current_room());
             }
-            "north" | "n" | "south" | "s" | "east" | "e" | "west" | "w" | "up" | "u" | "down"
-            | "d" => {
-                events.extend(self.move_direction(direction_alias(&normalized)));
+            Command::Look {
+                target: Some(target),
+            } => {
+                events.push(self.log(
+                    EventChannel::Narrative,
+                    OutputComponent::NarrativeMessage,
+                    format!("You study {target}, but learn nothing new about it yet."),
+                ));
             }
-            _ if normalized.starts_with("go ") => {
-                let direction = normalized.trim_start_matches("go ").trim();
-                events.extend(self.move_direction(direction_alias(direction)));
+            Command::Move(direction) => {
+                events.extend(self.move_direction(direction));
             }
-            _ => {
+            Command::Unknown { input } => {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
                     format!("I do not know how to '{input}' yet."),
                 ));
+                return self.response(false, events);
             }
         }
 
@@ -306,9 +311,9 @@ impl Engine {
         ]
     }
 
-    fn move_direction(&mut self, direction: &str) -> Vec<GameEvent> {
+    fn move_direction(&mut self, direction: Direction) -> Vec<GameEvent> {
         let room = self.current_room().clone();
-        let Some(next_room_id) = room.exits.get(direction) else {
+        let Some(next_room_id) = room.exits.get(direction.as_str()) else {
             return vec![self.log(
                 EventChannel::System,
                 OutputComponent::SystemMessage,
@@ -426,18 +431,6 @@ impl Engine {
         };
         self.next_event_id += 1;
         event
-    }
-}
-
-fn direction_alias(input: &str) -> &str {
-    match input {
-        "n" => "north",
-        "s" => "south",
-        "e" => "east",
-        "w" => "west",
-        "u" => "up",
-        "d" => "down",
-        direction => direction,
     }
 }
 
@@ -565,6 +558,79 @@ mod tests {
             GameEventKind::LogMessage { text, .. } if text.contains("I do not know how to")
         )));
         assert_eq!(response.snapshot.current_room_id, "a");
+    }
+
+    // H1: a movement command is accepted and moves the player.
+    #[test]
+    fn move_command_is_accepted() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("east"));
+        assert!(response.accepted, "a movement command is accepted");
+        assert_eq!(response.snapshot.current_room_id, "b");
+    }
+
+    // Review fix: a malformed bare direction (`east now`) must NOT move the player
+    // even though `east` has a real exit, and is not accepted (no state mutation
+    // on malformed input). Without the arity guard this would move to room "b".
+    #[test]
+    fn malformed_bare_direction_does_not_move() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("east now"));
+        assert!(
+            !response.accepted,
+            "a malformed bare direction is not accepted"
+        );
+        assert_eq!(
+            response.snapshot.current_room_id, "a",
+            "a malformed bare direction does not move the player"
+        );
+    }
+
+    // H2 (REQ-002): look <target> is accepted, echoes the preserved target, no move.
+    #[test]
+    fn look_with_target_is_accepted_and_echoes_target() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("look warden"));
+        assert!(response.accepted, "look <target> is accepted");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. } if text.contains("warden")
+            )),
+            "look <target> echoes the preserved target text"
+        );
+        assert_eq!(
+            response.snapshot.current_room_id, "a",
+            "looking at a target does not move the player"
+        );
+    }
+
+    // H3 (REQ-004): unknown input is NOT accepted and mutates no state.
+    #[test]
+    fn unknown_command_is_not_accepted() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("xyzzy"));
+        assert!(!response.accepted, "unknown input is not accepted");
+        assert_eq!(
+            response.snapshot.current_room_id, "a",
+            "an unknown command does not change state"
+        );
+    }
+
+    // H4: help is accepted.
+    #[test]
+    fn help_command_is_accepted() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("help"));
+        assert!(response.accepted, "help is accepted");
+    }
+
+    // H5: bare look is accepted.
+    #[test]
+    fn look_command_is_accepted() {
+        let mut engine = Engine::try_new(test_world()).expect("valid test world");
+        let response = engine.handle_command(cmd("look"));
+        assert!(response.accepted, "look is accepted");
     }
 
     #[test]

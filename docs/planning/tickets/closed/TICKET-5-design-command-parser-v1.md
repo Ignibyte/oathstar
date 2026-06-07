@@ -1,12 +1,13 @@
 ---
 title: TICKET-5-design-command-parser-v1
-status: open
+status: done
 ticket: 6651420b-9cd1-418c-9f66-98ff825c6650
 ticket_number: 5
 type: feature
 created: 2026-06-06
+closed: 2026-06-06
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-command-parser-v1.spec.md
 ---
 
 # TICKET-5-design-command-parser-v1
@@ -41,4 +42,4 @@ can share the same engine path.
 - Forge ticket: `6651420b-9cd1-418c-9f66-98ff825c6650`
 - Related docs: `docs/mechanics-and-systems.md`, `docs/protocol-and-output.md`, `docs/technical-architecture.md`
 - Promoted from intake:
-- Active pipeline:
+- Completed pipeline: docs/planning/pipeline/completed/WORK-command-parser-v1.spec.md

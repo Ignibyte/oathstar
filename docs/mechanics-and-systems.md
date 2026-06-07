@@ -27,6 +27,14 @@ The parser should support natural-feeling verb phrases without pretending to und
 
 This is locked in [Decision 002](./decisions.md#decision-002-use-a-forgiving-symbolic-parser).
 
+> **Status — v1 implemented** (ticket #5): `oathstar-core::command::parse(input) -> Command`,
+> a pure, deterministic typed parser. v1 covers movement aliases (`n`…`down`,
+> `go <dir>` — exactly one direction), `look`/`examine`/`l`/`x` with an optional
+> target (target text preserved), `help`/`h`, and a typed unknown-command path
+> that mutates no state. The richer Decision-002 grammar (`verb target on|to
+> target`, `ask … about …`) and the inventory/social/oath/conflict verbs below
+> are not yet wired — future tickets.
+
 Core command categories:
 
 - Movement: north, south, east, west, up, down, go north
