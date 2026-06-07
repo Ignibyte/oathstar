@@ -13,6 +13,7 @@ import { parseEvent } from "./client/wire.js";
 import { toHud, toMenuModel } from "./client/snapshot.js";
 import { toRoomDisplay, toExitPad } from "./client/room.js";
 import { toMapModel, DEFAULT_MAP_CONFIG } from "./client/map.js";
+import { canvasSize, toDrawPlan, mapAriaLabel } from "./client/canvas-map.js";
 import { suggestCommands } from "./client/intent.js";
 
 // Resolve the server base URL. Default to same-origin (vite dev proxy, or the
@@ -344,39 +345,54 @@ function openRoomModal(display) {
 
 function renderMap(snapshot) {
   const model = toMapModel(snapshot.map, mapRenderConfig);
-  el.map.replaceChildren();
-  el.map.dataset.renderMode = model.mode;
-  el.map.dataset.tileSize = String(model.tilePixels);
-  el.map.style.setProperty("--tile-size", `${model.tilePixels}px`);
   el.mapLabel.textContent =
     model.planes && model.planes.length > 1
       ? `${model.region || "Map"} · floor ${model.z}`
       : model.region || "Map";
+  drawMapCanvas(el.map, model);
+}
 
+// Browser-only canvas seam: execute the pure draw-plan from canvas-map.js. Kept
+// deliberately thin (no geometry/classification logic) because node/jsdom has no
+// 2D context — all of that is unit-tested in canvas-map.js. Hi-DPI: the backing
+// store is scaled by devicePixelRatio and the context scaled to match, so 1px
+// strokes and the grid stay crisp on retina displays (ticket #16, REQ-005).
+function drawMapCanvas(canvas, model) {
+  if (!canvas || typeof canvas.getContext !== "function") {
+    return;
+  }
+  const dpr = window.devicePixelRatio || 1;
+  const size = canvasSize(model, dpr);
+  canvas.width = size.backingWidth;
+  canvas.height = size.backingHeight;
+  canvas.style.width = `${size.cssWidth}px`;
+  canvas.style.height = `${size.cssHeight}px`;
+  canvas.setAttribute("aria-label", mapAriaLabel(model));
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+  ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
+  ctx.clearRect(0, 0, size.cssWidth, size.cssHeight);
   if (!model.columns) {
     return;
   }
-  el.map.style.gridTemplateColumns = `repeat(${model.columns}, minmax(0, 1fr))`;
-  for (const cell of model.cells) {
-    const node = document.createElement("div");
-    node.className = "map-cell";
-    if (cell.present && (cell.discovered || cell.current)) {
-      node.classList.add("visited");
-      const name = document.createElement("span");
-      name.className = "map-name";
-      name.textContent = model.mode === "ascii" ? cell.glyph : cell.title || cell.glyph;
-      const zone = document.createElement("span");
-      zone.className = "map-zone";
-      zone.textContent = cell.current ? "here" : "";
-      node.append(name, zone);
-      node.setAttribute("aria-label", cell.title || "Room");
-    } else {
-      node.setAttribute("aria-label", "Uncharted");
+
+  const plan = toDrawPlan(model);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const op of plan.ops) {
+    ctx.fillStyle = op.fill;
+    ctx.fillRect(op.x, op.y, op.size, op.size);
+    ctx.strokeStyle = op.stroke;
+    // +0.5 keeps the 1px border on a device pixel boundary (crisp, not blurry).
+    ctx.strokeRect(op.x + 0.5, op.y + 0.5, op.size - 1, op.size - 1);
+    if (op.textColor && op.glyph) {
+      ctx.fillStyle = op.textColor;
+      ctx.font = `${plan.glyphFontPx}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillText(op.glyph, op.x + op.size / 2, op.y + op.size / 2, Math.max(1, op.size - 4));
     }
-    if (cell.current) {
-      node.classList.add("current");
-    }
-    el.map.append(node);
   }
 }
 

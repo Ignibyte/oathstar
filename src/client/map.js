@@ -72,6 +72,7 @@ export function toMapModel(mapSnapshot, config = DEFAULT_MAP_CONFIG) {
         glyph: room?.glyph ?? ".",
         discovered: Boolean(room?.discovered),
         current: Boolean(room?.current),
+        passable: room?.passable,
       });
     }
   }

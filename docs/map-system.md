@@ -86,6 +86,21 @@ Canvas/grid target:
 - Keep the first renderer small and first-party rather than adopting a full HTML5
   game engine.
 
+Implemented (ticket #16 — canvas v1):
+
+- The minimap is a first-party `<canvas id="map">` rendered by `client-app.js`'s
+  thin `drawMapCanvas` seam, driven by a pure, unit-tested model in
+  `src/client/canvas-map.js` (`canvasSize` for Hi-DPI backing-store sizing,
+  `cellKind`, `toDrawPlan`, `mapAriaLabel`). No game-engine dependency.
+- It consumes the renderer-agnostic JSON via `src/client/map.js` `toMapModel`
+  (whose cell now carries `passable`); the server `/state` map payload is
+  unchanged. Default 32×32 tiles, configurable through the client `mapRenderConfig`.
+- Draws the current z-plane only; distinguishes unknown/empty, discovered,
+  current, and blocked (discovered non-passable) cells; the room glyph is drawn
+  on-tile and the room title is surfaced via the canvas `aria-label`.
+- Hi-DPI: the backing store is `round(cssPx · devicePixelRatio)` with the context
+  scaled to match, so the grid stays crisp on retina displays.
+
 ## Passability And Collision
 
 Rooms or map cells should declare whether they are passable.

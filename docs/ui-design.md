@@ -212,6 +212,13 @@ placeholder. Production code should preserve that intent as an explicit map
 renderer configuration rather than hardcoding layout assumptions into world
 state.
 
+Implemented (ticket #16): the DOM tile grid was replaced by a first-party
+`<canvas id="map">` renderer — a pure model in `src/client/canvas-map.js`
+(`canvasSize`/`cellKind`/`toDrawPlan`/`mapAriaLabel`) drawn by a thin
+`drawMapCanvas` seam in `client-app.js`. 32×32 default (configurable via
+`mapRenderConfig`), current z-plane only, Hi-DPI via `devicePixelRatio`, no
+game-engine dependency; the server map stays renderer-agnostic JSON.
+
 ## Web, Tauri, And Datastar Target
 
 The preferred implementation target is:
@@ -278,5 +285,11 @@ server-authoritative hypermedia shell (see `docs/decisions.md` Decision 032):
   `GET /events/datastar` SSE stream and the `oathstar-datastar` crate emits
   `datastar-patch-elements` patches (every server string HTML-escaped). The JSON
   `/state` + `/events` + `/events/json` endpoints are unchanged; the rest of the
-  client stays hand-rolled for now. Tauri server lifecycle and the canvas map
-  renderer remain follow-up tickets.
+  client stays hand-rolled for now. Tauri server lifecycle remains a follow-up ticket.
+- Ticket #16 replaced the DOM tile grid with a first-party `<canvas id="map">`
+  renderer: a pure, tested model in `src/client/canvas-map.js`
+  (`canvasSize`/`cellKind`/`toDrawPlan`/`mapAriaLabel`) drawn by a thin
+  `drawMapCanvas` seam in `client-app.js`. 32×32 default (configurable via
+  `mapRenderConfig`), current z-plane only, Hi-DPI via `devicePixelRatio`, the room
+  glyph drawn on-tile + room title via `aria-label`, no game-engine dependency; the
+  server map stays renderer-agnostic JSON.

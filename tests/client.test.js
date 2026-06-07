@@ -242,6 +242,7 @@ test("map.toMapModel builds a grid, flags current, and passes config through", (
   const current = model.cells.find((cell) => cell.current);
   assert.equal(current.id, "hollowmere_square");
   assert.equal(current.discovered, true);
+  assert.equal(current.passable, true);
 
   const ascii = toMapModel(snap.map, { mode: "ascii", tilePixels: 16 });
   assert.equal(ascii.mode, "ascii");
@@ -254,6 +255,19 @@ test("map.toMapModel builds a grid, flags current, and passes config through", (
   // server map shape is untouched
   assert.equal(snap.map.rooms.length, 2);
   assert.ok(!("present" in snap.map.rooms[0]));
+
+  const legacy = toMapModel({
+    region: "legacy",
+    currentRoomId: "old_room",
+    rooms: [
+      { id: "old_room", title: "Old Room", x: 0, y: 0, z: 0, glyph: ".", discovered: true, current: true, exits: {} },
+    ],
+  });
+  assert.equal(
+    legacy.cells[0].passable,
+    undefined,
+    "missing passable stays unknown rather than becoming blocked",
+  );
 
   const empty = toMapModel({ region: "x", currentRoomId: null, rooms: [] });
   assert.equal(empty.columns, 0);
