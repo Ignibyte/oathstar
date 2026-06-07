@@ -92,6 +92,7 @@ function boot() {
   setActiveMenuTab("nearby");
   refreshState();
   connectEvents();
+  focusCommandInput();
 }
 
 function bindEvents() {
@@ -120,7 +121,7 @@ function bindEvents() {
     el.log.replaceChildren();
     appendLine("system", "System", "Showing the current session.");
     refreshState();
-    el.input.focus();
+    focusCommandInput();
   });
   const unavailable = () =>
     appendLine("system", "System", "Save/load isn't wired into this shell yet.");
@@ -225,7 +226,7 @@ async function runCommand(rawInput) {
   } catch (_err) {
     appendLine("danger", "System", "Could not reach the server.");
   } finally {
-    el.input.focus();
+    focusCommandInput();
   }
 }
 
@@ -533,4 +534,12 @@ function cycleHistory(delta) {
     el.input.selectionStart = el.input.value.length;
     el.input.selectionEnd = el.input.value.length;
   });
+}
+
+function focusCommandInput() {
+  try {
+    el.input.focus({ preventScroll: true });
+  } catch (_err) {
+    el.input.focus();
+  }
 }

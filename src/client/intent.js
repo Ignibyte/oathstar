@@ -13,25 +13,9 @@ export const COMMAND_VOCAB = Object.freeze([
   { id: "stats", label: "stats", command: "stats", hint: "Show your character." },
 ]);
 
-const DIRECTION_HINTS = {
-  north: "Travel north.",
-  south: "Travel south.",
-  east: "Travel east.",
-  west: "Travel west.",
-  up: "Travel up.",
-  down: "Travel down.",
-};
-
-function movementCommands(snapshot) {
-  const exits = snapshot?.room?.exits ?? {};
-  return Object.keys(exits).map((direction) => ({
-    id: `move-${direction}`,
-    label: direction,
-    command: direction,
-    hint: DIRECTION_HINTS[direction] ?? `Travel ${direction}.`,
-  }));
-}
-
+// Movement lives on the Exit Pad (ticket #14), not in Intent — directional
+// commands are intentionally absent here so the command helper stays uncluttered.
+// Typed movement through the command input still works (server-side parsing).
 function contextualCommands(snapshot) {
   const commands = [];
   const oath = snapshot?.oath;
@@ -40,7 +24,7 @@ function contextualCommands(snapshot) {
   } else if (oath.status === "sworn") {
     commands.push({ id: "ctx-confront", label: "confront", command: "confront", hint: "Fulfill your sworn oath." });
   }
-  return commands.concat(movementCommands(snapshot));
+  return commands;
 }
 
 /**

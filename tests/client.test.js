@@ -298,20 +298,36 @@ test("map.toMapModel renders only the current room's z-plane (stacked rooms)", (
   assert.ok(!groundIds.includes("bell_frame"));
 });
 
-// T9 (REQ-006): the Intent helper filters by query and adds contextual commands.
-test("intent.suggestCommands filters by query and adds context", () => {
-  const snap = sampleSnapshot();
+// T9 (REQ-003/REQ-004): the Intent helper EXCLUDES movement commands (those live
+// on the Exit Pad now); it still offers contextual + non-movement vocabulary.
+// Typed movement is unaffected — it goes through the command input, not Intent.
+const MOVEMENT_COMMANDS = ["north", "south", "east", "west", "up", "down"];
+
+test("intent.suggestCommands excludes movement, keeps contextual + vocab", () => {
+  const snap = sampleSnapshot(); // room exits {north, up}
   const all = suggestCommands(snap, "");
+
+  assert.ok(
+    !all.some((command) => MOVEMENT_COMMANDS.includes(command.command)),
+    "no movement command appears in Intent",
+  );
   assert.ok(all.some((command) => command.command === "swear"));
-  assert.ok(all.some((command) => command.command === "north"));
   assert.ok(all.some((command) => command.command === "look"));
 
-  const sworn = suggestCommands(sampleSnapshot({ oath: { oathId: "o", title: "Bell", status: "sworn" } }), "");
+  const sworn = suggestCommands(
+    sampleSnapshot({ oath: { oathId: "o", title: "Bell", status: "sworn" } }),
+    "",
+  );
   assert.ok(sworn.some((command) => command.command === "confront"));
+  assert.ok(!sworn.some((command) => MOVEMENT_COMMANDS.includes(command.command)));
 
   const filtered = suggestCommands(snap, "map");
   assert.ok(filtered.length >= 1);
   assert.ok(filtered.every((command) => command.command.includes("map") || command.label.includes("map")));
 
+  // searching for a direction surfaces nothing — movement is not in the vocabulary
+  assert.equal(suggestCommands(snap, "north").length, 0);
+
   assert.ok(COMMAND_VOCAB.some((command) => command.command === "swear"));
+  assert.ok(!COMMAND_VOCAB.some((command) => MOVEMENT_COMMANDS.includes(command.command)));
 });

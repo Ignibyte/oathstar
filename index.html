@@ -67,7 +67,7 @@
         <div class="map-frame">
           <div id="map" class="map-grid"></div>
         </div>
-        <div class="room-brief" aria-label="Room and navigation">
+        <div class="room-brief" aria-label="Room">
           <div class="room-text">
             <p id="room-description" class="room-description"></p>
             <p id="exit-line" class="exit-line"></p>
@@ -75,7 +75,6 @@
               View room
             </button>
           </div>
-          <nav id="exit-pad" class="exit-pad" aria-label="Exits"></nav>
         </div>
       </section>
 
@@ -86,21 +85,23 @@
         </header>
         <div id="log" class="log" aria-live="polite"></div>
 
-        <form id="command-form" class="command-form" autocomplete="off">
-          <span class="prompt" aria-hidden="true">&gt;</span>
-          <label class="sr-only" for="command-input">Command</label>
-          <input
-            id="command-input"
-            name="command"
-            type="text"
-            spellcheck="false"
-            placeholder="enter a command"
-            autofocus
-          />
-          <button type="submit" title="Send">
-            <span aria-hidden="true">Enter</span>
-          </button>
-        </form>
+        <div class="command-area">
+          <form id="command-form" class="command-form" autocomplete="off">
+            <span class="prompt" aria-hidden="true">&gt;</span>
+            <label class="sr-only" for="command-input">Command</label>
+            <input
+              id="command-input"
+              name="command"
+              type="text"
+              spellcheck="false"
+              placeholder="enter a command"
+            />
+            <button type="submit" title="Send">
+              <span aria-hidden="true">Enter</span>
+            </button>
+          </form>
+          <nav id="exit-pad" class="exit-pad" aria-label="Exits"></nav>
+        </div>
       </section>
 
       <aside class="state-rail" aria-label="Character and world state">

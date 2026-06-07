@@ -35,11 +35,17 @@ Primary regions:
   action context.
 - Map/stage: the most prominent region, showing the current room/grid state.
 - Output feed: typed narrative, combat, oath, dialogue, loot, and system
-  components underneath the map.
+  components underneath the map, with its own scrollbar.
 - Character menu: a top-right tab panel aligned with the map/stage height.
 - Intent panel: a bottom-right command panel aligned with the output feed
   height.
 - Command entry: a persistent text command input for MUD-style play.
+
+The application shell should use the full available browser/Tauri viewport
+without forcing ordinary page scrolling. Desktop layouts should fill the
+available width and height, leaving panel interiors responsible for overflow.
+The output feed should stay bounded: new events appear at the bottom, older
+events scroll upward inside the feed, and the command area remains reachable.
 
 The map and output feed should feel like co-equal pillars at first, with the map
 slightly leading the composition. The design should leave room for the map to
@@ -98,8 +104,10 @@ textual, show a static generated/curated image, or eventually show an animated
 ambient view. A warrior's grave, shrine, boss chamber, or strange outpost should
 be able to feel larger than one paragraph on the main screen.
 
-Exit controls should move out of Nearby and into the room/navigation area. The
-preferred control is a compact directional pad:
+Exit controls should move out of Nearby and stay near the command hand, not in
+the room description area. The preferred control is a compact directional pad
+anchored in the lower play surface near the event feed/command input, above or
+beside the Enter control:
 
 ```text
     U
@@ -113,6 +121,10 @@ Only available exits are active. Missing exits are disabled or visually quiet.
 Clicking a direction sends the same canonical text command (`north`, `up`,
 `down`) that the command prompt would send. The room text can still include a
 plain `Exits: east, north, up` line for MUD readability.
+
+Movement controls should not also appear as Intent command suggestions once the
+Exit Pad exists. Keeping movement in one dedicated control prevents noisy
+redundancy while preserving free-text commands for players who prefer typing.
 
 ## Intent Panel
 
@@ -128,6 +140,7 @@ include:
 
 The command helper should never replace free text commands. It should teach the
 available command vocabulary while keeping the classic MUD-style prompt alive.
+Movement commands are excluded from Intent when the Exit Pad is visible.
 
 ## Componentized Output
 
@@ -155,6 +168,12 @@ shop transactions, important dialogue, rituals, crafting, and oath scenes can
 stream detailed events while active, then collapse to a summary when complete.
 For example, a fight can show red combat events during the exchange and collapse
 to a result card such as victory, wounds, loot, and skill changes.
+
+The feed should not grow the application vertically. It is a bounded event
+surface with an internal scrollbar, newest entries at the bottom, and enough
+space reserved for the command controls. Button clicks inside the feed, Exit Pad,
+Intent panel, and modal surfaces should not cause viewport jumps or unexpected
+page scrolling.
 
 Interaction surfaces should follow this policy:
 
@@ -234,6 +253,10 @@ server-authoritative hypermedia shell (see `docs/decisions.md` Decision 032):
   `toExitPad`) sends the canonical movement commands; long room descriptions
   truncate on the main surface (`toRoomDisplay`) with a focused full-room
   `<dialog>` (title, full description, exits, reserved media area).
+- Ticket #14 moved the Exit Pad into the command bar (beside the input), removed
+  movement commands from Intent (the Exit Pad is the single movement control;
+  typed movement still works), and contained the shell to the viewport (`100dvh`,
+  no page scroll on desktop) with a bounded, internally-scrolling event feed.
 - Run it locally: `npm run server:dev` (Rust server) + `npm run dev` (vite,
   proxied to the server). The Datastar library and the Tauri server lifecycle
   are deferred follow-ups.
