@@ -301,7 +301,7 @@ export function createGame(options = {}) {
     if (npc.id === "maskedWarden") {
       const messages = [
         {
-          type: "room",
+          type: "dialogue",
           text:
             '"Three vows went dark," says the warden. "Memory sleeps below, mercy is trapped in glass, and flame is guarded by what broke its promise."'
         }
@@ -316,7 +316,7 @@ export function createGame(options = {}) {
         });
       } else {
         messages.push({
-          type: "system",
+          type: "dialogue",
           text: '"Bring memory, mercy, and flame to the Oathstar. The city will remember how to keep dawn."'
         });
       }
@@ -331,7 +331,7 @@ export function createGame(options = {}) {
 
       return [
         {
-          type: "room",
+          type: "dialogue",
           text:
             'The archivist ripples inside the mirror. "I preserve endings. Bring me something with an address, and I may recall a beginning."'
         }
@@ -600,6 +600,7 @@ export function buildView(state) {
     id: mapRoom.id,
     name: mapRoom.name,
     shortName: mapRoom.shortName,
+    zone: mapRoom.zone,
     x: mapRoom.x,
     y: mapRoom.y,
     visited: Boolean(state.visited[mapRoom.id]),

@@ -26,9 +26,13 @@ the full slice (swear → route → confront) through a rendered client:
 
 - The server delivers the opening scene on session start — a `begin` endpoint
   and/or the `Engine::begin()` events seeded onto a new SSE subscription.
-- A Tauri/JS front-end drives `POST /command` and renders the `/events` SSE
-  stream into the componentized output (room header, narrative, oath card,
-  combat, map), using `/state` for snapshots.
+- A Tauri + Datastar front-end drives `POST /command` and renders the `/events`
+  SSE stream into componentized output (room header, narrative, oath card,
+  dialogue, combat, map), using `/state` for snapshots.
+- The first client follows the map-forward layout captured in
+  `docs/ui-design.md`: top health/focus HUD, prominent map/stage, typed output
+  underneath, top-right tabbed character menu, and bottom-right Intent command
+  helper.
 
 ## Candidate EARS Requirements
 
@@ -37,14 +41,19 @@ the full slice (swear → route → confront) through a rendered client:
 | REQ-001 | When a client starts a new session, the server shall deliver the start room's opening scene (the `Engine::begin()` events) without requiring a prior command. | server integration test |
 | REQ-002 | When the player submits a command in the UI, the client shall POST it to `/command` and render the returned/streamed typed events. | UI test / manual smoke |
 | REQ-003 | While connected, the client shall render the `/events` SSE stream into the typed output components. | UI test / manual smoke |
+| REQ-004 | When the client renders the main play screen, it shall follow the map-forward layout documented in `docs/ui-design.md`. | UI test / screenshot smoke |
+| REQ-005 | When the player needs contextual actions, the client shall provide a tabbed character menu (`Nearby`, `Oaths`, `Gear`, `Pack`) and an Intent command search/helper panel. | UI test / manual smoke |
+| REQ-006 | When map state is rendered, the client shall keep tile size and render mode configurable so the first HTML/Datastar grid can later become a canvas or sprite renderer without changing server state shape. | code review / UI test |
 
 ## Scope Notes
 
 - In: server opening-scene delivery (begin endpoint or initial-events-on-subscribe);
-  a Tauri/JS client that drives `/command` and renders `/events` + `/state`;
+  a Tauri + Datastar client that drives `/command` and renders `/events` + `/state`;
   honor the snake-in-events / camel-in-snapshots wire split
-  (`docs/decisions.md` Decision 031).
-- Out: full combat, skills, region standing, save/load UI — separate tickets.
+  (`docs/decisions.md` Decision 031); map-forward UI shell and typed event
+  components.
+- Out: full combat, skills, region standing, save/load UI, production sprite or
+  canvas renderer — separate tickets.
 
 ## Promotion Checklist
 

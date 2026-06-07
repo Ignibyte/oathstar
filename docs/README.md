@@ -17,6 +17,7 @@ This folder is the planning home for Oathstar.
 - [First Vertical Slice](./vertical-slice.md) describes the Beginner module proof of concept.
 - [Map And Minimap System](./map-system.md) describes square-grid navigation, cardinal exits plus up/down, and renderer-agnostic JSON map payloads.
 - [Protocol And Output](./protocol-and-output.md) describes typed domain events, JSON/HTML representations, and componentized interactive output.
+- [UI Design](./ui-design.md) describes the map-forward Tauri + Datastar client layout direction.
 - [Review Harness](./review-harness.md) describes the verification gate and Codex review workflow for implementation work.
 - [Design Decisions](./decisions.md) records locked choices and the next mechanic decisions.
 - [Planning Workspace](./planning/README.md) describes intake docs, forge ticket docs, pipeline docs, and EARS requirements templates.

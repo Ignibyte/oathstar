@@ -1,6 +1,10 @@
 import { createGame } from "./engine.js";
 
 const saveKey = "oathstar-save-v1";
+const equipmentSlots = ["Main hand", "Off hand", "Body", "Left earring", "Right earring", "Trinket"];
+const mapTileConfig = {
+  spritePixels: 32
+};
 
 const elements = {
   log: document.querySelector("#log"),
@@ -14,11 +18,15 @@ const elements = {
   mapLabel: document.querySelector("#map-label"),
   inventory: document.querySelector("#inventory"),
   inventoryCount: document.querySelector("#inventory-count"),
+  equipment: document.querySelector("#equipment"),
+  equipmentCount: document.querySelector("#equipment-count"),
   nearby: document.querySelector("#nearby"),
   nearbyCount: document.querySelector("#nearby-count"),
   quests: document.querySelector("#quests"),
   questCount: document.querySelector("#quest-count"),
   quickCommands: document.querySelector("#quick-commands"),
+  quickCount: document.querySelector("#quick-count"),
+  commandSearch: document.querySelector("#command-search"),
   commandContext: document.querySelector("#command-context"),
   hpValue: document.querySelector("#hp-value"),
   hpBar: document.querySelector("#hp-bar"),
@@ -27,7 +35,9 @@ const elements = {
   turnCount: document.querySelector("#turn-count"),
   saveButton: document.querySelector("#save-button"),
   loadButton: document.querySelector("#load-button"),
-  newButton: document.querySelector("#new-button")
+  newButton: document.querySelector("#new-button"),
+  menuTabs: [...document.querySelectorAll(".menu-tab")],
+  tabPanels: [...document.querySelectorAll(".tab-panel")]
 };
 
 let game = createGame();
@@ -69,6 +79,14 @@ function bindEvents() {
   elements.saveButton.addEventListener("click", () => saveGame());
   elements.loadButton.addEventListener("click", () => loadGame());
   elements.newButton.addEventListener("click", () => newGame());
+  elements.commandSearch.addEventListener("input", () => renderQuickCommands(game.getView()));
+
+  for (const tab of elements.menuTabs) {
+    tab.addEventListener("click", () => setActiveMenuTab(tab.dataset.tab));
+    tab.addEventListener("keydown", (event) => navigateMenuTabs(event, tab));
+  }
+
+  setActiveMenuTab("nearby");
 }
 
 function runCommand(rawCommand) {
@@ -150,11 +168,32 @@ function appendMessages(messages) {
 }
 
 function appendMessage(message) {
-  const entry = document.createElement("div");
+  const entry = document.createElement("article");
   entry.className = `log-entry ${message.type ?? "system"}`;
-  entry.textContent = message.text;
+
+  const meta = document.createElement("span");
+  meta.className = "log-meta";
+  meta.textContent = logLabel(message.type);
+
+  const text = document.createElement("p");
+  text.textContent = message.text;
+
+  entry.append(meta, text);
   elements.log.append(entry);
   elements.log.scrollTop = elements.log.scrollHeight;
+}
+
+function logLabel(type = "system") {
+  const labels = {
+    command: "Command",
+    room: "Room",
+    success: "Oath",
+    danger: "Threat",
+    dialogue: "Dialogue",
+    system: "System",
+    win: "Oathstar"
+  };
+  return labels[type] ?? "System";
 }
 
 function render(view) {
@@ -170,6 +209,7 @@ function render(view) {
   renderExits(view);
   renderMap(view);
   renderInventory(view);
+  renderEquipment();
   renderNearby(view);
   renderQuests(view);
   renderQuickCommands(view);
@@ -190,24 +230,33 @@ function renderExits(view) {
 function renderMap(view) {
   elements.map.replaceChildren();
   elements.mapLabel.textContent = view.room.zone;
+  elements.map.dataset.spriteTileSize = String(mapTileConfig.spritePixels);
 
-  const minX = 0;
-  const maxX = 2;
-  const minY = 0;
-  const maxY = 3;
+  const xs = view.map.map((room) => room.x);
+  const ys = view.map.map((room) => room.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
   const roomsByPosition = new Map(view.map.map((room) => [`${room.x},${room.y}`, room]));
+  elements.map.style.gridTemplateColumns = `repeat(${maxX - minX + 1}, minmax(0, 1fr))`;
 
   for (let y = minY; y <= maxY; y += 1) {
     for (let x = minX; x <= maxX; x += 1) {
       const room = roomsByPosition.get(`${x},${y}`);
       const cell = document.createElement("div");
       cell.className = "map-cell";
+      cell.setAttribute("aria-label", room && (room.visited || room.current) ? room.name : "Uncharted");
 
       if (room?.visited || room?.current) {
-        cell.textContent = room.shortName;
+        const name = document.createElement("span");
+        name.className = "map-name";
+        name.textContent = room.shortName;
+        const zone = document.createElement("span");
+        zone.className = "map-zone";
+        zone.textContent = room.zone;
+        cell.append(name, zone);
         cell.classList.add("visited");
-      } else {
-        cell.textContent = "";
       }
 
       if (room?.current) {
@@ -234,6 +283,27 @@ function renderInventory(view) {
   }
 }
 
+function renderEquipment() {
+  elements.equipment.replaceChildren();
+  elements.equipmentCount.textContent = `0/${equipmentSlots.length}`;
+
+  for (const slot of equipmentSlots) {
+    const row = document.createElement("div");
+    row.className = "equipment-slot";
+
+    const label = document.createElement("span");
+    label.className = "equipment-label";
+    label.textContent = slot;
+
+    const value = document.createElement("span");
+    value.className = "equipment-value empty";
+    value.textContent = "empty";
+
+    row.append(label, value);
+    elements.equipment.append(row);
+  }
+}
+
 function renderNearby(view) {
   elements.nearby.replaceChildren();
   elements.nearbyCount.textContent = `${view.nearby.length} ${view.nearby.length === 1 ? "thing" : "things"}`;
@@ -244,13 +314,7 @@ function renderNearby(view) {
   }
 
   for (const nearby of view.nearby) {
-    const command =
-      nearby.kind === "enemy"
-        ? `attack ${nearby.name.split(" (")[0]}`
-        : nearby.kind === "npc"
-          ? `talk ${nearby.name}`
-          : `take ${nearby.name}`;
-    elements.nearby.append(commandChip(nearby.name, command));
+    elements.nearby.append(nearbyCard(nearby));
   }
 }
 
@@ -292,8 +356,17 @@ function renderQuickCommands(view) {
     contextual.push("use oathstar");
   }
 
-  const commands = [...contextual, ...baseCommands].slice(0, 9);
+  const search = elements.commandSearch.value.trim().toLowerCase();
+  const commands = [...contextual, ...baseCommands].filter((command) =>
+    command.toLowerCase().includes(search)
+  );
   elements.commandContext.textContent = view.won ? "Lit" : "Ready";
+  elements.quickCount.textContent = `${commands.length} ${commands.length === 1 ? "command" : "commands"}`;
+
+  if (!commands.length) {
+    elements.quickCommands.append(emptyChip("no commands"));
+    return;
+  }
 
   for (const command of commands) {
     elements.quickCommands.append(commandButton(command));
@@ -308,6 +381,61 @@ function commandChip(label, command) {
   chip.title = command;
   chip.addEventListener("click", () => runCommand(command));
   return chip;
+}
+
+function nearbyCard(nearby) {
+  const card = document.createElement("article");
+  card.className = `entity-card ${nearby.kind}`;
+
+  const main = document.createElement("div");
+  main.className = "entity-main";
+
+  const name = document.createElement("strong");
+  name.className = "entity-name";
+  name.textContent = nearby.name;
+
+  const kind = document.createElement("span");
+  kind.className = "entity-kind";
+  kind.textContent = nearby.kind;
+
+  main.append(name, kind);
+
+  const actions = document.createElement("div");
+  actions.className = "entity-actions";
+
+  for (const action of nearbyActions(nearby)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    button.title = action.command;
+    button.addEventListener("click", () => runCommand(action.command));
+    actions.append(button);
+  }
+
+  card.append(main, actions);
+  return card;
+}
+
+function nearbyActions(nearby) {
+  const baseName = nearby.name.split(" (")[0];
+  if (nearby.kind === "enemy") {
+    return [
+      { label: "Attack", command: `attack ${baseName}` },
+      { label: "Examine", command: `examine ${baseName}` }
+    ];
+  }
+
+  if (nearby.kind === "npc") {
+    return [
+      { label: "Talk", command: `talk ${nearby.name}` },
+      { label: "Examine", command: `examine ${nearby.name}` }
+    ];
+  }
+
+  return [
+    { label: "Take", command: `take ${nearby.name}` },
+    { label: "Examine", command: `examine ${nearby.name}` }
+  ];
 }
 
 function emptyChip(label) {
@@ -331,6 +459,42 @@ function commandButton(command) {
     runCommand(command);
   });
   return button;
+}
+
+function setActiveMenuTab(tabId) {
+  for (const tab of elements.menuTabs) {
+    const active = tab.dataset.tab === tabId;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+
+  for (const panel of elements.tabPanels) {
+    const active = panel.dataset.panel === tabId;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  }
+}
+
+function navigateMenuTabs(event, currentTab) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    return;
+  }
+
+  event.preventDefault();
+  const currentIndex = elements.menuTabs.indexOf(currentTab);
+  const lastIndex = elements.menuTabs.length - 1;
+  const nextIndex =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? lastIndex
+        : event.key === "ArrowLeft"
+          ? Math.max(0, currentIndex - 1)
+          : Math.min(lastIndex, currentIndex + 1);
+  const nextTab = elements.menuTabs[nextIndex];
+  setActiveMenuTab(nextTab.dataset.tab);
+  nextTab.focus();
 }
 
 function cycleHistory(delta) {

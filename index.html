@@ -8,49 +8,15 @@
   </head>
   <body>
     <main class="game-shell" aria-label="Oathstar game">
-      <section class="terminal-panel" aria-label="Adventure log">
-        <header class="terminal-header">
-          <div class="brand-lockup">
-            <img src="./assets/oathstar-sigil.svg" alt="" class="brand-sigil" />
-            <div>
-              <h1>Oathstar</h1>
-              <p id="room-kicker">Starfall Gate</p>
-            </div>
+      <header class="app-header">
+        <div class="brand-lockup">
+          <img src="./assets/oathstar-sigil.svg" alt="" class="brand-sigil" />
+          <div>
+            <h1>Oathstar</h1>
+            <p id="room-kicker">Gatehouse</p>
           </div>
-          <div class="header-actions" aria-label="Game actions">
-            <button id="save-button" type="button" title="Save">
-              <span aria-hidden="true">S</span>
-            </button>
-            <button id="load-button" type="button" title="Load">
-              <span aria-hidden="true">L</span>
-            </button>
-            <button id="new-button" type="button" title="New">
-              <span aria-hidden="true">N</span>
-            </button>
-          </div>
-        </header>
-
-        <div id="log" class="log" aria-live="polite"></div>
-
-        <form id="command-form" class="command-form" autocomplete="off">
-          <span class="prompt" aria-hidden="true">&gt;</span>
-          <label class="sr-only" for="command-input">Command</label>
-          <input
-            id="command-input"
-            name="command"
-            type="text"
-            spellcheck="false"
-            placeholder="enter a command"
-            autofocus
-          />
-          <button type="submit" title="Send">
-            <span aria-hidden="true">Enter</span>
-          </button>
-        </form>
-      </section>
-
-      <aside class="side-panel" aria-label="Character and world state">
-        <section class="status-strip" aria-label="Character status">
+        </div>
+        <section class="top-vitals" aria-label="Character status">
           <div class="meter">
             <div class="meter-label">
               <span>Health</span>
@@ -70,53 +36,198 @@
             </div>
           </div>
         </section>
+        <div class="header-status" aria-label="Current location">
+          <strong id="room-name">Starfall Gate</strong>
+          <span id="turn-count">Turn 0</span>
+        </div>
+        <div class="header-actions" aria-label="Game actions">
+          <button id="save-button" type="button" title="Save">
+            <span aria-hidden="true">S</span>
+          </button>
+          <button id="load-button" type="button" title="Load">
+            <span aria-hidden="true">L</span>
+          </button>
+          <button id="new-button" type="button" title="New">
+            <span aria-hidden="true">N</span>
+          </button>
+        </div>
+      </header>
 
-        <section aria-label="Location">
-          <div class="panel-title">
-            <h2 id="room-name">Starfall Gate</h2>
-            <span id="turn-count">Turn 0</span>
+      <section class="stage-panel" aria-label="Map and room">
+        <div class="stage-topline">
+          <div>
+            <h2 id="map-label">Gatehouse</h2>
+            <p class="stage-subtitle">Known rooms</p>
           </div>
-          <p id="room-description" class="room-description"></p>
-          <div id="exits" class="exit-grid"></div>
-        </section>
-
-        <section aria-label="Map">
-          <div class="panel-title">
-            <h2>Map</h2>
-            <span id="map-label">Gatehouse</span>
+          <div class="stage-legend" aria-label="Map legend">
+            <span><i class="legend-current"></i>Here</span>
+            <span><i class="legend-known"></i>Known</span>
           </div>
+        </div>
+        <div class="map-frame">
           <div id="map" class="map-grid"></div>
+        </div>
+        <div class="room-brief" aria-label="Room description">
+          <p id="room-description" class="room-description"></p>
+          <div id="exits" class="exit-grid" aria-label="Exits"></div>
+        </div>
+      </section>
+
+      <section class="feed-panel" aria-label="Adventure log">
+        <header class="feed-header">
+          <h2>Event Feed</h2>
+          <span id="command-context">Ready</span>
+        </header>
+        <div id="log" class="log" aria-live="polite"></div>
+
+        <form id="command-form" class="command-form" autocomplete="off">
+          <span class="prompt" aria-hidden="true">&gt;</span>
+          <label class="sr-only" for="command-input">Command</label>
+          <input
+            id="command-input"
+            name="command"
+            type="text"
+            spellcheck="false"
+            placeholder="enter a command"
+            autofocus
+          />
+          <button type="submit" title="Send">
+            <span aria-hidden="true">Enter</span>
+          </button>
+        </form>
+      </section>
+
+      <aside class="state-rail" aria-label="Character and world state">
+        <section class="menu-panel" aria-label="Character menu">
+          <div class="menu-title">
+            <div>
+              <h2>Menu</h2>
+              <span>Character</span>
+            </div>
+          </div>
+
+          <div class="menu-tabs" role="tablist" aria-label="Character menu tabs">
+            <button
+              id="tab-nearby"
+              class="menu-tab active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="panel-nearby"
+              data-tab="nearby"
+            >
+              Nearby
+            </button>
+            <button
+              id="tab-oaths"
+              class="menu-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="panel-oaths"
+              data-tab="oaths"
+            >
+              Oaths
+            </button>
+            <button
+              id="tab-gear"
+              class="menu-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="panel-gear"
+              data-tab="gear"
+            >
+              Gear
+            </button>
+            <button
+              id="tab-pack"
+              class="menu-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="panel-pack"
+              data-tab="pack"
+            >
+              Pack
+            </button>
+          </div>
+
+          <div class="menu-panels">
+            <div
+              id="panel-nearby"
+              class="tab-panel active"
+              role="tabpanel"
+              aria-labelledby="tab-nearby"
+              data-panel="nearby"
+            >
+              <div class="panel-title">
+                <h2>Nearby</h2>
+                <span id="nearby-count">0 things</span>
+              </div>
+              <div id="nearby" class="entity-list"></div>
+            </div>
+
+            <div
+              id="panel-oaths"
+              class="tab-panel"
+              role="tabpanel"
+              aria-labelledby="tab-oaths"
+              data-panel="oaths"
+              hidden
+            >
+              <div class="panel-title">
+                <h2>Oaths</h2>
+                <span id="quest-count">0/0</span>
+              </div>
+              <ol id="quests" class="quest-list"></ol>
+            </div>
+
+            <div
+              id="panel-gear"
+              class="tab-panel"
+              role="tabpanel"
+              aria-labelledby="tab-gear"
+              data-panel="gear"
+              hidden
+            >
+              <div class="panel-title">
+                <h2>Equipment</h2>
+                <span id="equipment-count">0/6</span>
+              </div>
+              <div id="equipment" class="equipment-list"></div>
+            </div>
+
+            <div
+              id="panel-pack"
+              class="tab-panel"
+              role="tabpanel"
+              aria-labelledby="tab-pack"
+              data-panel="pack"
+              hidden
+            >
+              <div class="panel-title">
+                <h2>Inventory</h2>
+                <span id="inventory-count">0 items</span>
+              </div>
+              <div id="inventory" class="chip-list"></div>
+            </div>
+          </div>
         </section>
 
-        <section aria-label="Inventory">
+        <section class="intent-panel" aria-label="Intent and commands">
           <div class="panel-title">
-            <h2>Inventory</h2>
-            <span id="inventory-count">0 items</span>
+            <h2>Intent</h2>
+            <span id="quick-count">0 commands</span>
           </div>
-          <div id="inventory" class="chip-list"></div>
-        </section>
-
-        <section aria-label="Nearby">
-          <div class="panel-title">
-            <h2>Nearby</h2>
-            <span id="nearby-count">0 things</span>
-          </div>
-          <div id="nearby" class="chip-list"></div>
-        </section>
-
-        <section aria-label="Oaths">
-          <div class="panel-title">
-            <h2>Oaths</h2>
-            <span id="quest-count">0/0</span>
-          </div>
-          <ol id="quests" class="quest-list"></ol>
-        </section>
-
-        <section aria-label="Commands">
-          <div class="panel-title">
-            <h2>Commands</h2>
-            <span id="command-context">Ready</span>
-          </div>
+          <label class="sr-only" for="command-search">Search commands</label>
+          <input
+            id="command-search"
+            class="command-search"
+            type="search"
+            spellcheck="false"
+            placeholder="search commands"
+          />
           <div id="quick-commands" class="quick-grid"></div>
         </section>
       </aside>
