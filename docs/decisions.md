@@ -1476,3 +1476,57 @@ Revisit when:
 - World data gains new structural requirements (reachability, required entities),
   or community modules require input-size / sandboxing limits at the loader
   boundary.
+
+## Decision 031: Domain Events Are Emitted Through Explicit Engine Calls, With A Stable Wire Split
+
+Status: Locked
+
+Date: 2026-06-06
+
+Concretizes Decision 028 (typed domain events) and Decision 005 (oath lifecycle)
+as implemented in the beginner vertical slice (ticket #7).
+
+Event emission:
+
+- The engine emits domain events only from explicit calls: `Engine::handle_command`
+  (per player command) and `Engine::begin` (the opening scene for a new game).
+  `Engine::try_new` constructs state but emits nothing.
+- Therefore any "when a new game starts, show X" behavior must call `begin()`; the
+  first player command is not the trigger.
+
+Wire format (serde):
+
+- A `GameEvent` is camelCase (`eventId`, `tick`, `channel`) with its
+  `GameEventKind` `#[serde(flatten)]`-ed in under a snake_case `type` tag (e.g.
+  `oath_sworn`). Event-kind payload fields stay snake_case (`oath_id`, `room_id`)
+  because `rename_all` does not cross `flatten`.
+- View/snapshot structs (`GameSnapshot`, `OathSnapshot`, …) are camelCase
+  (`oathId`).
+- Net: clients read snake_case keys on the `/events` stream and camelCase keys on
+  `/state` snapshots. The split is intentional and consistent with the existing
+  `RoomEntered.room_id` vs `RoomSnapshot.id`.
+
+Oath/boss v1 (placeholder):
+
+- Oath state is `OathStatus { Sworn, Fulfilled }` (Decision 005's
+  `active`/`fulfilled`); "available" = not-yet-sworn (`None`); `Broken` is deferred
+  until a break path exists (an unconstructed variant would be an uncoverable
+  mutant under the 100% MSI gate).
+- The boss endpoint is the placed entity carrying the `"boss"` role (Decision 004
+  roles); `confront` is gated on an active oath.
+
+Rationale:
+
+- Explicit emission keeps the engine request/response and testable; an
+  opening-scene emitter (`begin`) makes "on start" behavior real without
+  auto-emitting from a constructor.
+- Documenting the snake/camel split keeps client authors from guessing field
+  casing per payload.
+- Minimal oath/boss shapes keep mutation surface small (100% MSI) while proving
+  the loop.
+
+Revisit when:
+
+- Full combat replaces the boss placeholder (Decision 007 / 023).
+- A break path requires `OathStatus::Broken`.
+- A second oath or boss per room needs explicit targeting.

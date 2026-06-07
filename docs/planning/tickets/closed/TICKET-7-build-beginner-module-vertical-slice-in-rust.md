@@ -1,12 +1,12 @@
 ---
 title: TICKET-7-build-beginner-module-vertical-slice-in-rust
-status: open
+status: done
 ticket: c1937d4e-2367-4884-a6e5-bcc7023f6a57
 ticket_number: 7
 type: feature
 created: 2026-06-06
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/active/WORK-beginner-vertical-slice.spec.md
 ---
 
 # TICKET-7-build-beginner-module-vertical-slice-in-rust
@@ -41,4 +41,4 @@ tower, a boss endpoint, and typed events that clients can render.
 - Forge ticket: `c1937d4e-2367-4884-a6e5-bcc7023f6a57`
 - Related docs: `docs/vertical-slice.md`, `docs/game-overview.md`, `docs/event-lifecycle.md`, `docs/protocol-and-output.md`
 - Promoted from intake:
-- Active pipeline:
+- Active pipeline: WORK-beginner-vertical-slice (pipeline_id ac0d30da-32f2-4872-8845-8468af76ed8d)

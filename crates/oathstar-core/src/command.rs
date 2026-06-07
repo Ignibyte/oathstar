@@ -66,6 +66,10 @@ pub enum Command {
     Look { target: Option<String> },
     /// A movement command produced by a direction alias or `go <dir>`.
     Move(Direction),
+    /// `swear` / `vow` — swear the module's offered oath.
+    Swear,
+    /// `confront` / `challenge` — resolve the boss at the current room's endpoint.
+    Confront,
     /// Input that matched no known command; carries the collapsed echo of the raw
     /// input for a helpful failure message. The engine mutates no state for it.
     Unknown { input: String },
@@ -123,6 +127,26 @@ pub fn parse(input: &str) -> Command {
             Some(rest.join(" "))
         };
         return Command::Look { target };
+    }
+
+    if matches!(verb.as_str(), "swear" | "vow") {
+        // Bare verb only — the same strict arity as the movement verbs: `swear
+        // oath` is an unknown command, not a silent swear on trailing input.
+        if rest.is_empty() {
+            return Command::Swear;
+        }
+        return Command::Unknown {
+            input: collapse(input),
+        };
+    }
+
+    if matches!(verb.as_str(), "confront" | "challenge") {
+        if rest.is_empty() {
+            return Command::Confront;
+        }
+        return Command::Unknown {
+            input: collapse(input),
+        };
     }
 
     Command::Unknown {
@@ -313,5 +337,45 @@ mod tests {
         assert_eq!(Direction::West.as_str(), "west");
         assert_eq!(Direction::Up.as_str(), "up");
         assert_eq!(Direction::Down.as_str(), "down");
+    }
+
+    // ---- ticket #7: swear / confront verbs ----
+
+    // Both swear aliases (case-insensitive) → Swear; kills the `||`/dropped-alias.
+    #[test]
+    fn swear_and_vow_parse_to_swear() {
+        assert_eq!(parse("swear"), Command::Swear);
+        assert_eq!(parse("vow"), Command::Swear);
+        assert_eq!(parse("SWEAR"), Command::Swear);
+    }
+
+    // Strict arity: trailing tokens → Unknown with the exact collapsed echo.
+    #[test]
+    fn swear_with_trailing_tokens_is_unknown() {
+        assert_eq!(
+            parse("swear oath"),
+            Command::Unknown {
+                input: "swear oath".to_string()
+            }
+        );
+    }
+
+    // Both confront aliases (case-insensitive) → Confront.
+    #[test]
+    fn confront_and_challenge_parse_to_confront() {
+        assert_eq!(parse("confront"), Command::Confront);
+        assert_eq!(parse("challenge"), Command::Confront);
+        assert_eq!(parse("CONFRONT"), Command::Confront);
+    }
+
+    // Strict arity: trailing tokens → Unknown with the exact collapsed echo.
+    #[test]
+    fn confront_with_trailing_tokens_is_unknown() {
+        assert_eq!(
+            parse("confront now"),
+            Command::Unknown {
+                input: "confront now".to_string()
+            }
+        );
     }
 }

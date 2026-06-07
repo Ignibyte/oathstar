@@ -28,6 +28,10 @@ pub struct GameSnapshot {
     pub player: PlayerSnapshot,
     pub room: RoomSnapshot,
     pub map: MapSnapshot,
+    /// The player's current oath, if one has been sworn. `None` until the player
+    /// swears the module's oath.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oath: Option<OathSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +89,27 @@ pub struct MapRoomSnapshot {
     pub exits: BTreeMap<String, String>,
 }
 
+/// Lifecycle state of a sworn oath, surfaced in the snapshot and carried by oath
+/// events. `Broken` is intentionally absent until a break path exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OathStatus {
+    /// Sworn and active — the player has taken the oath but not yet fulfilled it.
+    Sworn,
+    /// Fulfilled — the oath's objective has been met.
+    Fulfilled,
+}
+
+/// The player's oath as exposed in a [`GameSnapshot`] (the view of the engine's
+/// oath state).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OathSnapshot {
+    pub oath_id: String,
+    pub title: String,
+    pub status: OathStatus,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameEvent {
@@ -125,6 +150,15 @@ pub enum GameEventKind {
     RoomEntered {
         room_id: String,
         title: String,
+    },
+    /// The player swore an oath (emitted on the `Oath` channel).
+    OathSworn {
+        oath_id: String,
+        title: String,
+    },
+    /// A sworn oath was fulfilled (emitted on the `Oath` channel).
+    OathFulfilled {
+        oath_id: String,
     },
 }
 

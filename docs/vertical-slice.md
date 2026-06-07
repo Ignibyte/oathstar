@@ -82,3 +82,19 @@ Possible expansion hooks:
 - Include enough combat to feel the progression loop.
 - Use TOML-first content if the Rust rewrite has begun.
 - Treat this as the engine proving ground.
+
+## Implementation Status
+
+The Rust authority-path slice landed in **ticket #7** (`WORK-beginner-vertical-slice`):
+
+- **Proved:** TOML-first content (`modules/beginner/*.toml`, from ticket #6), the
+  command parser, rooms/regions/entities/items, the **oath lifecycle**
+  (swear → active → fulfilled) with typed `OathSworn`/`OathFulfilled` events, an
+  authored **town → road → tower** route, a **boss endpoint** (the Bell-Eater,
+  identified by the `"boss"` role) resolved deterministically via `confront`,
+  `Engine::begin()` for the opening room scene, and the whole loop exercised over
+  the server `/command`→`/events` path. See `docs/decisions.md` Decision 031.
+- **Deferred (placeholders or out of scope):** full combat (HP/pulses), skill
+  progression, region standing, save/load of oath state, and the **Tauri/JS UI**
+  that renders the slice — these are follow-up tickets. The boss is a scripted
+  placeholder, not a combat encounter.

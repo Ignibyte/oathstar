@@ -177,6 +177,17 @@ fn render_event_html(event: &GameEvent) -> String {
             escape_html(room_id),
             escape_html(title)
         ),
+        GameEventKind::OathSworn { oath_id, title } => format!(
+            r#"<article class="message message-oath" data-event-id="{}" data-oath-id="{}">Sworn: {}</article>"#,
+            event.event_id,
+            escape_html(oath_id),
+            escape_html(title)
+        ),
+        GameEventKind::OathFulfilled { oath_id } => format!(
+            r#"<article class="message message-oath" data-event-id="{}" data-oath-id="{}">Oath fulfilled</article>"#,
+            event.event_id,
+            escape_html(oath_id)
+        ),
     }
 }
 
@@ -192,7 +203,7 @@ fn escape_html(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oathstar_protocol::{EventChannel, OutputComponent};
+    use oathstar_protocol::{EventChannel, OathStatus, OutputComponent};
 
     #[test]
     fn escape_html_neutralizes_markup() {
@@ -325,5 +336,130 @@ mod tests {
         assert!(!response.0.events.is_empty(), "the command emits events");
         rx.try_recv()
             .expect("the command's events are broadcast to subscribers");
+    }
+
+    // ---- ticket #7: oath/boss render arms + begin + full-slice smoke ----
+
+    // REQ-005 (render): the new oath events render as oath articles with their
+    // ids/titles HTML-escaped.
+    #[test]
+    fn render_event_html_renders_oath_events_and_escapes() {
+        let sworn = GameEvent {
+            event_id: 5,
+            tick: 1,
+            channel: EventChannel::Oath,
+            kind: GameEventKind::OathSworn {
+                oath_id: "o<1>".to_string(),
+                title: "A&B".to_string(),
+            },
+        };
+        let html = render_event_html(&sworn);
+        assert!(html.contains("message-oath"), "oath article class: {html}");
+        assert!(html.contains(r#"data-event-id="5""#));
+        assert!(html.contains("Sworn: A&amp;B"), "title escaped: {html}");
+        assert!(html.contains("o&lt;1&gt;"), "oath id escaped: {html}");
+        assert!(!html.contains("A&B"), "no raw ampersand survives");
+
+        let fulfilled = GameEvent {
+            event_id: 6,
+            tick: 2,
+            channel: EventChannel::Oath,
+            kind: GameEventKind::OathFulfilled {
+                oath_id: "o1".to_string(),
+            },
+        };
+        let html = render_event_html(&fulfilled);
+        assert!(html.contains("Oath fulfilled"), "fulfilled text: {html}");
+        assert!(html.contains(r#"data-oath-id="o1""#));
+    }
+
+    // REQ-001: begin() on the real beginner world produces the start-room event.
+    #[test]
+    fn begin_emits_beginner_start_room() {
+        let world = oathstar_content::load_beginner_world().expect("beginner world loads");
+        let mut engine = Engine::try_new(world).expect("valid beginner world");
+        let events = engine.begin();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::RoomEntered { room_id, .. } if room_id == "hollowmere_square"
+            )),
+            "begin emits RoomEntered for hollowmere_square"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage {
+                    component: OutputComponent::RoomHeader,
+                    text,
+                } if text.contains("Hollowmere Square")
+            )),
+            "begin emits the Hollowmere Square room header"
+        );
+    }
+
+    // REQ-005 (smoke): the whole slice runs through the /command path on the real
+    // beginner world: look (REQ-001) → swear (REQ-002) → route (REQ-003) →
+    // confront (REQ-004), with the typed oath events and final state.
+    #[tokio::test]
+    async fn beginner_slice_runs_through_command_path() {
+        let app = test_app_state();
+
+        let req = |input: &str| {
+            Json(CommandRequest {
+                input: input.to_string(),
+                actor_id: None,
+            })
+        };
+
+        let look = command(State(app.clone()), req("look")).await;
+        assert!(look.0.accepted, "look accepted");
+        assert_eq!(look.0.snapshot.current_room_id, "hollowmere_square");
+
+        let swear = command(State(app.clone()), req("swear")).await;
+        assert!(swear.0.accepted, "swear accepted");
+        assert!(
+            swear
+                .0
+                .events
+                .iter()
+                .any(|e| matches!(&e.kind, GameEventKind::OathSworn { .. })),
+            "swear emits OathSworn"
+        );
+        assert_eq!(
+            swear.0.snapshot.oath.as_ref().expect("oath sworn").status,
+            OathStatus::Sworn
+        );
+
+        for step in ["north", "north", "north", "up", "up"] {
+            let moved = command(State(app.clone()), req(step)).await;
+            assert!(moved.0.accepted, "move {step} accepted");
+        }
+        let here = state_snapshot(State(app.clone())).await;
+        assert_eq!(
+            here.0.current_room_id, "bell_eater_roost",
+            "the authored route reaches the boss room"
+        );
+
+        let confront = command(State(app.clone()), req("confront")).await;
+        assert!(confront.0.accepted, "confront accepted");
+        assert!(
+            confront
+                .0
+                .events
+                .iter()
+                .any(|e| matches!(&e.kind, GameEventKind::OathFulfilled { .. })),
+            "confront emits OathFulfilled"
+        );
+        assert_eq!(
+            confront
+                .0
+                .snapshot
+                .oath
+                .as_ref()
+                .expect("oath present")
+                .status,
+            OathStatus::Fulfilled
+        );
     }
 }

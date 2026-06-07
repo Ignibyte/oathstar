@@ -55,3 +55,28 @@ id = "candle"
 name = "Black Candle"
 description = "A squat black candle that smells faintly of brine and old promises."
 aliases = ["candle", "black candle"]
+
+# The stolen bell clapper — the boss's hoarded prize and the oath's objective.
+[[items]]
+id = "bell_clapper"
+name = "Bell Clapper"
+description = "The bell's stolen iron tongue, heavy with old promises."
+aliases = ["clapper", "bell clapper"]
+
+# The boss actor, placed in bell_eater_roost (see rooms.toml). The "boss" role is
+# how the engine's `confront` command finds the boss in the current room.
+[[entities]]
+id = "bell_eater"
+name = "The Bell-Eater"
+description = "A copper-throated horror that swallowed Hollowmere's bell-voice."
+aliases = ["bell-eater", "bell eater", "eater"]
+kind = "actor"
+roles = ["boss", "combatant"]
+inventory = ["bell_clapper"]
+
+# The beginner oath, offered by the module (module.toml `oath_id`). Swearing it
+# and resolving the Bell-Eater fulfills it.
+[[oaths]]
+id = "hollow_bell"
+title = "The Hollow Bell"
+description = "Recover the bell's stolen clapper and make Hollowmere ring again."

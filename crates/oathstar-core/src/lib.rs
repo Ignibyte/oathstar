@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use command::{parse, Command, Direction};
 use oathstar_protocol::{
     CommandRequest, CommandResponse, EventChannel, GameEvent, GameEventKind, GameSnapshot,
-    MapRoomSnapshot, MapSnapshot, OutputComponent, PlayerSnapshot, RoomSnapshot,
+    MapRoomSnapshot, MapSnapshot, OathSnapshot, OathStatus, OutputComponent, PlayerSnapshot,
+    RoomSnapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +24,14 @@ pub struct WorldDefinition {
     pub entities: BTreeMap<String, Entity>,
     #[serde(default)]
     pub items: BTreeMap<String, Item>,
+    /// Oaths this module defines, by id. The player swears the one named by
+    /// [`WorldDefinition::oath_id`].
+    #[serde(default)]
+    pub oaths: BTreeMap<String, OathDefinition>,
+    /// The id of the oath this module offers (the `swear` command swears it), or
+    /// `None` for a module with no oath. Validated to exist in `oaths`.
+    #[serde(default)]
+    pub oath_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +114,18 @@ pub struct Item {
     pub aliases: Vec<String>,
 }
 
+/// A swearable oath defined by a module — leaf content data.
+///
+/// The engine records the player's progress against it as oath state on the
+/// [`GameState`]; the `title`/`description` are the promise text shown when the
+/// oath is sworn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OathDefinition {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+}
+
 /// Why an out-of-spec [`WorldDefinition`] was rejected at construction.
 ///
 /// Returned by [`WorldDefinition::validate`] and [`Engine::try_new`] so that
@@ -139,6 +160,8 @@ pub enum WorldValidationError {
     RoomItemMissing { room_id: String, item_id: String },
     /// An entity owns an item id that is not in the item registry.
     EntityItemMissing { entity_id: String, item_id: String },
+    /// `oath_id` designates an oath that is not in the oath registry.
+    OathMissing { oath_id: String },
 }
 
 impl std::fmt::Display for WorldValidationError {
@@ -194,6 +217,9 @@ impl std::fmt::Display for WorldValidationError {
                     f,
                     "entity '{entity_id}' references missing item '{item_id}'"
                 )
+            }
+            Self::OathMissing { oath_id } => {
+                write!(f, "designated oath '{oath_id}' does not exist")
             }
         }
     }
@@ -293,8 +319,25 @@ impl WorldDefinition {
             }
         }
 
+        if let Some(oath_id) = &self.oath_id {
+            if !self.oaths.contains_key(oath_id) {
+                return Err(WorldValidationError::OathMissing {
+                    oath_id: oath_id.clone(),
+                });
+            }
+        }
+
         Ok(())
     }
+}
+
+/// The player's progress against a sworn oath — the engine's oath state, mapped
+/// to an [`oathstar_protocol::OathSnapshot`] for the view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OathProgress {
+    pub oath_id: String,
+    pub title: String,
+    pub status: OathStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +346,9 @@ pub struct GameState {
     pub current_room_id: String,
     pub discovered_rooms: BTreeSet<String>,
     pub player: PlayerState,
+    /// The player's oath once sworn; `None` until the `swear` command succeeds.
+    #[serde(default)]
+    pub oath: Option<OathProgress>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -354,6 +400,7 @@ impl Engine {
                 focus: 5,
                 max_focus: 5,
             },
+            oath: None,
         };
 
         Ok(Self {
@@ -386,6 +433,11 @@ impl Engine {
             },
             room: room_snapshot,
             map,
+            oath: self.state.oath.as_ref().map(|progress| OathSnapshot {
+                oath_id: progress.oath_id.clone(),
+                title: progress.title.clone(),
+                status: progress.status,
+            }),
         }
     }
 
@@ -397,6 +449,25 @@ impl Engine {
                 value: self.state.tick,
             },
         )
+    }
+
+    /// Produce the opening scene for a freshly started game (REQ-001).
+    ///
+    /// A session emits no events until the player acts, so this gives a client
+    /// the start room to render the moment a game begins: the typed
+    /// [`GameEventKind::RoomEntered`] for the start room followed by its
+    /// description, reusing the same room path as movement.
+    pub fn begin(&mut self) -> Vec<GameEvent> {
+        let room = self.current_room().clone();
+        let mut events = vec![self.event(
+            EventChannel::Room,
+            GameEventKind::RoomEntered {
+                room_id: room.id,
+                title: room.title,
+            },
+        )];
+        events.extend(self.describe_current_room());
+        events
     }
 
     pub fn handle_command(&mut self, request: CommandRequest) -> CommandResponse {
@@ -415,7 +486,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down.",
+                    "Try: look, north, south, east, west, up, down, swear, confront.",
                 ));
             }
             Command::Look { target: None } => {
@@ -432,6 +503,16 @@ impl Engine {
             }
             Command::Move(direction) => {
                 events.extend(self.move_direction(direction));
+            }
+            Command::Swear => {
+                let (accepted, swear_events) = self.swear();
+                events.extend(swear_events);
+                return self.response(accepted, events);
+            }
+            Command::Confront => {
+                let (accepted, confront_events) = self.confront();
+                events.extend(confront_events);
+                return self.response(accepted, events);
             }
             Command::Unknown { input } => {
                 events.push(self.log(
@@ -519,6 +600,132 @@ impl Engine {
         )];
         events.extend(self.describe_current_room());
         events
+    }
+
+    /// Swear the module's designated oath.
+    ///
+    /// Returns `(accepted, events)`. Refused (no state change) when an oath is
+    /// already sworn or the module designates none. On success, records the oath
+    /// as [`OathStatus::Sworn`] and emits a narrative line plus a typed
+    /// [`GameEventKind::OathSworn`] on the `Oath` channel.
+    fn swear(&mut self) -> (bool, Vec<GameEvent>) {
+        if self.state.oath.is_some() {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    "You have already sworn your oath.",
+                )],
+            );
+        }
+
+        let Some(oath_id) = self.world.oath_id.clone() else {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    "There is no oath to swear here.",
+                )],
+            );
+        };
+
+        // Invariant: `Engine::try_new` validates that a designated `oath_id` is a
+        // key in `oaths`, so this lookup is never `None` for a constructed engine
+        // — the same construction-time guarantee `current_room()` relies on.
+        let oath = self
+            .world
+            .oaths
+            .get(&oath_id)
+            .expect("designated oath is a try_new-validated invariant");
+        let title = oath.title.clone();
+        let description = oath.description.clone();
+
+        self.state.oath = Some(OathProgress {
+            oath_id: oath_id.clone(),
+            title: title.clone(),
+            status: OathStatus::Sworn,
+        });
+
+        let narrative = self.log(
+            EventChannel::Narrative,
+            OutputComponent::NarrativeMessage,
+            format!("You swear {title}: {description}"),
+        );
+        let sworn = self.event(
+            EventChannel::Oath,
+            GameEventKind::OathSworn { oath_id, title },
+        );
+        (true, vec![narrative, sworn])
+    }
+
+    /// Resolve the boss at the current room's endpoint.
+    ///
+    /// Returns `(accepted, events)`. The boss is the placed entity carrying the
+    /// `"boss"` role. Refused (no state change) when there is no boss here, when
+    /// no oath is active, or when the oath is already fulfilled. On success, emits
+    /// the authored combat outcome plus a typed [`GameEventKind::OathFulfilled`]
+    /// and marks the oath fulfilled. Deterministic — no RNG.
+    fn confront(&mut self) -> (bool, Vec<GameEvent>) {
+        let room = self.current_room().clone();
+        let boss_name = room
+            .entities
+            .iter()
+            .filter_map(|entity_id| self.world.entities.get(entity_id))
+            .find(|entity| entity.roles.iter().any(|role| role == "boss"))
+            .map(|boss| boss.name.clone());
+
+        let Some(boss_name) = boss_name else {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    "There is nothing here to confront.",
+                )],
+            );
+        };
+
+        // Flip the oath to fulfilled only when it is active, holding the mutable
+        // borrow just long enough to copy the id out so the event helpers below
+        // can re-borrow `self`.
+        let resolved_oath_id = match self.state.oath.as_mut() {
+            Some(progress) if progress.status == OathStatus::Sworn => {
+                progress.status = OathStatus::Fulfilled;
+                Some(progress.oath_id.clone())
+            }
+            _ => None,
+        };
+
+        if let Some(oath_id) = resolved_oath_id {
+            let outcome = self.log(
+                EventChannel::Combat,
+                OutputComponent::CombatMessage,
+                format!("You overcome {boss_name}, and your oath is fulfilled."),
+            );
+            let fulfilled =
+                self.event(EventChannel::Oath, GameEventKind::OathFulfilled { oath_id });
+            return (true, vec![outcome, fulfilled]);
+        }
+
+        // Boss present, but the oath is not swearable-to-fulfilled here: either it
+        // was never sworn, or it is already fulfilled (a `Sworn` oath would have
+        // resolved above). Distinguish for the refusal message.
+        let message = match self.state.oath.as_ref().map(|progress| progress.status) {
+            Some(OathStatus::Fulfilled) => {
+                format!("{boss_name} is already broken; your oath is kept.")
+            }
+            _ => format!("You face {boss_name}, but you have sworn no oath to see this through."),
+        };
+        (
+            false,
+            vec![self.log(
+                EventChannel::System,
+                OutputComponent::SystemMessage,
+                message,
+            )],
+        )
     }
 
     fn current_room(&self) -> &RoomDefinition {
@@ -665,6 +872,8 @@ mod tests {
             subregions: BTreeMap::new(),
             entities: BTreeMap::new(),
             items: BTreeMap::new(),
+            oaths: BTreeMap::new(),
+            oath_id: None,
         }
     }
 
@@ -882,6 +1091,8 @@ mod tests {
             subregions: BTreeMap::new(),
             entities: BTreeMap::new(),
             items: BTreeMap::new(),
+            oaths: BTreeMap::new(),
+            oath_id: None,
         }
     }
 
@@ -967,6 +1178,8 @@ mod tests {
             subregions,
             entities,
             items,
+            oaths: BTreeMap::new(),
+            oath_id: None,
         }
     }
 
@@ -1336,6 +1549,318 @@ mod tests {
         assert_eq!(
             response.snapshot.current_room_id, "a",
             "a blocked move does not change the current room"
+        );
+    }
+
+    // ---- ticket #7: beginner vertical slice (oath lifecycle + boss) ----
+
+    // A synthetic world for oath/boss mechanics: `town` (start) holds a non-boss
+    // `bystander`; `town --east--> lair` where `warden` (role "boss") waits. One
+    // designated oath `o1`.
+    fn oath_world() -> WorldDefinition {
+        let mut town = room_with(
+            "town",
+            true,
+            BTreeMap::from([("east".to_string(), "lair".to_string())]),
+        );
+        town.region = "r".to_string();
+        town.entities = vec!["bystander".to_string()];
+
+        let mut lair = room_with("lair", true, BTreeMap::new());
+        lair.region = "r".to_string();
+        lair.entities = vec!["warden".to_string()];
+
+        let mut rooms = BTreeMap::new();
+        rooms.insert("town".to_string(), town);
+        rooms.insert("lair".to_string(), lair);
+
+        let mut regions = BTreeMap::new();
+        regions.insert("r".to_string(), region("r"));
+
+        let mut warden = entity("warden", EntityKind::Actor, &["boss"], &[]);
+        warden.name = "The Warden".to_string();
+        let mut entities = BTreeMap::new();
+        entities.insert("warden".to_string(), warden);
+        entities.insert(
+            "bystander".to_string(),
+            entity("bystander", EntityKind::Actor, &["bystander"], &[]),
+        );
+
+        let mut oaths = BTreeMap::new();
+        oaths.insert(
+            "o1".to_string(),
+            OathDefinition {
+                id: "o1".to_string(),
+                title: "Test Oath".to_string(),
+                description: "Do the thing.".to_string(),
+            },
+        );
+
+        WorldDefinition {
+            id: "w".to_string(),
+            title: "W".to_string(),
+            start_room_id: "town".to_string(),
+            rooms,
+            regions,
+            subregions: BTreeMap::new(),
+            entities,
+            items: BTreeMap::new(),
+            oaths,
+            oath_id: Some("o1".to_string()),
+        }
+    }
+
+    // REQ-002: swearing records an active oath and emits a typed OathSworn on the
+    // Oath channel plus a narrative carrying the oath title + description.
+    #[test]
+    fn swear_sets_oath_active_and_emits_oath_sworn() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        let response = engine.handle_command(cmd("swear"));
+        assert!(response.accepted, "swear is accepted");
+
+        let oath = response.snapshot.oath.expect("oath recorded in snapshot");
+        assert_eq!(oath.oath_id, "o1");
+        assert_eq!(oath.title, "Test Oath");
+        assert_eq!(oath.status, OathStatus::Sworn);
+
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (EventChannel::Oath, GameEventKind::OathSworn { oath_id, title })
+                    if oath_id.as_str() == "o1" && title.as_str() == "Test Oath"
+            )),
+            "emits OathSworn{{o1, Test Oath}} on the Oath channel"
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (EventChannel::Narrative, GameEventKind::LogMessage { text, .. })
+                    if text.contains("Test Oath") && text.contains("Do the thing.")
+            )),
+            "emits a Narrative line with the oath title and description"
+        );
+    }
+
+    // REQ-002 branch: a second swear is refused and the oath is unchanged.
+    #[test]
+    fn swear_twice_is_refused_with_message() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        let response = engine.handle_command(cmd("swear"));
+        assert!(!response.accepted, "a second swear is refused");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. } if text.contains("already sworn")
+            )),
+            "refusal explains the oath is already sworn"
+        );
+        assert_eq!(
+            response.snapshot.oath.expect("still sworn").status,
+            OathStatus::Sworn
+        );
+    }
+
+    // REQ-002 branch: with no designated module oath, swear is refused, no oath.
+    #[test]
+    fn swear_without_designated_oath_is_refused() {
+        let mut world = oath_world();
+        world.oath_id = None;
+        let mut engine = Engine::try_new(world).expect("valid world without an oath");
+        let response = engine.handle_command(cmd("swear"));
+        assert!(
+            !response.accepted,
+            "swearing with no module oath is refused"
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. } if text.contains("no oath")
+            )),
+            "refusal explains there is no oath to swear"
+        );
+        assert!(response.snapshot.oath.is_none(), "no oath recorded");
+    }
+
+    // REQ-004: confronting the boss with an active oath resolves it — Combat
+    // outcome naming the boss + typed OathFulfilled, oath becomes Fulfilled.
+    #[test]
+    fn confront_fulfills_active_oath_and_emits_oath_fulfilled() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(
+            engine.handle_command(cmd("east")).accepted,
+            "move to the lair"
+        );
+
+        let response = engine.handle_command(cmd("confront"));
+        assert!(
+            response.accepted,
+            "confront is accepted with boss + active oath"
+        );
+
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (
+                    EventChannel::Combat,
+                    GameEventKind::LogMessage {
+                        component: OutputComponent::CombatMessage,
+                        text,
+                    }
+                ) if text.contains("The Warden")
+            )),
+            "emits a Combat outcome naming the boss"
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (EventChannel::Oath, GameEventKind::OathFulfilled { oath_id })
+                    if oath_id.as_str() == "o1"
+            )),
+            "emits OathFulfilled{{o1}} on the Oath channel"
+        );
+        assert_eq!(
+            response.snapshot.oath.expect("oath present").status,
+            OathStatus::Fulfilled
+        );
+    }
+
+    // REQ-004 branch (T17): a non-boss entity in the room is not confrontable —
+    // kills the `role == "boss"` / `.find(..).any(..)` mutants.
+    #[test]
+    fn confront_with_only_a_non_boss_entity_is_refused() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        // The start room holds only `bystander` (no "boss" role).
+        let response = engine.handle_command(cmd("confront"));
+        assert!(!response.accepted, "a non-boss entity is not confrontable");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. } if text.contains("nothing here to confront")
+            )),
+            "reports nothing to confront when no boss is present"
+        );
+    }
+
+    // REQ-004 branch: boss present but no oath sworn → refused, no oath created.
+    #[test]
+    fn confront_boss_without_swearing_is_refused() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        assert!(
+            engine.handle_command(cmd("east")).accepted,
+            "reach the lair"
+        );
+        let response = engine.handle_command(cmd("confront"));
+        assert!(!response.accepted, "confront without an oath is refused");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. } if text.contains("sworn no oath")
+            )),
+            "refusal says you have sworn no oath"
+        );
+        assert!(
+            response.snapshot.oath.is_none(),
+            "a refused confront creates no oath"
+        );
+    }
+
+    // REQ-004 branch: confronting after the oath is already fulfilled is refused.
+    #[test]
+    fn confront_when_oath_already_fulfilled_is_refused() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(engine.handle_command(cmd("east")).accepted);
+        assert!(
+            engine.handle_command(cmd("confront")).accepted,
+            "first confront fulfills the oath"
+        );
+        let response = engine.handle_command(cmd("confront"));
+        assert!(
+            !response.accepted,
+            "confronting an already-broken boss is refused"
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. } if text.contains("already broken")
+            )),
+            "refusal says the boss is already broken"
+        );
+        assert_eq!(
+            response.snapshot.oath.expect("oath present").status,
+            OathStatus::Fulfilled,
+            "the oath remains fulfilled"
+        );
+    }
+
+    // REQ-007 (core): a designated oath absent from the registry is rejected.
+    #[test]
+    fn validate_rejects_missing_designated_oath() {
+        let mut world = oath_world();
+        world.oath_id = Some("ghost".to_string());
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::OathMissing {
+                oath_id: "ghost".to_string(),
+            })
+        );
+    }
+
+    // REQ-007 (core): a world whose designated oath exists validates.
+    #[test]
+    fn validate_accepts_world_with_a_valid_designated_oath() {
+        assert_eq!(oath_world().validate(), Ok(()));
+    }
+
+    // REQ-007 (core): OathMissing's Display names the offending oath id.
+    #[test]
+    fn oath_missing_display_names_the_offender() {
+        assert!(WorldValidationError::OathMissing {
+            oath_id: "x".to_string(),
+        }
+        .to_string()
+        .contains("designated oath 'x' does not exist"));
+    }
+
+    // REQ-001: a freshly started game produces a typed start-room event.
+    #[test]
+    fn begin_emits_start_room_entered_and_description() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        let events = engine.begin();
+        assert!(
+            events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (EventChannel::Room, GameEventKind::RoomEntered { room_id, .. })
+                    if room_id.as_str() == "town"
+            )),
+            "begin emits RoomEntered for the start room"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage {
+                    component: OutputComponent::RoomHeader,
+                    ..
+                }
+            )),
+            "begin emits the room header/description"
+        );
+    }
+
+    // REQ-002/004: help lists the new commands.
+    #[test]
+    fn help_lists_swear_and_confront() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        let response = engine.handle_command(cmd("help"));
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. }
+                    if text.contains("swear") && text.contains("confront")
+            )),
+            "help mentions swear and confront"
         );
     }
 }

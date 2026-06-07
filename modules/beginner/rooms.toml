@@ -26,6 +26,7 @@ y = 0
 z = 0
 glyph = "S"
 passable = true
+entities = ["mara"]
 
 [rooms.exits]
 west = "hollowmere_square"
@@ -120,6 +121,7 @@ y = -3
 z = 2
 glyph = "B"
 passable = true
+entities = ["bell_eater"]
 
 [rooms.exits]
 down = "tower_landing"

@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context};
 use oathstar_core::{
-    Entity, Item, RegionDefinition, RoomDefinition, SubregionDefinition, WorldDefinition,
+    Entity, Item, OathDefinition, RegionDefinition, RoomDefinition, SubregionDefinition,
+    WorldDefinition,
 };
 use serde::Deserialize;
 
@@ -15,6 +16,9 @@ struct ModuleToml {
     id: String,
     name: String,
     start_room_id: String,
+    /// The oath this module offers, if any (swearable via the `swear` command).
+    #[serde(default)]
+    oath_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +58,8 @@ struct WorldToml {
     entities: Vec<Entity>,
     #[serde(default)]
     items: Vec<Item>,
+    #[serde(default)]
+    oaths: Vec<OathDefinition>,
 }
 
 pub fn load_beginner_world() -> anyhow::Result<WorldDefinition> {
@@ -135,6 +141,8 @@ fn load_world_from_toml(
         subregions: index_by_id(world_toml.subregions, |s| s.id.clone(), "subregion")?,
         entities: index_by_id(world_toml.entities, |e| e.id.clone(), "entity")?,
         items: index_by_id(world_toml.items, |i| i.id.clone(), "item")?,
+        oaths: index_by_id(world_toml.oaths, |o| o.id.clone(), "oath")?,
+        oath_id: module.oath_id,
     };
 
     // Validate through the core boundary — the single source of truth for world
@@ -260,5 +268,75 @@ mod tests {
             err.to_string().contains("duplicate region id 'r1'"),
             "unexpected error: {err}"
         );
+    }
+
+    // ---- ticket #7: oath content + boss placement ----
+
+    // REQ-007 / content: the real beginner world carries the designated oath, the
+    // boss entity (boss role + owned clapper), and the boss placement.
+    #[test]
+    fn beginner_world_has_oath_and_boss() {
+        let world = load_beginner_world().expect("beginner module should load");
+        assert_eq!(world.oath_id.as_deref(), Some("hollow_bell"));
+        assert!(world.oaths.contains_key("hollow_bell"));
+        let boss = world.entities.get("bell_eater").expect("bell_eater entity");
+        assert!(
+            boss.roles.iter().any(|r| r == "boss"),
+            "bell_eater carries the boss role"
+        );
+        assert!(
+            boss.inventory.iter().any(|i| i == "bell_clapper"),
+            "bell_eater owns the clapper"
+        );
+        assert!(
+            world
+                .rooms
+                .get("bell_eater_roost")
+                .expect("roost room")
+                .entities
+                .iter()
+                .any(|e| e == "bell_eater"),
+            "bell_eater is placed in the roost"
+        );
+    }
+
+    // REQ-007: a designated oath the world never defines is rejected (dangling).
+    #[test]
+    fn load_rejects_missing_oath_reference() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\noath_id = \"ghost\"\n";
+        let world = "[[regions]]\nid = \"r\"\nname = \"R\"\n";
+        let err = load_world_from_toml(module, ONE_ROOM, world)
+            .expect_err("missing designated oath must be rejected");
+        assert!(
+            err.to_string()
+                .contains("designated oath 'ghost' does not exist"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // REQ-007: a duplicate oath id is rejected by the loader (index_by_id "oath").
+    #[test]
+    fn load_rejects_duplicate_oath_id() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
+        let world = "[[oaths]]\nid = \"o\"\ntitle = \"O\"\ndescription = \"d\"\n\
+            [[oaths]]\nid = \"o\"\ntitle = \"Dup\"\ndescription = \"d\"\n";
+        let err = load_world_from_toml(module, ONE_ROOM, world)
+            .expect_err("duplicate oath id must be rejected");
+        assert!(
+            err.to_string().contains("duplicate oath id 'o'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // A module with neither oath_id nor [[oaths]] loads: serde defaults give
+    // None / empty (exercises the default paths for coverage).
+    #[test]
+    fn load_accepts_module_without_oath() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
+        let world = "[[regions]]\nid = \"r\"\nname = \"R\"\n";
+        let loaded =
+            load_world_from_toml(module, ONE_ROOM, world).expect("a module without an oath loads");
+        assert!(loaded.oath_id.is_none(), "no designated oath");
+        assert!(loaded.oaths.is_empty(), "no oaths defined");
     }
 }

@@ -7,6 +7,7 @@ category = "world"
 required_engine = ">=0.1.0"
 enabled_by_default = true
 start_room_id = "hollowmere_square"
+oath_id = "hollow_bell"
 
 hooks = []
 dependencies = []

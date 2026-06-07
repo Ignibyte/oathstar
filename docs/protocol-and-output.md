@@ -130,3 +130,18 @@ The exact paths can change. The important point is that JSON and HTML rendering 
 - JSON remains available for alternate clients, debugging, DM tools, and tests.
 - Components should be interactive where useful, but not visually overwhelming.
 - The player should still be able to read the game like a MUD.
+
+## Implementation Status (v1)
+
+As of ticket #7 the implemented `GameEventKind` set is `LogMessage` (carrying an
+`OutputComponent`), `Tick`, `RoomEntered`, `OathSworn`, and `OathFulfilled`; the
+rest of the event catalog above is still aspirational. Channels and
+`OutputComponent`s are defined in `oathstar-protocol`.
+
+**Wire-format note (clients):** a `GameEvent` serializes camelCase (`eventId`,
+`tick`, `channel`) with its kind `flatten`-ed in under a snake_case `type` tag
+(`oath_sworn`, `room_entered`); the kind's payload fields stay **snake_case**
+(`oath_id`, `room_id`) because serde `rename_all` does not cross `flatten`.
+View/snapshot structs (`GameSnapshot`, `OathSnapshot`) are **camelCase**
+(`oathId`). So `/events` payloads use snake_case keys and `/state` snapshots use
+camelCase keys — see `docs/decisions.md` Decision 031.
