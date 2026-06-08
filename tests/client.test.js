@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { parseEvent } from "../src/client/wire.js";
 import { toComponent } from "../src/client/components.js";
-import { toHud, toMenuModel, toOaths, toNearby } from "../src/client/snapshot.js";
+import { toHud, toMenuModel, toOaths, toNearby, toPack } from "../src/client/snapshot.js";
 import { toRoomDisplay, toExitPad, DEFAULT_ROOM_DISPLAY_LIMIT } from "../src/client/room.js";
 import { toMapModel, DEFAULT_MAP_CONFIG } from "../src/client/map.js";
 import { suggestCommands, COMMAND_VOCAB } from "../src/client/intent.js";
@@ -211,6 +211,10 @@ test("snapshot.toNearby shows contents only, never exits", () => {
   assert.equal(withContents.items[0].name, "Mara");
   assert.equal(withContents.items[0].kind, "npc");
   assert.ok(withContents.items[0].command.includes("Mara"));
+  assert.deepEqual(
+    withContents.items[0].actions.map((action) => action.label),
+    ["Look", "Talk"],
+  );
   assert.ok(!withContents.items.some((item) => item.kind === "exit"));
 
   // forward-compat: assembled from actors/items/fixtures when there is no
@@ -231,9 +235,9 @@ test("snapshot.toNearby shows contents only, never exits", () => {
 });
 
 // TN2 (REQ-008): toNearby renders the server's NearbySnapshot wire shape
-// (id/name/kind/distance/proximity/interactable — ticket #17). The extra
-// awareness fields are ignored; name/kind/command still map, so the panel lights
-// up data-driven from the real `/state` payload with no client logic change.
+// (id/name/kind/distance/proximity/interactable — ticket #17/#18). Awareness
+// fields drive labels and action availability, so the panel lights up
+// data-driven from the real `/state` payload with no client-specific guessing.
 test("snapshot.toNearby renders the server NearbySnapshot shape", () => {
   const near = toNearby({
     room: {
@@ -254,8 +258,12 @@ test("snapshot.toNearby renders the server NearbySnapshot shape", () => {
   assert.equal(near.count, 2);
   assert.equal(near.items[0].name, "Mara Candlekeep");
   assert.equal(near.items[0].kind, "actor");
+  assert.equal(near.items[0].detail, "1 away");
   assert.equal(near.items[0].command, "look Mara Candlekeep");
+  assert.equal(near.items[0].actions[1].command, "talk Mara Candlekeep");
   assert.equal(near.items[1].kind, "item");
+  assert.equal(near.items[1].actions[1].label, "Take");
+  assert.equal(near.items[1].actions[1].disabled, true);
 });
 
 // T8 (REQ-007): the map model carries a configurable tile size + render mode and
@@ -355,6 +363,8 @@ test("intent.suggestCommands excludes movement, keeps contextual + vocab", () =>
   );
   assert.ok(all.some((command) => command.command === "swear"));
   assert.ok(all.some((command) => command.command === "look"));
+  assert.ok(all.some((command) => command.command === "talk mara"));
+  assert.ok(all.some((command) => command.command === "take wax stub"));
 
   const sworn = suggestCommands(
     sampleSnapshot({ oath: { oathId: "o", title: "Bell", status: "sworn" } }),
@@ -371,5 +381,59 @@ test("intent.suggestCommands excludes movement, keeps contextual + vocab", () =>
   assert.equal(suggestCommands(snap, "north").length, 0);
 
   assert.ok(COMMAND_VOCAB.some((command) => command.command === "swear"));
+  assert.ok(COMMAND_VOCAB.some((command) => command.command === "talk mara"));
+  assert.ok(COMMAND_VOCAB.some((command) => command.command === "take wax stub"));
   assert.ok(!COMMAND_VOCAB.some((command) => MOVEMENT_COMMANDS.includes(command.command)));
+});
+
+// ---- ticket #18: Pack panel reads the additive snapshot.pack ----
+
+// TP1 (REQ-007): toPack reads carried items (id + name) from snapshot.pack, in order.
+test("snapshot.toPack reads carried items from snapshot.pack", () => {
+  const pack = toPack({
+    pack: [
+      { id: "wax_stub", name: "Wax Stub" },
+      { id: "candle", name: "Black Candle" },
+    ],
+  });
+  assert.equal(pack.count, 2);
+  assert.equal(pack.items[0].name, "Wax Stub");
+  assert.equal(pack.items[1].name, "Black Candle");
+});
+
+// TP2 (REQ-007/008): an absent or empty pack is an honest empty state, so an old
+// snapshot without the key still renders.
+test("snapshot.toPack is an honest empty state when pack is absent or empty", () => {
+  assert.equal(toPack(undefined).count, 0);
+  assert.equal(toPack({}).count, 0);
+  assert.equal(toPack({ pack: [] }).count, 0);
+  assert.deepEqual(toPack({}).items, []);
+});
+
+// TP3: the display name falls back name → id → "Something".
+test("snapshot.toPack falls back name to id to placeholder", () => {
+  assert.equal(toPack({ pack: [{ id: "wax_stub" }] }).items[0].name, "wax_stub");
+  assert.equal(toPack({ pack: [{}] }).items[0].name, "Something");
+});
+
+// TP4 (REQ-002/007): toPack passes through server kind + flags and invents nothing.
+test("snapshot.toPack passes through server kind and flags, inventing nothing", () => {
+  const out = toPack({
+    pack: [{ id: "lamp", name: "Brass Lamp", kind: "light", flags: ["lit"] }],
+  });
+  assert.equal(out.items[0].kind, "light");
+  assert.deepEqual(out.items[0].flags, ["lit"]);
+  // Missing kind/flags are reported as null/[] — never invented.
+  const bare = toPack({ pack: [{ id: "x", name: "X" }] });
+  assert.equal(bare.items[0].kind, null);
+  assert.deepEqual(bare.items[0].flags, []);
+  // An empty pack invents no items.
+  assert.deepEqual(toPack({ pack: [] }).items, []);
+});
+
+// TP4 (REQ-007): the aggregate menu model carries the pack panel from the snapshot.
+test("snapshot.toMenuModel includes the pack panel from the snapshot", () => {
+  const menu = toMenuModel({ pack: [{ id: "wax_stub", name: "Wax Stub" }] });
+  assert.equal(menu.pack.count, 1);
+  assert.equal(menu.pack.items[0].name, "Wax Stub");
 });

@@ -50,11 +50,33 @@ kind = "actor"
 roles = ["conversable", "shopkeeper"]
 inventory = ["candle"]
 
+# Mara's authored dialogue (ticket #19). `greeting` is the default reply; the
+# `oath` block is spoken because Mara issues the Hollow Bell oath (oath.issuer_id
+# = "mara"), selected by the player's oath state. Talking while unsworn offers the
+# oath, which `swear` then requires.
+[entities.dialogue]
+greeting = "Mara sets down her ledger. \"Wax and wicks, oathbearer. Mind the puddles.\""
+
+[entities.dialogue.oath]
+offer = "Mara's jaw tightens. \"You hear how quiet the square is? The Bell-Eater stole the bell's clapper, and Hollowmere hasn't rung since — no call to prayer, no warning, no welcome. Someone has to swear to set it right. Will you?\" (You could now swear the oath of the Hollow Bell.)"
+sworn = "Mara nods toward the empty bell-frame. \"You've sworn it. The Bell-Eater roosts up the old tower — north, then up. Bring back our voice.\""
+fulfilled = "Mara almost smiles. \"The bell rang at dawn. You kept your word, oathbearer — Hollowmere won't forget it.\""
+
 [[items]]
 id = "candle"
 name = "Black Candle"
 description = "A squat black candle that smells faintly of brine and old promises."
 aliases = ["candle", "black candle"]
+kind = "light"
+
+# A loose item lying in Hollowmere Square — the first ground-placed, takeable
+# thing (ticket #18 `take` demo). Flavor-only: no mechanics, no oath link.
+[[items]]
+id = "wax_stub"
+name = "Wax Stub"
+description = "A cold stub of black wax, dropped and forgotten on the wet cobbles."
+aliases = ["wax", "stub", "wax stub"]
+kind = "trinket"
 
 # The stolen bell clapper — the boss's hoarded prize and the oath's objective.
 [[items]]
@@ -62,6 +84,8 @@ id = "bell_clapper"
 name = "Bell Clapper"
 description = "The bell's stolen iron tongue, heavy with old promises."
 aliases = ["clapper", "bell clapper"]
+kind = "quest"
+flags = ["oath"]
 
 # The boss actor, placed in bell_eater_roost (see rooms.toml). The "boss" role is
 # how the engine's `confront` command finds the boss in the current room.
@@ -80,3 +104,7 @@ inventory = ["bell_clapper"]
 id = "hollow_bell"
 title = "The Hollow Bell"
 description = "Recover the bell's stolen clapper and make Hollowmere ring again."
+# Ticket #19: Mara offers this oath (talk to her to be offered it before swearing);
+# `source` records the region origin for future oath-giver UI and faction effects.
+issuer_id = "mara"
+source = "hollowmere"

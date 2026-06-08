@@ -78,12 +78,61 @@ export function toNearby(snapshot) {
         ...(Array.isArray(room.items) ? room.items : []),
         ...(Array.isArray(room.fixtures) ? room.fixtures : []),
       ];
-  const items = contents.map((entry) => ({
-    name: entry.name ?? entry.id ?? "Something",
-    kind: entry.kind ?? "thing",
-    command: entry.command ?? (entry.name ? `look ${entry.name}` : "look"),
-  }));
+  const items = contents.map(toNearbyItem);
   return { count: items.length, items };
+}
+
+function targetName(entry) {
+  return entry.name ?? entry.id ?? "Something";
+}
+
+function canInteract(entry) {
+  return entry.interactable ?? (!entry.proximity || entry.proximity === "exact" || entry.proximity === "interactable");
+}
+
+function distanceLabel(entry) {
+  if (entry.proximity === "exact") {
+    return "here";
+  }
+  if (typeof entry.distance === "number") {
+    return `${entry.distance} away`;
+  }
+  return null;
+}
+
+function toNearbyItem(entry) {
+  const name = targetName(entry);
+  const kind = entry.kind ?? "thing";
+  const interactable = canInteract(entry);
+  const look = entry.command ?? `look ${name}`;
+  const actions = [{ label: "Look", command: look, hint: `Look at ${name}` }];
+
+  if (kind === "actor" || kind === "npc") {
+    actions.push({
+      label: "Talk",
+      command: `talk ${name}`,
+      disabled: !interactable,
+      hint: interactable ? `Talk to ${name}` : `${name} is too far away to talk to`,
+    });
+  } else if (kind === "item") {
+    actions.push({
+      label: "Take",
+      command: `take ${name}`,
+      disabled: !interactable,
+      hint: interactable ? `Take ${name}` : `${name} is too far away to take`,
+    });
+  }
+
+  return {
+    name,
+    kind,
+    distance: entry.distance ?? null,
+    proximity: entry.proximity ?? null,
+    interactable,
+    detail: distanceLabel(entry),
+    command: look,
+    actions,
+  };
 }
 
 /** Gear panel: the six equipment slots, all empty in v1. */
@@ -95,9 +144,21 @@ export function toGear() {
   };
 }
 
-/** Pack panel: inventory, empty in v1. */
-export function toPack() {
-  return { count: 0, items: [] };
+/**
+ * Pack panel: the player's carried items (ticket #18/#20). Reads the additive
+ * `snapshot.pack` (id, name, kind, and optional flags per item) — server data
+ * only, never invented. An absent or empty `pack` is an honest empty state, so an
+ * older snapshot without the key still renders.
+ */
+export function toPack(snapshot) {
+  const pack = Array.isArray(snapshot?.pack) ? snapshot.pack : [];
+  const items = pack.map((entry) => ({
+    name: entry.name ?? entry.id ?? "Something",
+    id: entry.id ?? null,
+    kind: entry.kind ?? null,
+    flags: Array.isArray(entry.flags) ? entry.flags : [],
+  }));
+  return { count: items.length, items };
 }
 
 /** Aggregate the four character-menu panels. */
@@ -106,6 +167,6 @@ export function toMenuModel(snapshot) {
     nearby: toNearby(snapshot),
     oaths: toOaths(snapshot),
     gear: toGear(),
-    pack: toPack(),
+    pack: toPack(snapshot),
   };
 }

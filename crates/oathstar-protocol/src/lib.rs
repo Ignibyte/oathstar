@@ -32,6 +32,33 @@ pub struct GameSnapshot {
     /// swears the module's oath.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oath: Option<OathSnapshot>,
+    /// The player's carried items (ticket #18). Minimal additive pack state: one
+    /// `id` + display `name` per carried item, in pickup order. Empty — and
+    /// omitted from JSON — until the player takes something, so a packless
+    /// snapshot is byte-identical to before and an old payload without a `pack`
+    /// key still deserializes (same additive pattern as `oath`/`room.contents`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pack: Vec<PackItemSnapshot>,
+}
+
+/// One carried item in the player's pack, as renderer-agnostic snapshot data
+/// (ticket #18).
+///
+/// Minimal by design — `id`, display `name`, coarse `kind`, and basic authored
+/// `flags`; quantities, stacks, weight, and equipment slots are out of scope.
+/// The client's Pack panel reads this server-authored data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackItemSnapshot {
+    /// The item's world id.
+    pub id: String,
+    /// The item's display name.
+    pub name: String,
+    /// A coarse kind/type placeholder (ticket #20), e.g. `"item"` — always present.
+    pub kind: String,
+    /// Basic authored item flags (ticket #20); omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,7 +237,9 @@ pub enum OutputComponent {
 
 #[cfg(test)]
 mod tests {
-    use super::{NearbySnapshot, RoomSnapshot};
+    use super::{
+        GameSnapshot, MapSnapshot, NearbySnapshot, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
+    };
     use std::collections::BTreeMap;
 
     fn bare_room() -> RoomSnapshot {
@@ -281,5 +310,107 @@ mod tests {
         assert_eq!(back.contents.len(), 1);
         assert_eq!(back.contents[0].id, "mara");
         assert!(back.contents[0].interactable);
+    }
+
+    // ---- ticket #18: additive pack snapshot ----
+
+    fn bare_snapshot() -> GameSnapshot {
+        GameSnapshot {
+            world_id: "w".to_string(),
+            world_title: "W".to_string(),
+            tick: 0,
+            current_room_id: "r".to_string(),
+            player: PlayerSnapshot {
+                id: "p".to_string(),
+                name: "P".to_string(),
+                level: 1,
+                xp: 0,
+                hp: 1,
+                max_hp: 1,
+                focus: 0,
+                max_focus: 0,
+            },
+            room: bare_room(),
+            map: MapSnapshot {
+                region: "reg".to_string(),
+                subregion: None,
+                current_room_id: "r".to_string(),
+                rooms: Vec::new(),
+            },
+            oath: None,
+            pack: Vec::new(),
+        }
+    }
+
+    fn pack_item(id: &str) -> PackItemSnapshot {
+        PackItemSnapshot {
+            id: id.to_string(),
+            name: "Wax Stub".to_string(),
+            kind: "item".to_string(),
+            flags: Vec::new(),
+        }
+    }
+
+    // REQ-007: a PackItemSnapshot serializes its id + camelCase name.
+    #[test]
+    fn pack_item_snapshot_serializes_id_and_name() {
+        let value = serde_json::to_value(pack_item("wax_stub")).expect("serialize");
+        assert_eq!(value["id"], "wax_stub");
+        assert_eq!(value["name"], "Wax Stub");
+    }
+
+    // REQ-007/008: an empty pack is omitted from JSON (byte-identical to before).
+    #[test]
+    fn empty_pack_is_omitted_from_json() {
+        let json = serde_json::to_string(&bare_snapshot()).expect("serialize");
+        assert!(!json.contains("\"pack\""), "omitted when empty: {json}");
+    }
+
+    // REQ-008: an old snapshot JSON without a `pack` key deserializes (empty pack).
+    #[test]
+    fn snapshot_without_pack_deserializes_to_empty() {
+        let json = serde_json::to_string(&bare_snapshot()).expect("serialize");
+        assert!(!json.contains("\"pack\""));
+        let back: GameSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert!(back.pack.is_empty());
+    }
+
+    // REQ-007: a populated pack round-trips in pickup order.
+    #[test]
+    fn populated_pack_round_trips() {
+        let mut snapshot = bare_snapshot();
+        snapshot.pack = vec![pack_item("wax_stub"), pack_item("candle")];
+        let json = serde_json::to_string(&snapshot).expect("serialize");
+        assert!(json.contains("\"pack\""));
+        let back: GameSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.pack.len(), 2);
+        assert_eq!(back.pack[0].id, "wax_stub");
+        assert_eq!(back.pack[1].id, "candle");
+    }
+
+    // T2 (REQ-002): a PackItemSnapshot serializes `kind` + `flags` (camelCase),
+    // omits empty flags, and round-trips (kind is always present — server-produced).
+    #[test]
+    fn pack_item_snapshot_serializes_kind_and_flags() {
+        let value = serde_json::to_value(PackItemSnapshot {
+            id: "lamp".to_string(),
+            name: "Brass Lamp".to_string(),
+            kind: "light".to_string(),
+            flags: vec!["lit".to_string()],
+        })
+        .expect("serialize");
+        assert_eq!(value["kind"], "light");
+        assert_eq!(value["flags"], serde_json::json!(["lit"]));
+
+        // Empty flags are omitted; kind is always present.
+        let plain = serde_json::to_value(pack_item("coin")).expect("serialize");
+        assert_eq!(plain["kind"], "item");
+        assert!(plain.get("flags").is_none(), "empty flags omitted: {plain}");
+
+        // Round-trips; a payload without `flags` deserializes to empty.
+        let back: PackItemSnapshot =
+            serde_json::from_str(r#"{"id":"x","name":"X","kind":"light"}"#).expect("deserialize");
+        assert_eq!(back.kind, "light");
+        assert!(back.flags.is_empty());
     }
 }

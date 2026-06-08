@@ -70,6 +70,21 @@ pub enum Command {
     Swear,
     /// `confront` / `challenge` — resolve the boss at the current room's endpoint.
     Confront,
+    /// `talk` / `speak` with a target — address a nearby actor. The target text is
+    /// preserved (case kept, surrounding/repeated whitespace collapsed) exactly as
+    /// a `Look` target; a bare `talk` with no target is [`Unknown`](Self::Unknown).
+    Talk { target: String },
+    /// `take` / `get` / `pick up` with a target — pick up a nearby world item. The
+    /// target text is preserved like a `Look` target; a bare verb with no target
+    /// is [`Unknown`](Self::Unknown).
+    Take { target: String },
+    /// `drop` with a target — place a carried item into the current room/cell
+    /// (ticket #20). Target text is preserved like a `Take` target; a bare `drop`
+    /// with no target is [`Unknown`](Self::Unknown).
+    Drop { target: String },
+    /// `inventory` / `pack` / `i` — list carried items (ticket #20). Bare verb,
+    /// strict arity; trailing tokens make it [`Unknown`](Self::Unknown).
+    Inventory,
     /// Input that matched no known command; carries the collapsed echo of the raw
     /// input for a helpful failure message. The engine mutates no state for it.
     Unknown { input: String },
@@ -129,20 +144,59 @@ pub fn parse(input: &str) -> Command {
         return Command::Look { target };
     }
 
-    if matches!(verb.as_str(), "swear" | "vow") {
-        // Bare verb only — the same strict arity as the movement verbs: `swear
-        // oath` is an unknown command, not a silent swear on trailing input.
+    if let Some(command) = parse_bare_verb(&verb, &rest, input) {
+        return command;
+    }
+
+    // `talk`/`speak` and `take`/`get` take a required target — a bare verb with no
+    // target is an unknown command (strict arity), so the typed command always
+    // carries non-empty target text. The target keeps its case (only the verb is
+    // case-folded), matching `look <target>`.
+    if matches!(verb.as_str(), "talk" | "speak") {
         if rest.is_empty() {
-            return Command::Swear;
+            return Command::Unknown {
+                input: collapse(input),
+            };
         }
-        return Command::Unknown {
-            input: collapse(input),
+        return Command::Talk {
+            target: rest.join(" "),
         };
     }
 
-    if matches!(verb.as_str(), "confront" | "challenge") {
+    if matches!(verb.as_str(), "take" | "get") {
         if rest.is_empty() {
-            return Command::Confront;
+            return Command::Unknown {
+                input: collapse(input),
+            };
+        }
+        return Command::Take {
+            target: rest.join(" "),
+        };
+    }
+
+    if verb == "drop" {
+        // Required target (strict arity), mirroring `take` — a bare `drop` is an
+        // unknown command, not a no-op (ticket #20).
+        if rest.is_empty() {
+            return Command::Unknown {
+                input: collapse(input),
+            };
+        }
+        return Command::Drop {
+            target: rest.join(" "),
+        };
+    }
+
+    // The two-token verb `pick up <target>`: only `pick up` is a take. `pick`
+    // alone, `pick <non-up>`, `pick up` with no target, and the one-word `pickup`
+    // are all unknown — the grammar stays precise rather than guessing.
+    if verb == "pick" {
+        if let [up, target @ ..] = rest.as_slice() {
+            if up.eq_ignore_ascii_case("up") && !target.is_empty() {
+                return Command::Take {
+                    target: target.join(" "),
+                };
+            }
         }
         return Command::Unknown {
             input: collapse(input),
@@ -151,6 +205,27 @@ pub fn parse(input: &str) -> Command {
 
     Command::Unknown {
         input: collapse(input),
+    }
+}
+
+/// Parse the bare, strict-arity verbs (`swear`/`vow`, `confront`/`challenge`,
+/// `inventory`/`pack`/`i`) — each takes no trailing tokens. Returns
+/// `Some(command)` when `verb` is one of them (a trailing token yields
+/// `Some(Unknown)`); `None` when `verb` is not a bare verb so `parse` keeps
+/// trying. Grouping these keeps `parse` under the clippy line ceiling (#20).
+fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
+    let command = match verb {
+        "swear" | "vow" => Command::Swear,
+        "confront" | "challenge" => Command::Confront,
+        "inventory" | "pack" | "i" => Command::Inventory,
+        _ => return None,
+    };
+    if rest.is_empty() {
+        Some(command)
+    } else {
+        Some(Command::Unknown {
+            input: collapse(input),
+        })
     }
 }
 
@@ -375,6 +450,155 @@ mod tests {
             parse("confront now"),
             Command::Unknown {
                 input: "confront now".to_string()
+            }
+        );
+    }
+
+    // ---- ticket #18: talk / take parsing ----
+
+    // REQ-001: talk/speak + target → Talk{target}; verb case-folded, target case kept.
+    #[test]
+    fn talk_and_speak_with_target_parse_to_talk() {
+        assert_eq!(
+            parse("talk mara"),
+            Command::Talk {
+                target: "mara".to_string()
+            }
+        );
+        assert_eq!(
+            parse("speak warden"),
+            Command::Talk {
+                target: "warden".to_string()
+            }
+        );
+        // Verb folded; target case preserved.
+        assert_eq!(
+            parse("TALK Mara"),
+            Command::Talk {
+                target: "Mara".to_string()
+            }
+        );
+    }
+
+    // REQ-002: take/get and the two-token `pick up`, each + target → Take{target}.
+    #[test]
+    fn take_get_and_pick_up_with_target_parse_to_take() {
+        assert_eq!(
+            parse("take coin"),
+            Command::Take {
+                target: "coin".to_string()
+            }
+        );
+        assert_eq!(
+            parse("get coin"),
+            Command::Take {
+                target: "coin".to_string()
+            }
+        );
+        assert_eq!(
+            parse("pick up black candle"),
+            Command::Take {
+                target: "black candle".to_string()
+            }
+        );
+        assert_eq!(
+            parse("GET Coin"),
+            Command::Take {
+                target: "Coin".to_string()
+            }
+        );
+    }
+
+    // REQ-001/002 boundary: bare verbs (no target) are Unknown (strict arity), so a
+    // typed Talk/Take always carries non-empty target text.
+    #[test]
+    fn bare_talk_and_take_verbs_are_unknown() {
+        for verb in ["talk", "speak", "take", "get"] {
+            assert_eq!(
+                parse(verb),
+                Command::Unknown {
+                    input: verb.to_string()
+                },
+                "bare verb: {verb}"
+            );
+        }
+    }
+
+    // REQ-002 boundary: only the two-token `pick up <target>` is a take. `pick`
+    // alone, `pick up` with no target, `pick <non-up>`, and one-word `pickup` are
+    // all Unknown — the grammar guesses nothing.
+    #[test]
+    fn pick_arity_is_strict() {
+        assert_eq!(
+            parse("pick up candle"),
+            Command::Take {
+                target: "candle".to_string()
+            }
+        );
+        for input in ["pick", "pick up", "pick something", "pickup candle"] {
+            assert_eq!(
+                parse(input),
+                Command::Unknown {
+                    input: input.to_string()
+                },
+                "input: {input}"
+            );
+        }
+    }
+
+    // REQ-001/002: targets preserve case and collapse internal whitespace like a
+    // look target; the `up` sentinel matches case-insensitively but the target
+    // tokens keep their case (even when the target is literally "UP").
+    #[test]
+    fn talk_take_targets_preserve_case_and_collapse_whitespace() {
+        assert_eq!(
+            parse("talk  Mara   Candlekeep"),
+            Command::Talk {
+                target: "Mara Candlekeep".to_string()
+            }
+        );
+        assert_eq!(
+            parse("pick   up   Black  Candle"),
+            Command::Take {
+                target: "Black Candle".to_string()
+            }
+        );
+        assert_eq!(
+            parse("pick up UP"),
+            Command::Take {
+                target: "UP".to_string()
+            }
+        );
+    }
+
+    // T4 (REQ-003): the inventory aliases parse to the bare `Inventory` command;
+    // trailing tokens are `Unknown` (strict arity, via `parse_bare_verb`).
+    #[test]
+    fn inventory_aliases_parse_to_inventory() {
+        assert_eq!(parse("inventory"), Command::Inventory);
+        assert_eq!(parse("pack"), Command::Inventory);
+        assert_eq!(parse("i"), Command::Inventory);
+        assert_eq!(
+            parse("inventory all"),
+            Command::Unknown {
+                input: "inventory all".to_string()
+            }
+        );
+    }
+
+    // T7 (REQ-005): `drop` takes a required target; a bare `drop` is `Unknown`.
+    #[test]
+    fn drop_with_target_parses_to_drop() {
+        assert_eq!(
+            parse("drop wax stub"),
+            Command::Drop {
+                target: "wax stub".to_string()
+            }
+        );
+        assert_eq!(
+            parse("drop"),
+            Command::Unknown {
+                input: "drop".to_string()
             }
         );
     }

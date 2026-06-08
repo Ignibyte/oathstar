@@ -1759,3 +1759,92 @@ Revisit when:
 - Map overlays need entity/event markers driven by distance/proximity.
 
 See `docs/spatial-awareness.md` for the full model.
+
+## Decision 037: Oaths Are Offered By An Issuer NPC Before They Can Be Sworn
+
+Status: Locked
+
+Date: 2026-06-08
+
+Concretizes Decision 005 (oath lifecycle) and Decision 006 (NPCs keep oaths
+discoverable through conversation) as implemented in ticket #19.
+
+An oath may name an **issuer**. `OathDefinition` gains optional `issuer_id` (the
+oath-giver entity) and `source` (a region/faction origin string, recorded for
+future oath-giver UI and region/faction effects). When an oath names an issuer it
+becomes **offer-gated**: the player must be *offered* it — by talking to the
+issuer at interaction range — before `swear` will bind it. The offer is a single
+authored flag (`GameState.offered_oath_id`), not a relationship meter
+(Decision 006). An oath with no issuer stays globally swearable (the pre-#19
+behavior), so the gate is opt-in and backward-compatible.
+
+Dialogue is authored and TOML-first (Decision 022): a conversable NPC may carry
+an `EntityDialogue { greeting, oath: { offer, sworn, fulfilled } }`. `talk <npc>`
+returns the line selected by the player's oath state when the NPC issues the
+designated oath, otherwise the `greeting`; an NPC with no dialogue keeps the
+generic reply. Dialogue is delivered as the existing `NarrativeMessage` event, so
+the oath event/snapshot wire shapes (`OathSworn`/`OathFulfilled`) are unchanged
+(Decisions 028/031). A dangling `issuer_id` is rejected at the construction
+boundary (Decision 030, `WorldValidationError::OathIssuerMissing`).
+
+Rationale:
+
+- Moves the beginner oath from a contextless global action to a discovered,
+  authored interaction without overbuilding NPC memory or dialogue trees.
+- Opt-in via `issuer_id` keeps existing and other-module oaths working unchanged.
+- Issuer/source metadata gives future oath-giver UI and region/faction systems a
+  real hook while costing one optional field today.
+
+Revisit when:
+
+- Multiple simultaneous oath offers, branching/modal dialogue, or persuasion are
+  needed (all scoped out of v1).
+- NPC memory (Decision 006) graduates from a single offered-flag to per-actor
+  state, or `source` begins to drive real region/faction standing (Decision 009).
+
+## Decision 038: Inventory v1 Is A Carried-Id Pack With Drop/List/Inspect And A Kind/Flags Placeholder
+
+Status: Locked
+
+Date: 2026-06-08
+
+Concretizes Decision 013 (ROT-inspired inventory) as the minimal first foundation
+(ticket #20) — without jumping to the full equipment system.
+
+The player's carried inventory is `GameState.pack: Vec<String>` — ordered carried
+item ids (#18); names/kind/flags are resolved from the `world.items` registry at
+snapshot time. Supported operations:
+
+- `take <item>` (#18) — carry a reachable world item.
+- `drop <item>` — the inverse of take: remove from the pack and place the item in
+  the current room/cell, where the #17 awareness resolver surfaces it again.
+- `inventory` / `pack` / `i` — list carried items, or an honest empty state.
+- `look <item>` — resolves a carried item from the pack as well as nearby world
+  contents (a carried item has no cell, so it resolves from inventory).
+
+Items (`Item`) gain optional `kind` (a coarse type placeholder, e.g. `"light"` /
+`"quest"`, defaulting to `"item"`) and `flags` (a small authored tag list, e.g.
+`["oath"]`). These are **authored content data, never invented by engine or
+client**; the pack snapshot (`PackItemSnapshot`) exposes id/name/kind/flags
+additively, and the client Pack tab renders that server data only. Inventory
+operations are total and non-corrupting — an unknown/uncarried/orphan target is
+refused with no state change.
+
+Deferred to later tickets (NOT v1, per Decision 013's long horizon): equipment
+slots, wear/remove, weight, stacking/quantities, containers, currency, item use,
+shops, crafting, rarity/tier, elemental aspects, and persistence.
+
+Rationale:
+
+- Gives `take` a durable home and a stable base for future equipment/shops/loot/
+  quest items without the testing debt of a premature full ROT model.
+- Reuses the #17 awareness resolver for drop/look (no new geometry) and stays
+  additive on the wire (Decisions 028/031/034).
+- `kind`/`flags` are the smallest forward-looking hook for future item taxonomy
+  and behavior, authored in TOML (Decision 022).
+
+Revisit when:
+
+- Equipment slots / wear-remove are designed (Decision 013).
+- Stacking, weight, containers, or currency become needed.
+- Item `kind` graduates from a placeholder string to a real taxonomy/enum.

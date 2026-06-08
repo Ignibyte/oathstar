@@ -3,12 +3,12 @@ pub mod command;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use awareness::RadiusConfig;
+use awareness::{AwarenessKind, RadiusConfig};
 use command::{parse, Command, Direction};
 use oathstar_protocol::{
     CommandRequest, CommandResponse, EventChannel, GameEvent, GameEventKind, GameSnapshot,
     MapRoomSnapshot, MapSnapshot, NearbySnapshot, OathSnapshot, OathStatus, OutputComponent,
-    PlayerSnapshot, RoomSnapshot,
+    PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -108,6 +108,11 @@ pub struct Entity {
     /// to visible.
     #[serde(default)]
     pub hidden: bool,
+    /// Authored conversation lines (ticket #19). `None` for an NPC with no
+    /// scripted dialogue (which falls back to a generic talk reply); when present,
+    /// `talk` returns these lines, selected by oath state for an oath-giver.
+    #[serde(default)]
+    pub dialogue: Option<EntityDialogue>,
 }
 
 /// A world item — leaf content data. Placement is by reference *from* a container
@@ -125,6 +130,15 @@ pub struct Item {
     /// Defaults to visible.
     #[serde(default)]
     pub hidden: bool,
+    /// A coarse kind/type placeholder (ticket #20), e.g. `"light"` or `"quest"`.
+    /// `None` falls back to the generic `"item"` in the pack snapshot. Authored
+    /// content data; the engine never invents it. No taxonomy semantics in v1.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Basic authored item flags (ticket #20), e.g. `["oath"]` — a small free-text
+    /// tag list. No equipment/weight/rarity/stacking semantics in v1.
+    #[serde(default)]
+    pub flags: Vec<String>,
 }
 
 /// A swearable oath defined by a module — leaf content data.
@@ -137,6 +151,43 @@ pub struct OathDefinition {
     pub id: String,
     pub title: String,
     pub description: String,
+    /// The entity id of the oath-giver who offers this oath (ticket #19). `None`
+    /// for an oath swearable without an offer; when set, it is validated to name a
+    /// real entity at construction and must have been offered before `swear`.
+    #[serde(default)]
+    pub issuer_id: Option<String>,
+    /// Free-text origin (e.g. a region or faction id) recorded for future
+    /// oath-giver UI and region/faction effects (ticket #19). Authored, optional.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// Authored conversation lines for a conversable NPC (ticket #19).
+///
+/// `greeting` is the default reply; the optional `oath` block carries the lines
+/// an oath-giver speaks, selected by the player's oath state. Dialogue stays
+/// command-based (no trees) per the first-slice direction in
+/// `docs/mechanics-and-systems.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntityDialogue {
+    /// Said when talked to and no oath-state line applies.
+    pub greeting: String,
+    /// Oath-flow lines, present when this NPC issues an oath.
+    #[serde(default)]
+    pub oath: Option<OathDialogue>,
+}
+
+/// The lines an oath-giver speaks across the oath's lifecycle (ticket #19),
+/// selected by the player's oath state when this NPC issues the designated oath.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OathDialogue {
+    /// Spoken while the oath is unsworn — introduces the problem and offers the
+    /// oath; talking records the offer so `swear` becomes permitted.
+    pub offer: String,
+    /// Spoken while the player's oath is sworn but not yet fulfilled.
+    pub sworn: String,
+    /// Spoken once the oath is fulfilled.
+    pub fulfilled: String,
 }
 
 /// Why an out-of-spec [`WorldDefinition`] was rejected at construction.
@@ -182,6 +233,8 @@ pub enum WorldValidationError {
     EntityItemMissing { entity_id: String, item_id: String },
     /// `oath_id` designates an oath that is not in the oath registry.
     OathMissing { oath_id: String },
+    /// An oath names an `issuer_id` that is not in the entity registry.
+    OathIssuerMissing { oath_id: String, issuer_id: String },
 }
 
 impl std::fmt::Display for WorldValidationError {
@@ -249,6 +302,9 @@ impl std::fmt::Display for WorldValidationError {
             }
             Self::OathMissing { oath_id } => {
                 write!(f, "designated oath '{oath_id}' does not exist")
+            }
+            Self::OathIssuerMissing { oath_id, issuer_id } => {
+                write!(f, "oath '{oath_id}' references missing issuer '{issuer_id}'")
             }
         }
     }
@@ -368,11 +424,37 @@ impl WorldDefinition {
             }
         }
 
+        self.validate_oaths()?;
+
+        Ok(())
+    }
+
+    /// Validate oath invariants: a designated `oath_id` must name a known oath,
+    /// and every oath's optional `issuer_id` must name a known entity (ticket #19,
+    /// Decision 030). Split out of [`Self::validate`] so each validator stays one
+    /// focused concern.
+    ///
+    /// # Errors
+    /// [`WorldValidationError::OathMissing`] for a dangling designated oath;
+    /// [`WorldValidationError::OathIssuerMissing`] for an oath whose `issuer_id`
+    /// is not a registered entity.
+    fn validate_oaths(&self) -> Result<(), WorldValidationError> {
         if let Some(oath_id) = &self.oath_id {
             if !self.oaths.contains_key(oath_id) {
                 return Err(WorldValidationError::OathMissing {
                     oath_id: oath_id.clone(),
                 });
+            }
+        }
+
+        for (oath_id, oath) in &self.oaths {
+            if let Some(issuer_id) = &oath.issuer_id {
+                if !self.entities.contains_key(issuer_id) {
+                    return Err(WorldValidationError::OathIssuerMissing {
+                        oath_id: oath_id.clone(),
+                        issuer_id: issuer_id.clone(),
+                    });
+                }
             }
         }
 
@@ -398,6 +480,18 @@ pub struct GameState {
     /// The player's oath once sworn; `None` until the `swear` command succeeds.
     #[serde(default)]
     pub oath: Option<OathProgress>,
+    /// Ids of items the player is carrying (ticket #18). Minimal carried-item
+    /// state: pickup-ordered item ids, resolved to names from `world.items` at
+    /// snapshot time. Empty until a `take` succeeds; `#[serde(default)]` keeps an
+    /// older saved state (without a `pack`) loadable.
+    #[serde(default)]
+    pub pack: Vec<String>,
+    /// The oath the player has been offered but not yet sworn (ticket #19). Set
+    /// when the player talks to the designated oath's issuer; `swear` requires it
+    /// to match the designated oath before an issuer-offered oath can be sworn.
+    /// `#[serde(default)]` keeps older saved state (without it) loadable.
+    #[serde(default)]
+    pub offered_oath_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -450,6 +544,8 @@ impl Engine {
                 max_focus: 5,
             },
             oath: None,
+            pack: Vec::new(),
+            offered_oath_id: None,
         };
 
         Ok(Self {
@@ -487,6 +583,7 @@ impl Engine {
                 title: progress.title.clone(),
                 status: progress.status,
             }),
+            pack: self.pack_snapshot(),
         }
     }
 
@@ -535,7 +632,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down, swear, confront.",
+                    "Try: look, north, south, east, west, up, down, swear, confront, talk, take, drop, inventory.",
                 ));
             }
             Command::Look { target: None } => {
@@ -558,6 +655,24 @@ impl Engine {
                 let (accepted, confront_events) = self.confront();
                 events.extend(confront_events);
                 return self.response(accepted, events);
+            }
+            Command::Talk { target } => {
+                let (accepted, talk_events) = self.talk_at(&target);
+                events.extend(talk_events);
+                return self.response(accepted, events);
+            }
+            Command::Take { target } => {
+                let (accepted, take_events) = self.take_at(&target);
+                events.extend(take_events);
+                return self.response(accepted, events);
+            }
+            Command::Drop { target } => {
+                let (accepted, drop_events) = self.drop_at(&target);
+                events.extend(drop_events);
+                return self.response(accepted, events);
+            }
+            Command::Inventory => {
+                events.extend(self.list_pack());
             }
             Command::Unknown { input } => {
                 events.push(self.log(
@@ -626,11 +741,276 @@ impl Engine {
                 "You can make out {} nearby, but it is too far off to examine closely.",
                 found.name
             ),
-            None => format!("You see nothing like '{target}' nearby."),
+            // Not nearby — fall back to the carried pack (ticket #20): a carried
+            // item has no cell, so it resolves from inventory (REQ-004).
+            None => self.find_in_pack(target).map_or_else(
+                || format!("You see nothing like '{target}' nearby."),
+                |item| {
+                    format!(
+                        "You examine the {} you are carrying. {}",
+                        item.name, item.description
+                    )
+                },
+            ),
         };
         vec![self.log(
             EventChannel::Narrative,
             OutputComponent::NarrativeMessage,
+            text,
+        )]
+    }
+
+    /// Resolve and answer a `talk <target>` against nearby things (ticket #18).
+    ///
+    /// Reuses the interaction-gated proximity resolver
+    /// ([`awareness::resolve_target`]) — no duplicated geometry. Returns
+    /// `(accepted, events)` like `swear`/`confront`: addressing a reachable actor
+    /// is accepted and emits a narrative response *without moving the player*
+    /// (REQ-003); a non-actor, an actor that is visible but out of reach
+    /// (REQ-004), or no match at all is refused with a clear line and no state
+    /// change. A reachable actor's reply is its authored [`EntityDialogue`]
+    /// (ticket #19) selected by oath state — talking to an unsworn oath's issuer
+    /// records the offer (see [`Engine::npc_dialogue_line`]); an NPC without
+    /// dialogue keeps the generic reply. Kind is checked before reach, so the
+    /// too-far line is reserved for actual actors.
+    fn talk_at(&mut self, target: &str) -> (bool, Vec<GameEvent>) {
+        let origin = self.current_room().clone();
+        let radii = RadiusConfig::default();
+        let (accepted, text) = match awareness::resolve_target(&self.world, &origin, &radii, target)
+        {
+            None => (
+                false,
+                format!("There is no one like '{target}' here to talk to."),
+            ),
+            Some(found) if found.kind != AwarenessKind::Actor => (
+                false,
+                format!("You cannot hold a conversation with {}.", found.name),
+            ),
+            Some(found) if !found.proximity.is_interactable() => {
+                (false, format!("{} is too far away to talk to.", found.name))
+            }
+            Some(found) => (true, self.npc_dialogue_line(&found.id)),
+        };
+        (
+            accepted,
+            vec![self.log(
+                EventChannel::Narrative,
+                OutputComponent::NarrativeMessage,
+                text,
+            )],
+        )
+    }
+
+    /// Pick the authored line a conversable NPC speaks (ticket #19).
+    ///
+    /// An NPC with no [`EntityDialogue`] keeps the ticket #18 generic reply
+    /// (`conversable` → ready to talk; otherwise nothing to say). When the NPC
+    /// issues the module's designated oath and carries oath lines, the line is
+    /// chosen by the player's oath state — and an unsworn oath is *offered*
+    /// (recording `offered_oath_id` so `swear` is permitted, REQ-002/003).
+    /// Otherwise the NPC's `greeting` is used (REQ-001/005).
+    fn npc_dialogue_line(&mut self, entity_id: &str) -> String {
+        let entity = self
+            .world
+            .entities
+            .get(entity_id)
+            .expect("talk resolved this entity from the world");
+
+        let Some(dialogue) = entity.dialogue.as_ref() else {
+            return if entity.roles.iter().any(|role| role == "conversable") {
+                format!("{} turns to face you, ready to talk.", entity.name)
+            } else {
+                format!("{} has nothing to say to you.", entity.name)
+            };
+        };
+
+        // The designated oath this NPC issues, if any (its `issuer_id` names it).
+        let issued_oath_id = self
+            .world
+            .oath_id
+            .as_deref()
+            .filter(|oath_id| {
+                self.world
+                    .oaths
+                    .get(*oath_id)
+                    .and_then(|oath| oath.issuer_id.as_deref())
+                    == Some(entity_id)
+            })
+            .map(str::to_owned);
+
+        match (dialogue.oath.as_ref(), issued_oath_id) {
+            (Some(lines), Some(oath_id)) => {
+                match self.state.oath.as_ref().map(|progress| progress.status) {
+                    Some(OathStatus::Fulfilled) => lines.fulfilled.clone(),
+                    Some(OathStatus::Sworn) => lines.sworn.clone(),
+                    None => {
+                        // Offer (or re-offer) the oath: record it so `swear` is now
+                        // permitted. Clone the line before mutating so the `world`
+                        // and `state` borrows stay disjoint.
+                        let line = lines.offer.clone();
+                        self.state.offered_oath_id = Some(oath_id);
+                        line
+                    }
+                }
+            }
+            _ => dialogue.greeting.clone(),
+        }
+    }
+
+    /// Resolve and perform a `take <target>` against nearby things (ticket #18).
+    ///
+    /// Reuses the interaction-gated proximity resolver. Returns `(accepted,
+    /// events)`: taking a reachable world item moves it into the player's pack and
+    /// removes it from its placing room — so [`awareness::perceive`] then drops it
+    /// from the snapshot's `contents` (REQ-005). A non-item, an item that is
+    /// visible but out of reach, or a hidden/unknown target is refused with a clear
+    /// line and no state change (REQ-006). Kind is checked before reach so the
+    /// too-far line is reserved for actual items.
+    fn take_at(&mut self, target: &str) -> (bool, Vec<GameEvent>) {
+        let origin = self.current_room().clone();
+        let radii = RadiusConfig::default();
+        let (accepted, channel, component, text) =
+            match awareness::resolve_target(&self.world, &origin, &radii, target) {
+                None => (
+                    false,
+                    EventChannel::Narrative,
+                    OutputComponent::NarrativeMessage,
+                    format!("You see nothing like '{target}' here to take."),
+                ),
+                Some(found) if found.kind != AwarenessKind::Item => (
+                    false,
+                    EventChannel::Narrative,
+                    OutputComponent::NarrativeMessage,
+                    format!("You cannot carry {}.", found.name),
+                ),
+                Some(found) if !found.proximity.is_interactable() => (
+                    false,
+                    EventChannel::Narrative,
+                    OutputComponent::NarrativeMessage,
+                    format!("{} is too far away to reach.", found.name),
+                ),
+                Some(found) => {
+                    // Reachable world item: drop it from the exact placing room
+                    // (defensive `get_mut` — `room_id` came from the resolver, so
+                    // the room exists) and carry it. perceive() then excludes it.
+                    if let Some(room) = self.world.rooms.get_mut(&found.room_id) {
+                        room.items.retain(|item_id| item_id != &found.id);
+                    }
+                    let name = found.name.clone();
+                    self.state.pack.push(found.id);
+                    (
+                        true,
+                        EventChannel::Inventory,
+                        OutputComponent::ItemCard,
+                        format!("You take the {name}."),
+                    )
+                }
+            };
+        (accepted, vec![self.log(channel, component, text)])
+    }
+
+    /// Find a carried item whose name or an alias matches `query` (ticket #20).
+    ///
+    /// Shared by `drop` and the carried-item branch of `look`. Orphan pack ids
+    /// (no `world.items` entry) are skipped by `filter_map`, so there is no
+    /// unreachable lookup branch. Reuses the awareness name/alias matcher.
+    fn find_in_pack(&self, query: &str) -> Option<&Item> {
+        self.state
+            .pack
+            .iter()
+            .filter_map(|item_id| self.world.items.get(item_id))
+            .find(|item| awareness::name_or_alias_matches(&item.name, &item.aliases, query))
+    }
+
+    /// Return every carried item matching `query`, with its pack index.
+    ///
+    /// `drop` needs the index so it can remove exactly one carried item. Multiple
+    /// matches are treated as ambiguous instead of silently dropping every copy.
+    fn matching_pack_items(&self, query: &str) -> Vec<(usize, String, String)> {
+        self.state
+            .pack
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item_id)| {
+                self.world.items.get(item_id).and_then(|item| {
+                    awareness::name_or_alias_matches(&item.name, &item.aliases, query)
+                        .then(|| (index, item.id.clone(), item.name.clone()))
+                })
+            })
+            .collect()
+    }
+
+    /// Resolve and perform a `drop <target>` against the carried pack (ticket #20).
+    ///
+    /// The inverse of `take_at`: a carried item is removed from the pack and
+    /// placed back into the current room's `items`, so `awareness::perceive` then
+    /// surfaces it at the player's cell (REQ-005). A target the player is not
+    /// carrying, or an ambiguous duplicate carried match, is refused with a clear
+    /// line and no state change (REQ-006). The id/name are cloned out before the
+    /// state mutation so the `world`/`state` borrows stay disjoint.
+    fn drop_at(&mut self, target: &str) -> (bool, Vec<GameEvent>) {
+        let matches = self.matching_pack_items(target);
+        let (index, item_id, name) = match matches.as_slice() {
+            [(index, item_id, name)] => (*index, item_id.clone(), name.clone()),
+            [] => {
+                return (
+                    false,
+                    vec![self.log(
+                        EventChannel::Narrative,
+                        OutputComponent::NarrativeMessage,
+                        format!("You aren't carrying anything like '{target}'."),
+                    )],
+                );
+            }
+            _ => {
+                return (
+                    false,
+                    vec![self.log(
+                        EventChannel::Narrative,
+                        OutputComponent::NarrativeMessage,
+                        format!("More than one carried item matches '{target}'."),
+                    )],
+                );
+            }
+        };
+
+        self.state.pack.remove(index);
+        let room_id = self.state.current_room_id.clone();
+        if let Some(room) = self.world.rooms.get_mut(&room_id) {
+            room.items.push(item_id);
+        }
+        (
+            true,
+            vec![self.log(
+                EventChannel::Inventory,
+                OutputComponent::ItemCard,
+                format!("You drop the {name}."),
+            )],
+        )
+    }
+
+    /// List the player's carried items, or an honest empty state (ticket #20,
+    /// REQ-003). Always accepted — a readout of `state.pack`.
+    fn list_pack(&mut self) -> Vec<GameEvent> {
+        let names: Vec<String> = self
+            .state
+            .pack
+            .iter()
+            .map(|item_id| {
+                self.world
+                    .items
+                    .get(item_id)
+                    .map_or_else(|| item_id.clone(), |item| item.name.clone())
+            })
+            .collect();
+        let text = if names.is_empty() {
+            "You are carrying nothing.".to_string()
+        } else {
+            format!("You are carrying: {}.", names.join(", "))
+        };
+        vec![self.log(
+            EventChannel::Inventory,
+            OutputComponent::SystemMessage,
             text,
         )]
     }
@@ -714,6 +1094,32 @@ impl Engine {
             .expect("designated oath is a try_new-validated invariant");
         let title = oath.title.clone();
         let description = oath.description.clone();
+        let issuer_id = oath.issuer_id.clone();
+
+        // Offer gate (REQ-003): an issuer-offered oath can only be sworn after the
+        // player has been offered it by talking to the issuer. An issuer-less oath
+        // stays globally swearable (the pre-#19 behavior).
+        if let Some(issuer_id) = issuer_id {
+            if self.state.offered_oath_id.as_deref() != Some(oath_id.as_str()) {
+                let issuer_name = self
+                    .world
+                    .entities
+                    .get(&issuer_id)
+                    .expect("oath issuer is a try_new-validated invariant")
+                    .name
+                    .clone();
+                return (
+                    false,
+                    vec![self.log(
+                        EventChannel::System,
+                        OutputComponent::SystemMessage,
+                        format!(
+                            "You cannot swear that oath until it has been offered. Seek out {issuer_name} to be offered it."
+                        ),
+                    )],
+                );
+            }
+        }
 
         self.state.oath = Some(OathProgress {
             oath_id: oath_id.clone(),
@@ -870,6 +1276,32 @@ impl Engine {
             current_room_id: self.state.current_room_id.clone(),
             rooms,
         }
+    }
+
+    /// The player's carried items as additive snapshot data (ticket #18, enriched
+    /// in #20 with the authored `kind` placeholder + `flags`).
+    ///
+    /// Names/kind/flags are resolved from the item registry, which survives `take`
+    /// (only a room's *placement* is removed, never the `world.items` entry), so
+    /// the lookup resolves for every carried id; the id-name / `"item"`-kind /
+    /// empty-flags fallbacks keep this off the panic path (§14) for an orphan id.
+    /// `kind`/`flags` are authored item data — never invented here (REQ-002/007).
+    fn pack_snapshot(&self) -> Vec<PackItemSnapshot> {
+        self.state
+            .pack
+            .iter()
+            .map(|item_id| {
+                let item = self.world.items.get(item_id);
+                PackItemSnapshot {
+                    id: item_id.clone(),
+                    name: item.map_or_else(|| item_id.clone(), |item| item.name.clone()),
+                    kind: item
+                        .and_then(|item| item.kind.clone())
+                        .unwrap_or_else(|| "item".to_string()),
+                    flags: item.map(|item| item.flags.clone()).unwrap_or_default(),
+                }
+            })
+            .collect()
     }
 
     fn log(
@@ -1211,6 +1643,7 @@ mod tests {
             roles: roles.iter().copied().map(String::from).collect(),
             inventory: inventory.iter().copied().map(String::from).collect(),
             hidden: false,
+            dialogue: None,
         }
     }
 
@@ -1221,6 +1654,8 @@ mod tests {
             description: "d".to_string(),
             aliases: Vec::new(),
             hidden: false,
+            kind: None,
+            flags: Vec::new(),
         }
     }
 
@@ -1687,6 +2122,8 @@ mod tests {
                 id: "o1".to_string(),
                 title: "Test Oath".to_string(),
                 description: "Do the thing.".to_string(),
+                issuer_id: None,
+                source: None,
             },
         );
 
@@ -2163,5 +2600,784 @@ mod tests {
         rooms.insert("solo".to_string(), room_with("solo", true, BTreeMap::new()));
         let engine = Engine::try_new(world_with("solo", rooms)).expect("valid solo world");
         assert!(engine.snapshot().room.contents.is_empty());
+    }
+
+    // ---- ticket #18: talk / take commands ----
+
+    // A world for the nearby actions. Origin cell `org` (0,0,0) holds the
+    // conversable `mara`, the non-conversable actor `warden`, two ground items
+    // `coin`+`gem`, and a hidden `buried`. The adjacent cell `near` (1,0,0; d1,
+    // Interactable) holds `relic`. The far cell `far` (2,0,0; d2, Visible-only)
+    // holds `idol` and the actor `scout`.
+    fn interaction_engine() -> Engine {
+        let mut org = room_with("org", true, BTreeMap::new());
+        org.entities = vec!["mara".to_string(), "warden".to_string()];
+        org.items = vec!["coin".to_string(), "gem".to_string(), "buried".to_string()];
+
+        let mut near = room_with("near", true, BTreeMap::new());
+        near.x = 1;
+        near.items = vec!["relic".to_string()];
+
+        let mut far = room_with("far", true, BTreeMap::new());
+        far.x = 2;
+        far.entities = vec!["scout".to_string()];
+        far.items = vec!["idol".to_string()];
+
+        let mut rooms = BTreeMap::new();
+        rooms.insert("org".to_string(), org);
+        rooms.insert("near".to_string(), near);
+        rooms.insert("far".to_string(), far);
+        let mut world = world_with("org", rooms);
+
+        world.entities.insert(
+            "mara".to_string(),
+            entity("mara", EntityKind::Actor, &["conversable"], &[]),
+        );
+        world.entities.insert(
+            "warden".to_string(),
+            entity("warden", EntityKind::Actor, &[], &[]),
+        );
+        world.entities.insert(
+            "scout".to_string(),
+            entity("scout", EntityKind::Actor, &[], &[]),
+        );
+        for id in ["coin", "gem", "relic", "idol"] {
+            world.items.insert(id.to_string(), item(id));
+        }
+        let mut buried = item("buried");
+        buried.hidden = true;
+        world.items.insert("buried".to_string(), buried);
+
+        Engine::try_new(world).expect("valid interaction world")
+    }
+
+    // The first LogMessage text of any component (take success uses ItemCard, not
+    // NarrativeMessage, so `narrative_text` would not see it).
+    fn log_text(response: &CommandResponse) -> String {
+        response
+            .events
+            .iter()
+            .find_map(|event| match &event.kind {
+                GameEventKind::LogMessage { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("a log message in the response")
+    }
+
+    // REQ-003: talking to a reachable conversable actor responds and does NOT move.
+    #[test]
+    fn talk_to_conversable_actor_responds_without_moving() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("talk mara"));
+        assert!(
+            response.accepted,
+            "talking to a reachable actor is accepted"
+        );
+        let text = log_text(&response);
+        assert!(
+            text.contains("mara") && text.contains("ready to talk"),
+            "conversable greeting: {text}"
+        );
+        assert_eq!(
+            response.snapshot.current_room_id, "org",
+            "talk does not move the player"
+        );
+    }
+
+    // REQ-003: a reachable NON-conversable actor still gets a response (accepted),
+    // with the no-conversation flavor — kills the `conversable` role branch.
+    #[test]
+    fn talk_to_non_conversable_actor_still_responds() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("talk warden"));
+        assert!(
+            response.accepted,
+            "a reachable actor is accepted regardless of role"
+        );
+        let text = log_text(&response);
+        assert!(
+            text.contains("warden") && text.contains("nothing to say"),
+            "non-conversable flavor: {text}"
+        );
+    }
+
+    // REQ-004: a visible-but-out-of-reach actor is too far to talk to; refused, no move.
+    #[test]
+    fn talk_to_too_far_actor_is_refused() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("talk scout"));
+        assert!(!response.accepted, "an out-of-reach actor is refused");
+        assert!(
+            log_text(&response).contains("too far away to talk"),
+            "too-far line"
+        );
+        assert_eq!(response.snapshot.current_room_id, "org");
+    }
+
+    // REQ-003 (kind gate): you cannot talk to a non-actor (an item); refused.
+    #[test]
+    fn talk_to_non_actor_is_refused() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("talk coin"));
+        assert!(!response.accepted, "talking to an item is refused");
+        assert!(
+            log_text(&response).contains("cannot hold a conversation"),
+            "non-actor line"
+        );
+    }
+
+    // REQ-004 sibling: an unknown talk target names the query back; refused.
+    #[test]
+    fn talk_to_unknown_target_is_refused() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("talk dragon"));
+        assert!(!response.accepted);
+        assert!(
+            log_text(&response).contains("no one like 'dragon'"),
+            "unknown line"
+        );
+    }
+
+    // REQ-005: taking a reachable world item carries it (Inventory/ItemCard event),
+    // removes it from the room so it leaves `contents`, leaves OTHER items, no move.
+    #[test]
+    fn take_reachable_item_carries_and_removes_from_contents() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("take coin"));
+        assert!(response.accepted, "taking a reachable item is accepted");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (
+                    EventChannel::Inventory,
+                    GameEventKind::LogMessage {
+                        component: OutputComponent::ItemCard,
+                        text,
+                    }
+                ) if text.contains("You take the coin")
+            )),
+            "emits an Inventory/ItemCard take line"
+        );
+        let pack_ids: Vec<&str> = response
+            .snapshot
+            .pack
+            .iter()
+            .map(|carried| carried.id.as_str())
+            .collect();
+        assert_eq!(pack_ids, vec!["coin"], "coin is now carried");
+        let content_ids: Vec<&str> = response
+            .snapshot
+            .room
+            .contents
+            .iter()
+            .map(|thing| thing.id.as_str())
+            .collect();
+        assert!(!content_ids.contains(&"coin"), "coin left nearby contents");
+        assert!(content_ids.contains(&"gem"), "the other item remains");
+        assert_eq!(
+            response.snapshot.current_room_id, "org",
+            "take does not move the player"
+        );
+    }
+
+    // REQ-005 (room_id): an item one cell away (adjacent interactable) is removed
+    // from THAT room — proving take uses the resolver's room_id, not the origin.
+    #[test]
+    fn take_item_from_adjacent_cell_removes_it_there() {
+        let mut engine = interaction_engine();
+        assert!(
+            engine
+                .snapshot()
+                .room
+                .contents
+                .iter()
+                .any(|thing| thing.id == "relic"),
+            "relic is in nearby contents before take"
+        );
+        let response = engine.handle_command(cmd("take relic"));
+        assert!(response.accepted);
+        assert!(
+            response
+                .snapshot
+                .pack
+                .iter()
+                .any(|carried| carried.id == "relic"),
+            "relic is carried"
+        );
+        assert!(
+            !response
+                .snapshot
+                .room
+                .contents
+                .iter()
+                .any(|thing| thing.id == "relic"),
+            "relic removed from the adjacent room's contents"
+        );
+    }
+
+    // REQ-006: a visible-but-out-of-reach item is too far; refused, state preserved.
+    #[test]
+    fn take_too_far_item_is_refused_and_preserves_state() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("take idol"));
+        assert!(!response.accepted, "an out-of-reach item is refused");
+        assert!(
+            log_text(&response).contains("too far away to reach"),
+            "too-far line"
+        );
+        assert!(response.snapshot.pack.is_empty(), "nothing carried");
+        assert!(
+            response
+                .snapshot
+                .room
+                .contents
+                .iter()
+                .any(|thing| thing.id == "idol"),
+            "idol still present (state preserved)"
+        );
+    }
+
+    // REQ-006: you cannot take a non-item (an actor); refused, state preserved.
+    #[test]
+    fn take_non_item_is_refused() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("take warden"));
+        assert!(!response.accepted, "taking an actor is refused");
+        assert!(
+            log_text(&response).contains("cannot carry"),
+            "non-item line"
+        );
+        assert!(response.snapshot.pack.is_empty());
+    }
+
+    // REQ-006: unknown and hidden take targets both resolve to nothing; refused.
+    #[test]
+    fn take_unknown_or_hidden_target_is_refused() {
+        let mut engine = interaction_engine();
+        let unknown = engine.handle_command(cmd("take dragon"));
+        assert!(!unknown.accepted);
+        assert!(log_text(&unknown).contains("nothing like 'dragon'"));
+        // `buried` is hidden → excluded by perceive → resolves to nothing.
+        let hidden = engine.handle_command(cmd("take buried"));
+        assert!(!hidden.accepted, "a hidden item cannot be taken");
+        assert!(hidden.snapshot.pack.is_empty());
+    }
+
+    // REQ-005: carried items keep pickup order (Vec push order).
+    #[test]
+    fn pack_preserves_pickup_order() {
+        let mut engine = interaction_engine();
+        engine.handle_command(cmd("take gem"));
+        let response = engine.handle_command(cmd("take coin"));
+        let ids: Vec<&str> = response
+            .snapshot
+            .pack
+            .iter()
+            .map(|carried| carried.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["gem", "coin"], "pack keeps pickup order");
+    }
+
+    // REQ-005/006: a taken item is gone from the world and cannot be taken twice.
+    #[test]
+    fn taking_the_same_item_twice_is_refused() {
+        let mut engine = interaction_engine();
+        assert!(engine.handle_command(cmd("take coin")).accepted);
+        let again = engine.handle_command(cmd("take coin"));
+        assert!(!again.accepted, "the item is gone after the first take");
+        assert_eq!(again.snapshot.pack.len(), 1, "no double-carry");
+    }
+
+    // REQ-007: the snapshot after a take exposes the item with its registry NAME
+    // resolved (not the id).
+    #[test]
+    fn snapshot_pack_resolves_item_name_after_take() {
+        let mut engine = interaction_engine();
+        // Distinct name + matching alias so `take coin` still resolves while the
+        // carried NAME differs from the id — proving name-from-registry resolution.
+        {
+            let coin = engine.world.items.get_mut("coin").expect("coin");
+            coin.name = "Copper Coin".to_string();
+            coin.aliases = vec!["coin".to_string()];
+        }
+        let response = engine.handle_command(cmd("take coin"));
+        let carried = response.snapshot.pack.first().expect("one carried item");
+        assert_eq!(carried.id, "coin");
+        assert_eq!(
+            carried.name, "Copper Coin",
+            "name is resolved from world.items"
+        );
+    }
+
+    // REQ-007 (defensive, §14): pack_snapshot falls back to the id when a carried id
+    // is absent from the item registry — the no-panic path.
+    #[test]
+    fn snapshot_pack_falls_back_to_id_when_item_missing() {
+        let mut engine = interaction_engine();
+        engine.state.pack.push("ghost".to_string());
+        let pack = engine.snapshot().pack;
+        let ghost = pack
+            .iter()
+            .find(|carried| carried.id == "ghost")
+            .expect("ghost id present");
+        assert_eq!(
+            ghost.name, "ghost",
+            "a missing registry entry falls back to the id"
+        );
+        assert_eq!(
+            ghost.kind, "item",
+            "a missing registry entry defaults kind to the placeholder"
+        );
+        assert!(
+            ghost.flags.is_empty(),
+            "a missing registry entry carries no flags"
+        );
+    }
+
+    // REQ-002/004: help lists the new talk and take verbs.
+    #[test]
+    fn help_lists_talk_and_take() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("help"));
+        let text = log_text(&response);
+        assert!(
+            text.contains("talk") && text.contains("take"),
+            "help mentions talk and take: {text}"
+        );
+    }
+
+    // ---- ticket #19: NPC dialogue + oath offering ----
+
+    // A world for the offered-oath flow. The start room `town` holds: the oath
+    // ISSUER `mara` (conversable, full oath dialogue); `bram`, a conversable NPC
+    // carrying an oath block that does NOT issue the designated oath (must fall
+    // back to its greeting — guards the issuer filter); `clerk`, conversable with
+    // no dialogue (generic line); `statue`, a non-conversable actor with no
+    // dialogue (generic line); and the boss `warden`. `hollow_bell` is issued by
+    // `mara`. All sit in the start cell, so each is interactable.
+    fn dialogue_world() -> WorldDefinition {
+        let mut town = room_with("town", true, BTreeMap::new());
+        town.entities = vec![
+            "mara".to_string(),
+            "bram".to_string(),
+            "clerk".to_string(),
+            "statue".to_string(),
+            "warden".to_string(),
+        ];
+
+        let mut rooms = BTreeMap::new();
+        rooms.insert("town".to_string(), town);
+        let mut world = world_with("town", rooms);
+
+        let mut mara = entity("mara", EntityKind::Actor, &["conversable"], &[]);
+        mara.name = "Mara".to_string();
+        mara.dialogue = Some(EntityDialogue {
+            greeting: "Mara nods at you.".to_string(),
+            oath: Some(OathDialogue {
+                offer: "Mara: the bell is hollow — will you swear to mend it?".to_string(),
+                sworn: "Mara: you have sworn; go and mend the bell.".to_string(),
+                fulfilled: "Mara: the bell rings again. Thank you.".to_string(),
+            }),
+        });
+        world.entities.insert("mara".to_string(), mara);
+
+        let mut bram = entity("bram", EntityKind::Actor, &["conversable"], &[]);
+        bram.dialogue = Some(EntityDialogue {
+            greeting: "Bram shrugs.".to_string(),
+            oath: Some(OathDialogue {
+                offer: "BRAM-OFFER-SHOULD-NOT-SHOW".to_string(),
+                sworn: "BRAM-SWORN-SHOULD-NOT-SHOW".to_string(),
+                fulfilled: "BRAM-FULFILLED-SHOULD-NOT-SHOW".to_string(),
+            }),
+        });
+        world.entities.insert("bram".to_string(), bram);
+
+        world.entities.insert(
+            "clerk".to_string(),
+            entity("clerk", EntityKind::Actor, &["conversable"], &[]),
+        );
+        world.entities.insert(
+            "statue".to_string(),
+            entity("statue", EntityKind::Actor, &[], &[]),
+        );
+        world.entities.insert(
+            "warden".to_string(),
+            entity("warden", EntityKind::Actor, &["boss"], &[]),
+        );
+
+        let mut oaths = BTreeMap::new();
+        oaths.insert(
+            "hollow_bell".to_string(),
+            OathDefinition {
+                id: "hollow_bell".to_string(),
+                title: "The Hollow Bell".to_string(),
+                description: "Mend the bell.".to_string(),
+                issuer_id: Some("mara".to_string()),
+                source: Some("hollowmere".to_string()),
+            },
+        );
+        world.oaths = oaths;
+        world.oath_id = Some("hollow_bell".to_string());
+
+        world
+    }
+
+    fn dialogue_engine() -> Engine {
+        Engine::try_new(dialogue_world()).expect("valid dialogue world")
+    }
+
+    // T1 (REQ-001): a dialogue NPC that does NOT issue the designated oath returns
+    // its authored greeting, never oath lines — guards the issuer filter.
+    #[test]
+    fn talk_dialogue_npc_that_is_not_issuer_returns_greeting() {
+        let mut engine = dialogue_engine();
+        let text = narrative_text(&engine.handle_command(cmd("talk bram")));
+        assert!(text.contains("Bram shrugs."), "authored greeting: {text}");
+        assert!(
+            !text.contains("SHOULD-NOT-SHOW"),
+            "a non-issuer must never speak oath lines: {text}"
+        );
+    }
+
+    // T2a (REQ-001): a conversable NPC with no dialogue keeps the #18 generic line.
+    #[test]
+    fn talk_conversable_npc_without_dialogue_uses_generic_line() {
+        let mut engine = dialogue_engine();
+        let text = narrative_text(&engine.handle_command(cmd("talk clerk")));
+        assert!(
+            text.contains("ready to talk"),
+            "generic conversable line: {text}"
+        );
+    }
+
+    // T2b (REQ-001): a non-conversable actor with no dialogue keeps the generic
+    // "nothing to say" line.
+    #[test]
+    fn talk_non_conversable_npc_without_dialogue_has_nothing_to_say() {
+        let mut engine = dialogue_engine();
+        let text = narrative_text(&engine.handle_command(cmd("talk statue")));
+        assert!(
+            text.contains("nothing to say"),
+            "generic non-conversable line: {text}"
+        );
+    }
+
+    // T3 (REQ-002): talking to the issuer while unsworn returns the offer line and
+    // records the offer so swear becomes permitted.
+    #[test]
+    fn talk_issuer_offers_oath_and_records_offer() {
+        let mut engine = dialogue_engine();
+        let response = engine.handle_command(cmd("talk mara"));
+        assert!(
+            response.accepted,
+            "talking to a reachable actor is accepted"
+        );
+        let text = narrative_text(&response);
+        assert!(
+            text.contains("swear to mend it"),
+            "offer introduces the oath: {text}"
+        );
+        assert_eq!(
+            engine.state.offered_oath_id.as_deref(),
+            Some("hollow_bell"),
+            "talking to the issuer records the offer"
+        );
+    }
+
+    // T4 (REQ-003): swearing an issuer-offered oath before the offer is refused and
+    // names the issuer; no oath recorded, nothing offered.
+    #[test]
+    fn swear_before_offer_is_refused_and_guides_to_issuer() {
+        let mut engine = dialogue_engine();
+        let response = engine.handle_command(cmd("swear"));
+        assert!(
+            !response.accepted,
+            "an unoffered issuer-oath cannot be sworn"
+        );
+        let text = log_text(&response);
+        assert!(
+            text.contains("offered") && text.contains("Mara"),
+            "refusal guides the player to the issuer: {text}"
+        );
+        assert!(response.snapshot.oath.is_none(), "no oath recorded");
+        assert_eq!(engine.state.offered_oath_id, None, "nothing offered yet");
+    }
+
+    // T5 (REQ-003 backward-compat): an issuer-less oath is globally swearable with
+    // no offer (the pre-#19 behavior).
+    #[test]
+    fn swear_oath_without_issuer_needs_no_offer() {
+        let mut engine = Engine::try_new(oath_world()).expect("valid issuer-less oath world");
+        assert!(
+            engine.handle_command(cmd("swear")).accepted,
+            "an issuer-less oath swears without an offer"
+        );
+    }
+
+    // T6 (REQ-004): after the offer, swear binds the oath and emits the UNCHANGED
+    // OathSworn shape.
+    #[test]
+    fn swear_after_offer_binds_and_emits_oath_sworn() {
+        let mut engine = dialogue_engine();
+        assert!(engine.handle_command(cmd("talk mara")).accepted);
+        let response = engine.handle_command(cmd("swear"));
+        assert!(response.accepted, "swear after the offer is accepted");
+        let oath = response.snapshot.oath.expect("oath recorded in snapshot");
+        assert_eq!(oath.oath_id, "hollow_bell");
+        assert_eq!(oath.status, OathStatus::Sworn);
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (EventChannel::Oath, GameEventKind::OathSworn { oath_id, title })
+                    if oath_id.as_str() == "hollow_bell" && title.as_str() == "The Hollow Bell"
+            )),
+            "emits the unchanged OathSworn{{oath_id,title}} shape"
+        );
+    }
+
+    // T7 (REQ-005): once sworn, the issuer's dialogue reflects the sworn state.
+    #[test]
+    fn dialogue_reflects_sworn_state() {
+        let mut engine = dialogue_engine();
+        assert!(engine.handle_command(cmd("talk mara")).accepted);
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        let text = narrative_text(&engine.handle_command(cmd("talk mara")));
+        assert!(text.contains("you have sworn"), "sworn-state line: {text}");
+    }
+
+    // T8 (REQ-005): once fulfilled, the issuer's dialogue reflects the fulfilled
+    // state.
+    #[test]
+    fn dialogue_reflects_fulfilled_state() {
+        let mut engine = dialogue_engine();
+        assert!(engine.handle_command(cmd("talk mara")).accepted);
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(
+            engine.handle_command(cmd("confront")).accepted,
+            "the boss is present and the oath is sworn"
+        );
+        let text = narrative_text(&engine.handle_command(cmd("talk mara")));
+        assert!(text.contains("rings again"), "fulfilled-state line: {text}");
+    }
+
+    // T9 (REQ-006): an oath whose issuer is not a known entity is rejected at the
+    // construction boundary.
+    #[test]
+    fn validate_rejects_oath_with_unknown_issuer() {
+        let mut world = dialogue_world();
+        world
+            .oaths
+            .get_mut("hollow_bell")
+            .expect("oath present")
+            .issuer_id = Some("ghost".to_string());
+        let err = world
+            .validate()
+            .expect_err("an unknown issuer must be rejected");
+        assert!(
+            matches!(
+                &err,
+                WorldValidationError::OathIssuerMissing { oath_id, issuer_id }
+                    if oath_id.as_str() == "hollow_bell" && issuer_id.as_str() == "ghost"
+            ),
+            "unexpected error: {err}"
+        );
+        assert!(
+            Engine::try_new(world).is_err(),
+            "try_new rejects a world with a dangling oath issuer"
+        );
+    }
+
+    // ---- ticket #20: inventory v1 (list / look-carried / drop / enriched pack) ----
+
+    // T1 (REQ-001): a taken item's id is stored in carried game state.
+    #[test]
+    fn take_stores_item_id_in_pack() {
+        let mut engine = interaction_engine();
+        assert!(engine.handle_command(cmd("take coin")).accepted);
+        assert!(
+            engine.state.pack.iter().any(|id| id == "coin"),
+            "the carried id is stored in state"
+        );
+    }
+
+    // T3a (REQ-002): an item with no authored kind/flags surfaces the placeholder
+    // kind and empty flags in the snapshot.
+    #[test]
+    fn pack_snapshot_defaults_kind_and_empty_flags() {
+        let mut engine = interaction_engine();
+        let response = engine.handle_command(cmd("take coin"));
+        let carried = response
+            .snapshot
+            .pack
+            .iter()
+            .find(|item| item.id == "coin")
+            .expect("coin carried");
+        assert_eq!(carried.kind, "item", "kind defaults to the placeholder");
+        assert!(carried.flags.is_empty(), "no authored flags");
+    }
+
+    // T3b (REQ-002): authored kind/flags surface by value (never invented).
+    #[test]
+    fn pack_snapshot_surfaces_authored_kind_and_flags() {
+        let mut engine = interaction_engine();
+        {
+            let coin = engine.world.items.get_mut("coin").expect("coin");
+            coin.kind = Some("relic".to_string());
+            coin.flags = vec!["bound".to_string()];
+        }
+        let response = engine.handle_command(cmd("take coin"));
+        let carried = response
+            .snapshot
+            .pack
+            .iter()
+            .find(|item| item.id == "coin")
+            .expect("coin carried");
+        assert_eq!(carried.kind, "relic");
+        assert_eq!(carried.flags, vec!["bound".to_string()]);
+    }
+
+    // T5 (REQ-003): `inventory`/`pack`/`i` list carried names or an honest empty
+    // state (exact messages).
+    #[test]
+    fn inventory_lists_carried_items_or_empty() {
+        let mut engine = interaction_engine();
+        {
+            // Rename but keep "coin" as an alias so `take coin` still resolves.
+            let coin = engine.world.items.get_mut("coin").expect("coin");
+            coin.name = "Copper Coin".to_string();
+            coin.aliases = vec!["coin".to_string()];
+        }
+        assert_eq!(
+            log_text(&engine.handle_command(cmd("inventory"))),
+            "You are carrying nothing."
+        );
+        assert!(engine.handle_command(cmd("take coin")).accepted);
+        assert_eq!(
+            log_text(&engine.handle_command(cmd("i"))),
+            "You are carrying: Copper Coin."
+        );
+    }
+
+    // T6 (REQ-004): `look` resolves a carried item from the pack — by name AND by
+    // alias — once it has left the room (nearby resolution still runs first).
+    #[test]
+    fn look_resolves_carried_item_by_name_and_alias() {
+        let mut engine = interaction_engine();
+        {
+            let coin = engine.world.items.get_mut("coin").expect("coin");
+            coin.name = "Copper Coin".to_string();
+            coin.description = "a worn copper coin".to_string();
+            // "coin" keeps `take coin` resolving; "penny" exercises alias lookup.
+            coin.aliases = vec!["coin".to_string(), "penny".to_string()];
+        }
+        assert!(engine.handle_command(cmd("take coin")).accepted);
+        let by_name = narrative_text(&engine.handle_command(cmd("look copper coin")));
+        assert!(
+            by_name.contains("You examine the Copper Coin you are carrying."),
+            "pack fallback by name: {by_name}"
+        );
+        assert!(
+            by_name.contains("a worn copper coin"),
+            "carried description: {by_name}"
+        );
+        let by_alias = narrative_text(&engine.handle_command(cmd("look penny")));
+        assert!(
+            by_alias.contains("you are carrying"),
+            "pack fallback resolves by alias: {by_alias}"
+        );
+    }
+
+    // T8 (REQ-005): `drop` removes the item from the pack and places it in the
+    // current cell, where awareness surfaces it again.
+    #[test]
+    fn drop_places_carried_item_in_cell_visible_via_awareness() {
+        let mut engine = interaction_engine();
+        assert!(engine.handle_command(cmd("take coin")).accepted);
+        let dropped = engine.handle_command(cmd("drop coin"));
+        assert!(dropped.accepted, "drop is accepted");
+        assert_eq!(log_text(&dropped), "You drop the coin.");
+        assert!(
+            !engine.state.pack.iter().any(|id| id == "coin"),
+            "no longer carried"
+        );
+        assert!(
+            dropped
+                .snapshot
+                .room
+                .contents
+                .iter()
+                .any(|thing| thing.id == "coin" && thing.interactable),
+            "the dropped item is visible through awareness at the cell"
+        );
+    }
+
+    // T9 (REQ-006): dropping an uncarried target — or an orphan pack id with no
+    // registry entry — is refused with no state change.
+    #[test]
+    fn drop_uncarried_or_orphan_target_is_refused_without_state_change() {
+        let mut engine = interaction_engine();
+        let refused = engine.handle_command(cmd("drop coin"));
+        assert!(!refused.accepted, "dropping an uncarried item is refused");
+        assert!(
+            log_text(&refused).contains("aren't carrying"),
+            "refusal explains nothing is carried: {}",
+            log_text(&refused)
+        );
+        assert!(engine.state.pack.is_empty(), "no state change");
+
+        engine.state.pack.push("ghost".to_string());
+        let orphan = engine.handle_command(cmd("drop ghost"));
+        assert!(
+            !orphan.accepted,
+            "an orphan pack id has no name/alias to match"
+        );
+        assert_eq!(
+            engine.state.pack,
+            vec!["ghost".to_string()],
+            "the orphan id is untouched"
+        );
+    }
+
+    // REQ-006: duplicate carried references are ambiguous and refused without
+    // losing either copy. This guards `drop` against removing every matching id.
+    #[test]
+    fn drop_duplicate_carried_match_is_refused_without_state_change() {
+        let mut engine = interaction_engine();
+        engine
+            .world
+            .rooms
+            .get_mut("org")
+            .expect("origin room")
+            .items
+            .retain(|item_id| item_id != "coin");
+        engine.state.pack = vec!["coin".to_string(), "coin".to_string()];
+
+        let before_pack = engine.state.pack.clone();
+        let before_room_items = engine.current_room().items.clone();
+        let response = engine.handle_command(cmd("drop coin"));
+
+        assert!(!response.accepted, "duplicate carried refs are refused");
+        assert!(
+            log_text(&response).contains("More than one carried item matches"),
+            "refusal identifies ambiguity: {}",
+            log_text(&response)
+        );
+        assert_eq!(engine.state.pack, before_pack, "pack unchanged");
+        assert_eq!(
+            engine.current_room().items,
+            before_room_items,
+            "room placement unchanged"
+        );
+    }
+
+    // T12 (REQ-003): help lists the new drop and inventory verbs.
+    #[test]
+    fn help_lists_drop_and_inventory() {
+        let mut engine = interaction_engine();
+        let text = log_text(&engine.handle_command(cmd("help")));
+        assert!(
+            text.contains("drop") && text.contains("inventory"),
+            "help names the new verbs: {text}"
+        );
     }
 }

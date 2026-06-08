@@ -9,6 +9,7 @@ y = 0
 z = 0
 glyph = "+"
 passable = true
+items = ["wax_stub"]
 
 [rooms.exits]
 north = "north_gate"

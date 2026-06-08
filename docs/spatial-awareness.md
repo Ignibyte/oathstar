@@ -85,8 +85,16 @@ The engine emits **structured JSON, never drawing instructions** (Decisions
 - no match yields "you see nothing like that nearby".
 
 Bare `look` (no target) still describes the current room, so existing behavior is
-preserved. `talk`/`take` are not yet commands; when they are added they reuse the
-same resolver, gating on `interaction` rather than `sight`.
+preserved.
+
+`talk <target>` and `take <target>` (ticket #18) consume the same resolver, gating
+on `interaction` rather than `sight`:
+
+- `talk <actor>` — a reachable actor responds without moving the player; an actor in
+  sight but out of reach is reported as too far; a non-actor or no match is refused.
+- `take <item>` — a reachable world item is moved into the player's pack and removed
+  from its room so it drops out of the nearby `contents`; an item out of reach,
+  hidden, unknown, or a non-item is refused with state preserved.
 
 ## How this underpins future systems
 
@@ -107,7 +115,7 @@ same resolver, gating on `interaction` rather than `sight`.
   additive `contents` snapshot, and `look <target>` resolution.
 - **Out (future):** per-entity intra-room coordinates; full combat aggro, stealth,
   sound propagation, pathfinding, and final line-of-sight blockers; dialogue
-  trees, shops; `talk`/`take` command parsing; multiplayer and DM controls; canvas
+  trees, shops; multiplayer and DM controls; canvas
   entity/event overlays.
 
 ## Testing

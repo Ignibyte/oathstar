@@ -332,9 +332,9 @@ mod tests {
         );
     }
 
-    // REQ-005 (smoke): the whole slice runs through the /command path on the real
-    // beginner world: look (REQ-001) → swear (REQ-002) → route (REQ-003) →
-    // confront (REQ-004), with the typed oath events and final state.
+    // REQ-002/007 (smoke): the whole slice runs through the /command path on the
+    // real beginner world: look → talk mara (offer, ticket #19) → swear → route →
+    // confront, with the typed oath events and final state.
     #[tokio::test]
     async fn beginner_slice_runs_through_command_path() {
         let app = test_app_state();
@@ -350,8 +350,21 @@ mod tests {
         assert!(look.0.accepted, "look accepted");
         assert_eq!(look.0.snapshot.current_room_id, "hollowmere_square");
 
+        // Ticket #19: the oath is offered by talking to Mara (one cell east, within
+        // interaction range) before it can be sworn.
+        let talk = command(State(app.clone()), req("talk mara")).await;
+        assert!(talk.0.accepted, "talk mara accepted");
+        assert!(
+            talk.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. }
+                    if text.contains("Bell-Eater") && text.contains("swear")
+            )),
+            "talking to Mara introduces the Bell-Eater problem and exposes the oath"
+        );
+
         let swear = command(State(app.clone()), req("swear")).await;
-        assert!(swear.0.accepted, "swear accepted");
+        assert!(swear.0.accepted, "swear accepted after the oath is offered");
         assert!(
             swear
                 .0
@@ -395,6 +408,31 @@ mod tests {
                 .status,
             OathStatus::Fulfilled
         );
+    }
+
+    // REQ-003 (smoke): on the real beginner world, swearing before talking to Mara
+    // is refused and guides the player to the oath-giver (ticket #19 offer gate).
+    #[tokio::test]
+    async fn beginner_swear_before_talking_to_mara_is_refused() {
+        let app = test_app_state();
+        let swear = command(
+            State(app.clone()),
+            Json(CommandRequest {
+                input: "swear".to_string(),
+                actor_id: None,
+            }),
+        )
+        .await;
+        assert!(!swear.0.accepted, "swearing before the offer is refused");
+        assert!(
+            swear.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. }
+                    if text.contains("offered") && text.contains("Mara")
+            )),
+            "refusal guides the player to Mara"
+        );
+        assert!(swear.0.snapshot.oath.is_none(), "no oath recorded");
     }
 
     // ---- ticket #12: opening scene seeded onto new /events subscriptions ----

@@ -339,4 +339,78 @@ mod tests {
         assert!(loaded.oath_id.is_none(), "no designated oath");
         assert!(loaded.oaths.is_empty(), "no oaths defined");
     }
+
+    // ---- ticket #19: NPC dialogue + oath issuer/source ----
+
+    // T10 (REQ-001/006): the beginner world loads Mara's authored dialogue and the
+    // oath's issuer/source metadata from TOML (asserted by exact value).
+    #[test]
+    fn beginner_world_loads_mara_dialogue_and_oath_issuer() {
+        let world = load_beginner_world().expect("beginner module should load");
+
+        let mara = world.entities.get("mara").expect("mara entity");
+        let dialogue = mara.dialogue.as_ref().expect("mara has authored dialogue");
+        let oath_lines = dialogue.oath.as_ref().expect("mara has oath dialogue");
+        assert!(!oath_lines.offer.is_empty(), "the offer line is authored");
+
+        let oath = world.oaths.get("hollow_bell").expect("hollow_bell oath");
+        assert_eq!(oath.issuer_id.as_deref(), Some("mara"));
+        assert_eq!(oath.source.as_deref(), Some("hollowmere"));
+    }
+
+    // T11 (REQ-006): an oath whose issuer is not a defined entity is rejected by
+    // the loader (core validation runs inside the loader).
+    #[test]
+    fn load_rejects_oath_with_missing_issuer() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
+        let world = "[[regions]]\nid = \"r\"\nname = \"R\"\n\
+            [[oaths]]\nid = \"o\"\ntitle = \"O\"\ndescription = \"d\"\nissuer_id = \"ghost\"\n";
+        let err = load_world_from_toml(module, ONE_ROOM, world)
+            .expect_err("an oath with a missing issuer must be rejected");
+        assert!(
+            err.to_string()
+                .contains("references missing issuer 'ghost'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // T12 (REQ-006): an oath with no issuer/source loads, defaulting both to None.
+    #[test]
+    fn load_accepts_oath_without_issuer() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
+        let world = "[[regions]]\nid = \"r\"\nname = \"R\"\n\
+            [[oaths]]\nid = \"o\"\ntitle = \"O\"\ndescription = \"d\"\n";
+        let loaded =
+            load_world_from_toml(module, ONE_ROOM, world).expect("an oath without an issuer loads");
+        let oath = loaded.oaths.get("o").expect("oath o present");
+        assert!(oath.issuer_id.is_none(), "no issuer by default");
+        assert!(oath.source.is_none(), "no source by default");
+    }
+
+    // T10 (REQ-002): the beginner items load their authored kind/flags by value.
+    #[test]
+    fn beginner_items_load_kind_and_flags() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let clapper = world.items.get("bell_clapper").expect("bell_clapper item");
+        assert_eq!(clapper.kind.as_deref(), Some("quest"));
+        assert_eq!(clapper.flags, vec!["oath".to_string()]);
+        assert_eq!(
+            world
+                .items
+                .get("candle")
+                .expect("candle item")
+                .kind
+                .as_deref(),
+            Some("light")
+        );
+        assert!(
+            world
+                .items
+                .get("wax_stub")
+                .expect("wax_stub item")
+                .flags
+                .is_empty(),
+            "wax_stub carries no flags"
+        );
+    }
 }

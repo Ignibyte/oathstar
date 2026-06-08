@@ -5,6 +5,8 @@
 
 export const COMMAND_VOCAB = Object.freeze([
   { id: "look", label: "look", command: "look", hint: "Describe the current room." },
+  { id: "talk", label: "talk", command: "talk mara", hint: "Talk to a nearby actor." },
+  { id: "take", label: "take", command: "take wax stub", hint: "Take a nearby item." },
   { id: "swear", label: "swear", command: "swear", hint: "Swear the module's oath." },
   { id: "confront", label: "confront", command: "confront", hint: "Confront the oath's endpoint." },
   { id: "help", label: "help", command: "help", hint: "List available commands." },

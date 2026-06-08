@@ -190,6 +190,11 @@ impl AwarenessKind {
 pub struct Awareness {
     /// The thing's world id (entity id or item id).
     pub id: String,
+    /// The id of the room that places this thing — the grid cell it occupies.
+    /// Lets a command (e.g. `take`, ticket #18) mutate the exact placing room
+    /// without re-deriving geometry, even when the thing is in an adjacent
+    /// interactable cell rather than the observer's own.
+    pub room_id: String,
     /// The thing's display name.
     pub name: String,
     /// The thing's description text.
@@ -206,6 +211,7 @@ pub struct Awareness {
 /// match on names/aliases before allocating an [`Awareness`].
 struct Candidate<'w> {
     id: &'w str,
+    room_id: &'w str,
     name: &'w str,
     description: &'w str,
     aliases: &'w [String],
@@ -218,6 +224,7 @@ impl Candidate<'_> {
     fn into_awareness(self) -> Awareness {
         Awareness {
             id: self.id.to_string(),
+            room_id: self.room_id.to_string(),
             name: self.name.to_string(),
             description: self.description.to_string(),
             kind: self.kind,
@@ -228,12 +235,18 @@ impl Candidate<'_> {
 
     /// Case-insensitive match of `query` against the name or any alias.
     fn matches(&self, query: &str) -> bool {
-        self.name.eq_ignore_ascii_case(query)
-            || self
-                .aliases
-                .iter()
-                .any(|alias| alias.eq_ignore_ascii_case(query))
+        name_or_alias_matches(self.name, self.aliases, query)
     }
+}
+
+/// Case-insensitive match of `query` against a display `name` or any of its
+/// `aliases` (ticket #20). Shared by the proximity resolver ([`Candidate::matches`])
+/// and the engine's carried-pack resolver, so name/alias matching has one home.
+pub(crate) fn name_or_alias_matches(name: &str, aliases: &[String], query: &str) -> bool {
+    name.eq_ignore_ascii_case(query)
+        || aliases
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(query))
 }
 
 /// Gather every perceivable thing within `origin`'s sight, on the same plane,
@@ -264,6 +277,7 @@ fn perceived_candidates<'w>(
                 }
                 found.push(Candidate {
                     id: entity.id.as_str(),
+                    room_id: room.id.as_str(),
                     name: entity.name.as_str(),
                     description: entity.description.as_str(),
                     aliases: entity.aliases.as_slice(),
@@ -281,6 +295,7 @@ fn perceived_candidates<'w>(
                 }
                 found.push(Candidate {
                     id: item.id.as_str(),
+                    room_id: room.id.as_str(),
                     name: item.name.as_str(),
                     description: item.description.as_str(),
                     aliases: item.aliases.as_slice(),
@@ -483,6 +498,7 @@ mod tests {
             roles: Vec::new(),
             inventory: Vec::new(),
             hidden,
+            dialogue: None,
         }
     }
 
@@ -493,6 +509,8 @@ mod tests {
             description: format!("desc-{id}"),
             aliases: aliases.iter().copied().map(String::from).collect(),
             hidden,
+            kind: None,
+            flags: Vec::new(),
         }
     }
 
@@ -664,5 +682,31 @@ mod tests {
         assert_eq!(found.id, "echo_here");
         assert_eq!(found.distance, 0);
         assert_eq!(found.proximity, Proximity::Exact);
+    }
+
+    // ---- ticket #18: room_id is the placing room ----
+
+    // The resolver and perceive carry `room_id` = the room that PLACES the thing
+    // (not the observer's origin) — for an origin-cell entity, an adjacent-cell
+    // entity, and an adjacent-cell item — so `take` can mutate the exact room.
+    #[test]
+    fn awareness_carries_the_placing_room_id() {
+        let world = nearby_world();
+        let origin = origin_of(&world, "m_org");
+        let radii = RadiusConfig::default();
+        // ally is in the origin cell m_org (distance 0).
+        let ally =
+            resolve_target(&world, &origin, &radii, "ally").expect("ally resolves in origin cell");
+        assert_eq!(ally.room_id, "m_org");
+        // lever (entity) is in the adjacent cell z_near — room_id is its cell, not origin.
+        let lever =
+            resolve_target(&world, &origin, &radii, "lever").expect("lever resolves nearby");
+        assert_eq!(lever.room_id, "z_near");
+        // pin (item) is also in z_near — covers the item push site.
+        let pin = perceive(&world, &origin, &radii)
+            .into_iter()
+            .find(|thing| thing.id == "pin")
+            .expect("pin perceived");
+        assert_eq!(pin.room_id, "z_near");
     }
 }

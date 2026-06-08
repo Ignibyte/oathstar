@@ -437,6 +437,9 @@ function renderMenu(snapshot) {
   if (!menu.pack.count) {
     el.inventory.append(emptyChip("empty"));
   }
+  for (const item of menu.pack.items) {
+    el.inventory.append(packChip(item.name));
+  }
 }
 
 function renderIntent(snapshot) {
@@ -485,6 +488,13 @@ function emptyChip(label) {
   return chip;
 }
 
+function packChip(label) {
+  const chip = document.createElement("span");
+  chip.className = "chip";
+  chip.textContent = label;
+  return chip;
+}
+
 function actionCard(item) {
   const card = document.createElement("article");
   card.className = `entity-card ${item.kind}`;
@@ -495,17 +505,24 @@ function actionCard(item) {
   name.textContent = item.name;
   const kind = document.createElement("span");
   kind.className = "entity-kind";
-  kind.textContent = item.kind;
+  kind.textContent = item.detail ? `${item.kind} / ${item.detail}` : item.kind;
   main.append(name, kind);
 
   const actions = document.createElement("div");
   actions.className = "entity-actions";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = "Go";
-  button.title = item.command;
-  button.addEventListener("click", () => runCommand(item.command));
-  actions.append(button);
+  for (const action of item.actions ?? [{ label: "Look", command: item.command }]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    button.title = action.hint ?? action.command;
+    button.disabled = Boolean(action.disabled);
+    button.addEventListener("click", () => {
+      if (!action.disabled) {
+        runCommand(action.command);
+      }
+    });
+    actions.append(button);
+  }
 
   card.append(main, actions);
   return card;
