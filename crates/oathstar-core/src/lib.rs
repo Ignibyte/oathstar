@@ -1,12 +1,14 @@
+pub mod awareness;
 pub mod command;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use awareness::RadiusConfig;
 use command::{parse, Command, Direction};
 use oathstar_protocol::{
     CommandRequest, CommandResponse, EventChannel, GameEvent, GameEventKind, GameSnapshot,
-    MapRoomSnapshot, MapSnapshot, OathSnapshot, OathStatus, OutputComponent, PlayerSnapshot,
-    RoomSnapshot,
+    MapRoomSnapshot, MapSnapshot, NearbySnapshot, OathSnapshot, OathStatus, OutputComponent,
+    PlayerSnapshot, RoomSnapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +102,12 @@ pub struct Entity {
     pub roles: Vec<String>,
     #[serde(default)]
     pub inventory: Vec<String>,
+    /// Reveal-rule placeholder (ticket #17): when `true`, this entity is not
+    /// surfaced by proximity/awareness queries ([`awareness::perceive`]). Future
+    /// stealth/perception will compute this; v1 reads the static flag. Defaults
+    /// to visible.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// A world item — leaf content data. Placement is by reference *from* a container
@@ -112,6 +120,11 @@ pub struct Item {
     pub description: String,
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// Reveal-rule placeholder (ticket #17): when `true`, this item is not
+    /// surfaced by proximity/awareness queries ([`awareness::perceive`]).
+    /// Defaults to visible.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// A swearable oath defined by a module — leaf content data.
@@ -531,11 +544,7 @@ impl Engine {
             Command::Look {
                 target: Some(target),
             } => {
-                events.push(self.log(
-                    EventChannel::Narrative,
-                    OutputComponent::NarrativeMessage,
-                    format!("You study {target}, but learn nothing new about it yet."),
-                ));
+                events.extend(self.look_at(&target));
             }
             Command::Move(direction) => {
                 events.extend(self.move_direction(direction));
@@ -596,6 +605,34 @@ impl Engine {
                 format!("Exits: {exits}."),
             ),
         ]
+    }
+
+    /// Resolve and describe a `look <target>` against nearby things (ticket #17).
+    ///
+    /// Uses the proximity resolver ([`awareness::resolve_target`]): an
+    /// interactable match — the same cell or within reach — is described in full;
+    /// a match that is visible but out of reach is reported as too far to examine
+    /// (REQ-003); no match yields a "nothing like that nearby" message. Bare
+    /// `look` (no target) is handled separately and still describes the room, so
+    /// the existing exact-room behavior is preserved (REQ-004/REQ-007).
+    fn look_at(&mut self, target: &str) -> Vec<GameEvent> {
+        let origin = self.current_room().clone();
+        let radii = RadiusConfig::default();
+        let text = match awareness::resolve_target(&self.world, &origin, &radii, target) {
+            Some(found) if found.proximity.is_interactable() => {
+                format!("You study {}. {}", found.name, found.description)
+            }
+            Some(found) => format!(
+                "You can make out {} nearby, but it is too far off to examine closely.",
+                found.name
+            ),
+            None => format!("You see nothing like '{target}' nearby."),
+        };
+        vec![self.log(
+            EventChannel::Narrative,
+            OutputComponent::NarrativeMessage,
+            text,
+        )]
     }
 
     fn move_direction(&mut self, direction: Direction) -> Vec<GameEvent> {
@@ -778,6 +815,20 @@ impl Engine {
     }
 
     fn room_snapshot(&self, room: &RoomDefinition) -> RoomSnapshot {
+        // Proximity/awareness is additive JSON state — the nearby things the
+        // player can perceive from this cell, never canvas drawing instructions
+        // (ticket #17, REQ-005). The client's Nearby panel reads `room.contents`.
+        let contents = awareness::perceive(&self.world, room, &RadiusConfig::default())
+            .into_iter()
+            .map(|thing| NearbySnapshot {
+                id: thing.id,
+                name: thing.name,
+                kind: thing.kind.as_str().to_string(),
+                distance: thing.distance,
+                proximity: thing.proximity.as_str().to_string(),
+                interactable: thing.proximity.is_interactable(),
+            })
+            .collect();
         RoomSnapshot {
             id: room.id.clone(),
             title: room.title.clone(),
@@ -790,6 +841,7 @@ impl Engine {
             z: room.z,
             glyph: room.glyph,
             passable: room.passable,
+            contents,
         }
     }
 
@@ -1158,6 +1210,7 @@ mod tests {
             kind,
             roles: roles.iter().copied().map(String::from).collect(),
             inventory: inventory.iter().copied().map(String::from).collect(),
+            hidden: false,
         }
     }
 
@@ -1167,6 +1220,7 @@ mod tests {
             name: id.to_string(),
             description: "d".to_string(),
             aliases: Vec::new(),
+            hidden: false,
         }
     }
 
@@ -1957,5 +2011,157 @@ mod tests {
             .to_string(),
             "room 'a' (region 'x') references subregion 's' whose parent region is 'y'"
         );
+    }
+
+    // ---- ticket #17: proximity look + snapshot contents ----
+
+    // An engine whose start room "org" (0,0,0) holds an actor + item at distance 0,
+    // and a room "far" (2,0,0) on the same plane holds an actor at distance 2.
+    fn proximity_engine() -> Engine {
+        let mut org = room_with("org", true, BTreeMap::new());
+        org.entities = vec!["ally".to_string()];
+        org.items = vec!["coin".to_string()];
+
+        let mut far = room_with("far", true, BTreeMap::new());
+        far.x = 2;
+        far.entities = vec!["guard".to_string()];
+
+        let mut rooms = BTreeMap::new();
+        rooms.insert("org".to_string(), org);
+        rooms.insert("far".to_string(), far);
+        let mut world = world_with("org", rooms);
+
+        let mut ally = entity("ally", EntityKind::Actor, &[], &[]);
+        ally.name = "Ally".to_string();
+        ally.description = "the loyal ally".to_string();
+        world.entities.insert("ally".to_string(), ally);
+
+        let mut guard = entity("guard", EntityKind::Actor, &[], &[]);
+        guard.name = "Guard".to_string();
+        guard.description = "a wary guard".to_string();
+        world.entities.insert("guard".to_string(), guard);
+
+        let mut coin = item("coin");
+        coin.name = "Coin".to_string();
+        coin.description = "a copper coin".to_string();
+        world.items.insert("coin".to_string(), coin);
+
+        Engine::try_new(world).expect("valid proximity world")
+    }
+
+    fn narrative_text(response: &CommandResponse) -> String {
+        response
+            .events
+            .iter()
+            .find_map(|event| match &event.kind {
+                GameEventKind::LogMessage {
+                    component: OutputComponent::NarrativeMessage,
+                    text,
+                } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("a narrative message in the response")
+    }
+
+    fn look(engine: &mut Engine, input: &str) -> String {
+        narrative_text(&engine.handle_command(CommandRequest {
+            input: input.to_string(),
+            actor_id: None,
+        }))
+    }
+
+    // REQ-004: `look <target>` resolves an interactable entity (same cell) and
+    // reports its description (observed — deviation #2). Narrative channel.
+    #[test]
+    fn look_interactable_entity_describes_it() {
+        let mut engine = proximity_engine();
+        let text = look(&mut engine, "look ally");
+        assert!(text.contains("You study Ally."), "study line: {text}");
+        assert!(
+            text.contains("the loyal ally"),
+            "description observed: {text}"
+        );
+    }
+
+    // REQ-004: the same resolver path works for an item (kills the item path).
+    #[test]
+    fn look_interactable_item_describes_it() {
+        let mut engine = proximity_engine();
+        let text = look(&mut engine, "look coin");
+        assert!(text.contains("You study Coin."), "study line: {text}");
+        assert!(text.contains("a copper coin"), "item description: {text}");
+    }
+
+    // REQ-003: a target within sight but beyond reach is visible-not-interactable.
+    #[test]
+    fn look_visible_but_out_of_reach_is_too_far() {
+        let mut engine = proximity_engine();
+        let text = look(&mut engine, "look guard");
+        assert!(text.contains("Guard"), "names the target: {text}");
+        assert!(
+            text.contains("too far off to examine closely"),
+            "too-far line: {text}"
+        );
+    }
+
+    // REQ-004: an unmatched target names the query back, mutates nothing.
+    #[test]
+    fn look_unknown_target_reports_nothing_nearby() {
+        let mut engine = proximity_engine();
+        let text = look(&mut engine, "look dragon");
+        assert!(
+            text.contains("nothing like 'dragon' nearby"),
+            "none line: {text}"
+        );
+    }
+
+    // REQ-007: bare `look` is unchanged — it still describes the room.
+    #[test]
+    fn bare_look_still_describes_the_room() {
+        let mut engine = proximity_engine();
+        let text = look(&mut engine, "look");
+        assert_eq!(text, "d");
+        assert!(!text.contains("You study"));
+    }
+
+    // REQ-001/005: the snapshot exposes nearby things as JSON contents, with an
+    // exact (interactable) AND a visible (not interactable) entry distinguished.
+    #[test]
+    fn snapshot_contents_list_exact_and_visible_things() {
+        let engine = proximity_engine();
+        let contents = engine.snapshot().room.contents;
+
+        let ally = contents
+            .iter()
+            .find(|thing| thing.id == "ally")
+            .expect("ally in contents");
+        assert_eq!(ally.name, "Ally");
+        assert_eq!(ally.kind, "actor");
+        assert_eq!(ally.distance, 0);
+        assert_eq!(ally.proximity, "exact");
+        assert!(ally.interactable);
+
+        let coin = contents
+            .iter()
+            .find(|thing| thing.id == "coin")
+            .expect("coin in contents");
+        assert_eq!(coin.kind, "item");
+
+        let guard = contents
+            .iter()
+            .find(|thing| thing.id == "guard")
+            .expect("guard in contents");
+        assert_eq!(guard.distance, 2);
+        assert_eq!(guard.proximity, "visible");
+        assert!(!guard.interactable);
+    }
+
+    // REQ-002: nothing in sight → empty contents (honest empty state preserved).
+    #[test]
+    fn snapshot_contents_empty_when_nothing_in_sight() {
+        let mut rooms = BTreeMap::new();
+        rooms.insert("solo".to_string(), room_with("solo", true, BTreeMap::new()));
+        let engine = Engine::try_new(world_with("solo", rooms)).expect("valid solo world");
+        assert!(engine.snapshot().room.contents.is_empty());
     }
 }

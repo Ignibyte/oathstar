@@ -1714,3 +1714,48 @@ Revisit when:
   transforms, or high entity counts.
 - Map tooling/editor needs become large enough to justify adopting a rendering
   library.
+
+## Decision 036: Spatial Awareness Uses Room/Cell-Granularity Proximity With Action-Specific Radiuses
+
+Date: 2026-06-07
+
+Entities, items, and fixtures become discoverable and interactable by *distance* —
+the "blast radius" model — rather than requiring exact room co-location. The v1
+foundation (ticket #17) is room/cell-granularity: a positioned thing inherits the
+`(region, subregion, x, y, z)` of the room that places it, because rooms ARE the
+grid cells (Decision 025) and entities/items carry no coordinates of their own.
+
+The model (engine, `crates/oathstar-core/src/awareness.rs`):
+
+- Proximity is gated by the same region, subregion, and z-plane, then measured by
+  Chebyshev (king-move) distance, `max(|dx|, |dy|)` — a square radius matching the
+  square grid; integer-only and deterministic.
+- Action-specific radiuses (sight, interaction; defaults 3 and 1 cells), extensible
+  to hearing/detection without changing call sites.
+- A structured awareness result classifies each perceived thing as `exact`,
+  `interactable`, or `visible` (seen but out of reach), plus a `hidden` reveal-rule
+  placeholder that excludes a thing from all perception.
+- The result is server-authoritative JSON exposed additively on
+  `RoomSnapshot.contents` (`NearbySnapshot`) — never canvas drawing instructions
+  (Decisions 034/035). The existing client Nearby panel renders it unchanged.
+- `look <target>` resolves through the proximity resolver (exact cell first,
+  alias/case-insensitive); `talk`/`take` reuse the same resolver when they land.
+
+Rationale:
+
+- Entities/items have no coordinates yet; inheriting the room cell is the smallest
+  honest foundation and is exactly what "notice an NPC two cells west" means on the
+  current grid. Per-entity intra-room coordinates can extend `Position` later.
+- A square (Chebyshev) radius matches the square tile grid and avoids floating
+  point; the metric is isolated in one function for a future swap.
+- Additive JSON keeps the server renderer-agnostic and the change backward-
+  compatible (empty `contents` omitted; old payloads still deserialize).
+
+Revisit when:
+
+- Rooms become multi-cell areas (per-entity intra-room coordinates).
+- Combat aggro, stealth/noise, or detection need computed reveal rules, a hearing
+  radius, or line-of-sight/passability occlusion (the `hidden` flag is the seam).
+- Map overlays need entity/event markers driven by distance/proximity.
+
+See `docs/spatial-awareness.md` for the full model.

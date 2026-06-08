@@ -230,6 +230,34 @@ test("snapshot.toNearby shows contents only, never exits", () => {
   );
 });
 
+// TN2 (REQ-008): toNearby renders the server's NearbySnapshot wire shape
+// (id/name/kind/distance/proximity/interactable — ticket #17). The extra
+// awareness fields are ignored; name/kind/command still map, so the panel lights
+// up data-driven from the real `/state` payload with no client logic change.
+test("snapshot.toNearby renders the server NearbySnapshot shape", () => {
+  const near = toNearby({
+    room: {
+      exits: { north: "x" },
+      contents: [
+        {
+          id: "mara",
+          name: "Mara Candlekeep",
+          kind: "actor",
+          distance: 1,
+          proximity: "interactable",
+          interactable: true,
+        },
+        { id: "coin", name: "Coin", kind: "item", distance: 2, proximity: "visible", interactable: false },
+      ],
+    },
+  });
+  assert.equal(near.count, 2);
+  assert.equal(near.items[0].name, "Mara Candlekeep");
+  assert.equal(near.items[0].kind, "actor");
+  assert.equal(near.items[0].command, "look Mara Candlekeep");
+  assert.equal(near.items[1].kind, "item");
+});
+
 // T8 (REQ-007): the map model carries a configurable tile size + render mode and
 // never mutates the server's map snapshot shape.
 test("map.toMapModel builds a grid, flags current, and passes config through", () => {
