@@ -62,6 +62,38 @@ pub struct RoomSnapshot {
     pub z: i32,
     pub glyph: char,
     pub passable: bool,
+    /// Things perceivable from this room within the player's awareness radius.
+    ///
+    /// The structured spatial-awareness data (ticket #17): things in this cell
+    /// (`exact`) and in nearby cells on the same subregion/z-plane, each entry
+    /// carrying its `distance` and `proximity` so a client can present "here" vs
+    /// "nearby". Empty — and omitted from JSON — when nothing is in sight, which
+    /// keeps the payload byte-identical for empty rooms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contents: Vec<NearbySnapshot>,
+}
+
+/// One thing perceived near the player, as renderer-agnostic snapshot data.
+///
+/// (Ticket #17.) `kind` is `"actor" | "fixture" | "item"`; `proximity` is
+/// `"exact" | "interactable" | "visible"`; `interactable` is the convenience
+/// boolean (`exact` or `interactable`). Carries no drawing instructions — a
+/// client decides how to render the awareness, including the `look <name>` action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NearbySnapshot {
+    /// The thing's world id (entity id or item id).
+    pub id: String,
+    /// The thing's display name.
+    pub name: String,
+    /// `"actor" | "fixture" | "item"`.
+    pub kind: String,
+    /// Chebyshev cell distance from the player (0 = same cell).
+    pub distance: u32,
+    /// `"exact" | "interactable" | "visible"`.
+    pub proximity: String,
+    /// Whether the player can directly interact (same cell or within reach).
+    pub interactable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,4 +206,80 @@ pub enum OutputComponent {
     EntityChip,
     ItemCard,
     MapPatch,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NearbySnapshot, RoomSnapshot};
+    use std::collections::BTreeMap;
+
+    fn bare_room() -> RoomSnapshot {
+        RoomSnapshot {
+            id: "r".to_string(),
+            title: "R".to_string(),
+            region: "reg".to_string(),
+            subregion: None,
+            description: "d".to_string(),
+            exits: BTreeMap::new(),
+            x: 0,
+            y: 0,
+            z: 0,
+            glyph: '.',
+            passable: true,
+            contents: Vec::new(),
+        }
+    }
+
+    fn nearby(id: &str) -> NearbySnapshot {
+        NearbySnapshot {
+            id: id.to_string(),
+            name: "Mara".to_string(),
+            kind: "actor".to_string(),
+            distance: 1,
+            proximity: "interactable".to_string(),
+            interactable: true,
+        }
+    }
+
+    // REQ-005: a NearbySnapshot serializes as JSON-friendly state (no drawing ops).
+    #[test]
+    fn nearby_snapshot_serializes_expected_fields() {
+        let value = serde_json::to_value(nearby("mara")).expect("serialize");
+        assert_eq!(value["id"], "mara");
+        assert_eq!(value["name"], "Mara");
+        assert_eq!(value["kind"], "actor");
+        assert_eq!(value["distance"], 1);
+        assert_eq!(value["proximity"], "interactable");
+        assert!(value["interactable"]
+            .as_bool()
+            .expect("interactable is bool"));
+    }
+
+    // REQ-005/007: empty contents is omitted, so empty-room payloads are unchanged.
+    #[test]
+    fn empty_contents_is_omitted_from_json() {
+        let json = serde_json::to_string(&bare_room()).expect("serialize");
+        assert!(!json.contains("contents"), "omitted when empty: {json}");
+    }
+
+    // REQ-005: an old snapshot without a `contents` key still deserializes (empty).
+    #[test]
+    fn room_without_contents_deserializes_to_empty() {
+        let json = r#"{"id":"r","title":"R","region":"reg","description":"d","exits":{},"x":0,"y":0,"z":0,"glyph":".","passable":true}"#;
+        let room: RoomSnapshot = serde_json::from_str(json).expect("deserialize");
+        assert!(room.contents.is_empty());
+    }
+
+    // REQ-005: populated contents survives a round trip.
+    #[test]
+    fn populated_contents_round_trips() {
+        let mut room = bare_room();
+        room.contents = vec![nearby("mara")];
+        let json = serde_json::to_string(&room).expect("serialize");
+        assert!(json.contains("\"contents\""));
+        let back: RoomSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.contents.len(), 1);
+        assert_eq!(back.contents[0].id, "mara");
+        assert!(back.contents[0].interactable);
+    }
 }

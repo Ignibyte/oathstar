@@ -269,6 +269,24 @@ mod tests {
         assert_eq!(snapshot.0.current_room_id, "hollowmere_square");
     }
 
+    // ticket #17: from the start room, Mara in the adjacent candle_shop (same
+    // subregion, one cell east) is perceivable and interactable — the proximity
+    // foundation lights up the beginner slice's Nearby panel (REQ-004/005/007).
+    #[tokio::test]
+    async fn state_snapshot_exposes_nearby_contents() {
+        let snapshot = state_snapshot(State(test_app_state())).await;
+        let mara = snapshot
+            .0
+            .room
+            .contents
+            .iter()
+            .find(|thing| thing.id == "mara")
+            .expect("mara perceivable from the start room");
+        assert_eq!(mara.kind, "actor");
+        assert_eq!(mara.distance, 1);
+        assert!(mara.interactable);
+    }
+
     #[tokio::test]
     async fn command_processes_and_broadcasts() {
         let app = test_app_state();

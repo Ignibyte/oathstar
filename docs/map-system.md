@@ -138,6 +138,17 @@ In this example:
 
 A shop might eventually contain one or two passable interior cells surrounded by non-passable wall cells. This keeps the current room/grid model compatible with a future top-down game representation.
 
+## Spatial Awareness
+
+Once the grid carries entities and items, the player should perceive and reach
+things by *distance* — noticing the `S` two cells west of `@` above — not only by
+exact co-location. That "blast radius" model (sight radius, interaction radius,
+structured awareness results) is specified in
+[`docs/spatial-awareness.md`](spatial-awareness.md). It stays server-authoritative
+and renderer-agnostic: the engine exposes nearby things as JSON on
+`RoomSnapshot.contents`, never as canvas drawing instructions, and the canvas
+entity/event overlays remain a future addition.
+
 ## Backend Payload
 
 The backend should expose map state as JSON.
