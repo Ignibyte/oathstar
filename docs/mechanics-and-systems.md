@@ -130,9 +130,10 @@ The entity model is locked in [Decision 004](./decisions.md#decision-004-entitie
 
 > **Status — v1 implemented** (ticket #6): `oathstar-core::Entity` is the shared
 > shape (kind `Actor`/`Fixture`, free-form `roles` tags, `inventory` of owned item
-> ids) — an "enemy" is an Actor with a `combatant` role, not a separate type. The
-> code-behind behavior dispatch and role-contract validation described below are
-> not yet implemented.
+> ids) — an "enemy" is an Actor with a `combatant` role, not a separate type.
+> **Typed role contracts are validated at the world construction boundary
+> (ticket #21)** — see [Entity Model → Role Contracts](./entity-model.md#role-contracts-v1-ticket-21).
+> The code-behind behavior dispatch described below remains future work.
 
 Core direction:
 

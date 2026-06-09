@@ -413,4 +413,37 @@ mod tests {
             "wax_stub carries no flags"
         );
     }
+
+    // T8 (REQ-004): Mara loads as a talkable oath-giver and the world validates (so
+    // her oath_giver contract — the issuer wiring — is satisfied).
+    #[test]
+    fn beginner_mara_is_talkable_and_oath_giver() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let mara = world.entities.get("mara").expect("mara entity");
+        assert!(
+            mara.has_role(oathstar_core::Role::Talkable),
+            "mara is talkable"
+        );
+        assert!(
+            mara.has_role(oathstar_core::Role::OathGiver),
+            "mara is an oath_giver"
+        );
+        assert_eq!(world.validate(), Ok(()));
+    }
+
+    // T9 (REQ-005): the Bell-Eater loads as combatant + boss with future-combat-ready
+    // stats (by value); the world validates and boss progression is unchanged.
+    #[test]
+    fn beginner_bell_eater_is_combatant_boss_with_combat() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let boss = world.entities.get("bell_eater").expect("bell_eater entity");
+        assert!(boss.has_role(oathstar_core::Role::Combatant), "combatant");
+        assert!(boss.has_role(oathstar_core::Role::Boss), "boss");
+        assert_eq!(
+            boss.combat,
+            Some(oathstar_core::CombatProfile { health: 12 }),
+            "future-combat-ready stats load by value"
+        );
+        assert_eq!(world.validate(), Ok(()));
+    }
 }

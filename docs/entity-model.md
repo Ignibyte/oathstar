@@ -4,8 +4,10 @@ This document describes the intended entity direction for Oathstar.
 
 > **v1 implemented** (ticket #6): `oathstar-core::Entity` provides the base shape
 > (id, name, description, aliases, `kind` = Actor/Fixture, `roles` tags,
-> `inventory`). Roles are free-form tags in v1; role contracts and the code-behind
-> behavior layer below are future work.
+> `inventory`, optional `dialogue` and `combat`). Roles are stored as free-form
+> tags but are now parsed into a **typed `Role` vocabulary with validated contracts
+> (ticket #21)** — see [Role Contracts (v1)](#role-contracts-v1-ticket-21). The
+> code-behind behavior layer below remains future work.
 
 ## Core Idea
 
@@ -89,6 +91,35 @@ OathWitness role requires:
 - Response text for sworn, kept, and broken oaths
 
 Contracts should eventually be validated so broken content fails early during development.
+
+## Role Contracts (v1, ticket #21)
+
+The first slice of the above is implemented in `oathstar-core`: a typed `Role`
+vocabulary parsed from the free-form `roles` tags, validated at the world
+construction boundary (`WorldDefinition::validate`). A failed contract surfaces as a
+typed `WorldValidationError::RoleContractUnmet { entity_id, role, missing }`, so
+broken content fails fast during development.
+
+v1 vocabulary and contracts — the minimum each role needs *where applicable* today:
+
+| Role (tag) | v1 contract |
+|---|---|
+| `talkable` (synonym `conversable`) | must be an `Actor` |
+| `oath_giver` | must be an `Actor` **and** be named as some oath's `issuer_id` |
+| `shopkeeper` | must be an `Actor` (shop stock/economy deferred) |
+| `combatant` | must be an `Actor`; the optional `combat = { health }` is the future hook |
+| `boss` | must be an `Actor` (a `confront` endpoint) |
+| `fixture` | the `EntityKind::Fixture` classification — carries no interaction role |
+
+Command handlers check capability through `Entity::has_role(Role)` instead of
+ad-hoc string matches (e.g. `talk` uses `has_role(Role::Talkable)`, `confront` uses
+`has_role(Role::Boss)`). Unknown role tags are ignored (forward-compatible), so a
+new role can be authored before it is typed.
+
+The richer per-role metadata sketched above (shop stock, a full combat profile,
+oath acceptance rules) and the code-behind hooks below attach in later tickets
+without changing this foundation: a role gains required metadata by extending its
+contract in `validate`, and behavior by referencing a registered behavior id.
 
 ## Code-Behind Behavior
 

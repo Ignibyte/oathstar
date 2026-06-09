@@ -113,6 +113,82 @@ pub struct Entity {
     /// `talk` returns these lines, selected by oath state for an oath-giver.
     #[serde(default)]
     pub dialogue: Option<EntityDialogue>,
+    /// Future-combat-ready stats for a `combatant` (ticket #21). Optional and
+    /// authored; no combat system reads it yet (combat AI is out of scope), so the
+    /// `combatant` contract does not require it — it is the forward hook for combat.
+    #[serde(default)]
+    pub combat: Option<CombatProfile>,
+}
+
+/// Future-combat-ready stats for a `combatant` entity (ticket #21). The
+/// `combatant` role does not require it in v1; it is the authored hook a future
+/// combat system reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CombatProfile {
+    /// Hit points. Authored; consumed by a future combat system.
+    pub health: u32,
+}
+
+/// A typed interaction capability declared by an entity's role tags (ticket #21).
+///
+/// Parsed from the free-form [`Entity::roles`] strings so content stays additive
+/// (Decision 004). `fixture` is the [`EntityKind::Fixture`] classification, not a
+/// role — the contract validator rejects any interaction role on a non-actor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Can be addressed with `talk` (tag `"talkable"`, or the synonym `"conversable"`).
+    Talkable,
+    /// Offers a swearable oath (tag `"oath_giver"`); must be named as some oath's issuer.
+    OathGiver,
+    /// Buys/sells (tag `"shopkeeper"`); shop metadata is a future ticket.
+    Shopkeeper,
+    /// Can fight (tag `"combatant"`); the optional [`CombatProfile`] is the future hook.
+    Combatant,
+    /// A `confront` endpoint (tag `"boss"`).
+    Boss,
+}
+
+impl Role {
+    /// The canonical role tag → typed role. `"conversable"` is accepted as a
+    /// synonym for `talkable` (existing content + fixtures use it). An unknown tag
+    /// returns `None` and is ignored by validation (forward-compatible).
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "talkable" | "conversable" => Some(Self::Talkable),
+            "oath_giver" => Some(Self::OathGiver),
+            "shopkeeper" => Some(Self::Shopkeeper),
+            "combatant" => Some(Self::Combatant),
+            "boss" => Some(Self::Boss),
+            _ => None,
+        }
+    }
+
+    /// The canonical tag for this role (for diagnostics / error text).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Talkable => "talkable",
+            Self::OathGiver => "oath_giver",
+            Self::Shopkeeper => "shopkeeper",
+            Self::Combatant => "combatant",
+            Self::Boss => "boss",
+        }
+    }
+}
+
+impl Entity {
+    /// Whether this entity declares `role`, parsed from its role tags (ticket #21).
+    /// The typed replacement for ad-hoc `roles.iter().any(|r| r == "…")` checks.
+    #[must_use]
+    pub fn has_role(&self, role: Role) -> bool {
+        self.roles_typed().any(|declared| declared == role)
+    }
+
+    /// The typed roles this entity declares; unknown tags are skipped.
+    fn roles_typed(&self) -> impl Iterator<Item = Role> + '_ {
+        self.roles.iter().filter_map(|tag| Role::from_tag(tag))
+    }
 }
 
 /// A world item — leaf content data. Placement is by reference *from* a container
@@ -235,6 +311,13 @@ pub enum WorldValidationError {
     OathMissing { oath_id: String },
     /// An oath names an `issuer_id` that is not in the entity registry.
     OathIssuerMissing { oath_id: String, issuer_id: String },
+    /// An entity declares a role whose v1 contract is unmet (ticket #21): names the
+    /// entity, the role, and the missing requirement.
+    RoleContractUnmet {
+        entity_id: String,
+        role: String,
+        missing: String,
+    },
 }
 
 impl std::fmt::Display for WorldValidationError {
@@ -306,6 +389,14 @@ impl std::fmt::Display for WorldValidationError {
             Self::OathIssuerMissing { oath_id, issuer_id } => {
                 write!(f, "oath '{oath_id}' references missing issuer '{issuer_id}'")
             }
+            Self::RoleContractUnmet {
+                entity_id,
+                role,
+                missing,
+            } => write!(
+                f,
+                "entity '{entity_id}' declares role '{role}' but is missing {missing}"
+            ),
         }
     }
 }
@@ -425,6 +516,7 @@ impl WorldDefinition {
         }
 
         self.validate_oaths()?;
+        self.validate_entity_contracts()?;
 
         Ok(())
     }
@@ -453,6 +545,42 @@ impl WorldDefinition {
                     return Err(WorldValidationError::OathIssuerMissing {
                         oath_id: oath_id.clone(),
                         issuer_id: issuer_id.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate entity role contracts (ticket #21, Decision 004): an interaction
+    /// role must be on an `Actor`, and an `oath_giver` must be named as some oath's
+    /// issuer. Unknown role tags are ignored (forward-compatible). Split out so
+    /// `validate` stays one focused orchestrator.
+    ///
+    /// # Errors
+    /// [`WorldValidationError::RoleContractUnmet`] naming the entity, role, and the
+    /// missing requirement.
+    fn validate_entity_contracts(&self) -> Result<(), WorldValidationError> {
+        for (entity_id, entity) in &self.entities {
+            for role in entity.roles_typed() {
+                if entity.kind != EntityKind::Actor {
+                    return Err(WorldValidationError::RoleContractUnmet {
+                        entity_id: entity_id.clone(),
+                        role: role.as_str().to_string(),
+                        missing: "an Actor kind (interaction roles require an actor)".to_string(),
+                    });
+                }
+                if role == Role::OathGiver
+                    && !self
+                        .oaths
+                        .values()
+                        .any(|oath| oath.issuer_id.as_deref() == Some(entity_id.as_str()))
+                {
+                    return Err(WorldValidationError::RoleContractUnmet {
+                        entity_id: entity_id.clone(),
+                        role: role.as_str().to_string(),
+                        missing: "an oath whose issuer_id names this entity".to_string(),
                     });
                 }
             }
@@ -817,7 +945,7 @@ impl Engine {
             .expect("talk resolved this entity from the world");
 
         let Some(dialogue) = entity.dialogue.as_ref() else {
-            return if entity.roles.iter().any(|role| role == "conversable") {
+            return if entity.has_role(Role::Talkable) {
                 format!("{} turns to face you, ready to talk.", entity.name)
             } else {
                 format!("{} has nothing to say to you.", entity.name)
@@ -1152,7 +1280,7 @@ impl Engine {
             .entities
             .iter()
             .filter_map(|entity_id| self.world.entities.get(entity_id))
-            .find(|entity| entity.roles.iter().any(|role| role == "boss"))
+            .find(|entity| entity.has_role(Role::Boss))
             .map(|boss| boss.name.clone());
 
         let Some(boss_name) = boss_name else {
@@ -1644,6 +1772,7 @@ mod tests {
             inventory: inventory.iter().copied().map(String::from).collect(),
             hidden: false,
             dialogue: None,
+            combat: None,
         }
     }
 
@@ -3378,6 +3507,164 @@ mod tests {
         assert!(
             text.contains("drop") && text.contains("inventory"),
             "help names the new verbs: {text}"
+        );
+    }
+
+    // ---- ticket #21: entity role contracts ----
+
+    // T1 (REQ-003): `from_tag` maps each known tag — and the `"conversable"` synonym —
+    // to its `Role` by value; unknown tags are `None`.
+    #[test]
+    fn role_from_tag_maps_known_and_synonym_tags() {
+        assert_eq!(Role::from_tag("talkable"), Some(Role::Talkable));
+        assert_eq!(Role::from_tag("conversable"), Some(Role::Talkable));
+        assert_eq!(Role::from_tag("oath_giver"), Some(Role::OathGiver));
+        assert_eq!(Role::from_tag("shopkeeper"), Some(Role::Shopkeeper));
+        assert_eq!(Role::from_tag("combatant"), Some(Role::Combatant));
+        assert_eq!(Role::from_tag("boss"), Some(Role::Boss));
+        assert_eq!(Role::from_tag("bystander"), None);
+        assert_eq!(Role::from_tag(""), None);
+    }
+
+    // T-as_str (REQ-002): each `Role`'s canonical tag — covers every `as_str` arm.
+    #[test]
+    fn role_as_str_returns_each_canonical_tag() {
+        assert_eq!(Role::Talkable.as_str(), "talkable");
+        assert_eq!(Role::OathGiver.as_str(), "oath_giver");
+        assert_eq!(Role::Shopkeeper.as_str(), "shopkeeper");
+        assert_eq!(Role::Combatant.as_str(), "combatant");
+        assert_eq!(Role::Boss.as_str(), "boss");
+    }
+
+    // T2 (REQ-003): `has_role` reflects a multi-tag entity — true AND false (kills a
+    // `.any`→`.all` mutant); unknown tags grant nothing.
+    #[test]
+    fn entity_has_role_reflects_multiple_tags() {
+        let mut npc = entity("npc", EntityKind::Actor, &["talkable", "shopkeeper"], &[]);
+        assert!(npc.has_role(Role::Talkable));
+        assert!(npc.has_role(Role::Shopkeeper));
+        assert!(!npc.has_role(Role::Boss));
+        assert!(!npc.has_role(Role::OathGiver));
+        npc.roles = vec!["bystander".to_string()];
+        assert!(
+            !npc.has_role(Role::Talkable),
+            "an unknown tag grants no role"
+        );
+    }
+
+    // T6 (REQ-003): `talk` recognizes the `"talkable"` tag through the typed helper
+    // (the legacy code matched only the literal `"conversable"`).
+    #[test]
+    fn talk_resolves_talkable_via_typed_role_tag() {
+        let mut engine = interaction_engine();
+        engine
+            .world
+            .entities
+            .get_mut("warden")
+            .expect("warden")
+            .roles = vec!["talkable".to_string()];
+        let text = narrative_text(&engine.handle_command(cmd("talk warden")));
+        assert!(
+            text.contains("ready to talk"),
+            "talkable tag resolves: {text}"
+        );
+    }
+
+    // A one-room world with an Actor `giver` declaring `oath_giver`, plus the given
+    // oaths `(id, optional issuer)` — for the oath_giver contract matrix.
+    fn oath_giver_world(oaths: &[(&str, Option<&str>)]) -> WorldDefinition {
+        let mut rooms = BTreeMap::new();
+        rooms.insert("a".to_string(), room_with("a", true, BTreeMap::new()));
+        let mut world = world_with("a", rooms);
+        world.entities.insert(
+            "giver".to_string(),
+            entity("giver", EntityKind::Actor, &["oath_giver"], &[]),
+        );
+        for (oath_id, issuer) in oaths {
+            world.oaths.insert(
+                (*oath_id).to_string(),
+                OathDefinition {
+                    id: (*oath_id).to_string(),
+                    title: "T".to_string(),
+                    description: "d".to_string(),
+                    issuer_id: issuer.map(str::to_owned),
+                    source: None,
+                },
+            );
+        }
+        world
+    }
+
+    // T3 (REQ-001/002): the oath_giver contract — must be named as some oath's
+    // `issuer_id`. Covers 0 / 1 / multi-with-match / multi-none.
+    #[test]
+    fn validate_oath_giver_contract_matrix() {
+        let err = oath_giver_world(&[])
+            .validate()
+            .expect_err("no issuing oath");
+        assert!(
+            matches!(&err, WorldValidationError::RoleContractUnmet { role, .. } if role.as_str() == "oath_giver"),
+            "unexpected: {err}"
+        );
+        assert_eq!(
+            oath_giver_world(&[("o1", Some("giver"))]).validate(),
+            Ok(())
+        );
+        assert_eq!(
+            oath_giver_world(&[("o1", None), ("o2", Some("giver"))]).validate(),
+            Ok(()),
+            "one matching oath among many satisfies the contract"
+        );
+        assert!(
+            oath_giver_world(&[("o1", None), ("o2", None)])
+                .validate()
+                .is_err(),
+            "no matching oath leaves the contract unmet"
+        );
+    }
+
+    // T4 (REQ-001/002): an interaction role on a `Fixture` is rejected (naming the
+    // entity + role); the same role on an `Actor` validates.
+    #[test]
+    fn validate_rejects_role_on_fixture_and_accepts_on_actor() {
+        let mut rooms = BTreeMap::new();
+        rooms.insert("a".to_string(), room_with("a", true, BTreeMap::new()));
+
+        let mut fixture_world = world_with("a", rooms.clone());
+        fixture_world.entities.insert(
+            "statue".to_string(),
+            entity("statue", EntityKind::Fixture, &["combatant"], &[]),
+        );
+        let err = fixture_world.validate().expect_err("role on a fixture");
+        assert!(
+            matches!(
+                &err,
+                WorldValidationError::RoleContractUnmet { entity_id, role, .. }
+                    if entity_id.as_str() == "statue" && role.as_str() == "combatant"
+            ),
+            "unexpected: {err}"
+        );
+
+        let mut actor_world = world_with("a", rooms);
+        actor_world.entities.insert(
+            "brute".to_string(),
+            entity("brute", EntityKind::Actor, &["combatant"], &[]),
+        );
+        assert_eq!(actor_world.validate(), Ok(()));
+    }
+
+    // T5 (REQ-002): the typed error's Display names the entity, role, and missing.
+    #[test]
+    fn role_contract_error_names_entity_role_and_missing() {
+        let err = WorldValidationError::RoleContractUnmet {
+            entity_id: "statue".to_string(),
+            role: "combatant".to_string(),
+            missing: "an Actor kind".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("statue") && msg.contains("combatant") && msg.contains("Actor"),
+            "message: {msg}"
         );
     }
 }

@@ -47,7 +47,7 @@ name = "Mara Candlekeep"
 description = "A severe woman with wax on her sleeves and a ledger chained to her belt."
 aliases = ["mara", "shopkeeper", "candlekeep"]
 kind = "actor"
-roles = ["conversable", "shopkeeper"]
+roles = ["talkable", "oath_giver", "shopkeeper"]
 inventory = ["candle"]
 
 # Mara's authored dialogue (ticket #19). `greeting` is the default reply; the
@@ -97,6 +97,9 @@ aliases = ["bell-eater", "bell eater", "eater"]
 kind = "actor"
 roles = ["boss", "combatant"]
 inventory = ["bell_clapper"]
+# Ticket #21: future-combat-ready stats; the combatant contract does not require
+# this yet (no combat system), it is the forward hook for combat.
+combat = { health = 12 }
 
 # The beginner oath, offered by the module (module.toml `oath_id`). Swearing it
 # and resolving the Bell-Eater fulfills it.

@@ -1,12 +1,12 @@
 ---
 title: TICKET-21-interaction-metadata-and-entity-contracts-v1
-status: open
+status: closed
 ticket: ef9c9854-e3ed-4f86-a9e6-2bd9439456b4
 ticket_number: 21
 type: feature
 created: 2026-06-07
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-entity-contracts-v1.spec.md
 ---
 
 # TICKET-21-interaction-metadata-and-entity-contracts-v1

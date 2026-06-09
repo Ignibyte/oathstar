@@ -499,6 +499,7 @@ mod tests {
             inventory: Vec::new(),
             hidden,
             dialogue: None,
+            combat: None,
         }
     }
 

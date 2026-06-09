@@ -1848,3 +1848,49 @@ Revisit when:
 - Equipment slots / wear-remove are designed (Decision 013).
 - Stacking, weight, containers, or currency become needed.
 - Item `kind` graduates from a placeholder string to a real taxonomy/enum.
+
+## Decision 039: Entity Roles Are A Typed Vocabulary With Validated Contracts
+
+Status: Locked
+
+Date: 2026-06-08
+
+Implements Decision 004's role-contract layer (ticket #21) as the first typed slice
+— the validation that `mechanics-and-systems.md` previously flagged "not yet
+implemented."
+
+Entity capabilities stay authored as free-form `roles: Vec<String>` tags
+(Decision 022 — no content migration), but are parsed into a typed `Role`
+vocabulary: `Talkable`, `OathGiver`, `Shopkeeper`, `Combatant`, `Boss`
+(`"conversable"` is a synonym for `talkable`; `fixture` is the
+`EntityKind::Fixture` classification, not a role). Command handlers check
+capability through `Entity::has_role(Role)` rather than ad-hoc string matches.
+
+Role contracts are validated at the world construction boundary
+(`WorldDefinition::validate`, Decision 030): a failed contract is a typed
+`WorldValidationError::RoleContractUnmet { entity_id, role, missing }`, so broken
+content fails fast. v1 contracts are the minimum each role needs *where applicable*
+today:
+
+- Every interaction role requires `EntityKind::Actor` (a Fixture carries none).
+- `oath_giver` must additionally be named as some oath's `issuer_id`.
+- `talkable` / `shopkeeper` / `combatant` / `boss` need no further metadata in v1;
+  an optional `combat = { health }` is the future-combat hook, not required.
+
+Unknown role tags are ignored (forward-compatible), so a new role can be authored
+before it is typed. Roles are NOT serialized (the wire shape is unchanged); there is
+no class hierarchy.
+
+Rationale:
+
+- Replaces brittle `roles.iter().any(|r| r == "…")` checks with one typed source of
+  truth, and makes broken content (a shopkeeper on a fixture, an oath_giver wired to
+  no oath) fail at construction instead of as a confusing runtime no-op.
+- Keeps content additive and the engine free of a premature component/ECS hierarchy.
+
+Revisit when:
+
+- A role needs real required metadata (shop stock, full combat profile) — extend its
+  contract in `validate`.
+- Code-behind behavior dispatch lands (Decision 004's hook list).
+- Strict unknown-tag rejection or per-kind role taxonomies become worthwhile.
