@@ -170,3 +170,43 @@ export function toMenuModel(snapshot) {
     pack: toPack(snapshot),
   };
 }
+
+/**
+ * Battle modal view model (ticket #22): the active combat encounter as the modal
+ * renders it, or an inactive shell when `snapshot.combat` is absent. Pure — the
+ * glue opens the modal when `active` flips true (REQ-008) and closes it when it
+ * flips false (REQ-010). Participants are split by `side` so the right pane can
+ * group allies vs enemies (multi-party-ready, REQ-009); each carries an `hpPct`
+ * for its meter. Reads only server-authored `snapshot.combat`, never invented.
+ */
+export function toBattle(snapshot) {
+  const combat = snapshot?.combat;
+  if (!combat) {
+    return { active: false, round: 0, log: [], participants: [], allies: [], enemies: [] };
+  }
+  const participants = (Array.isArray(combat.participants) ? combat.participants : []).map(
+    toCombatant,
+  );
+  return {
+    active: true,
+    round: combat.round ?? 0,
+    log: Array.isArray(combat.log) ? combat.log : [],
+    participants,
+    allies: participants.filter((entry) => entry.side !== "enemy"),
+    enemies: participants.filter((entry) => entry.side === "enemy"),
+  };
+}
+
+function toCombatant(entry) {
+  const hp = entry.hp ?? 0;
+  const maxHp = entry.maxHp ?? 0;
+  return {
+    id: entry.id ?? null,
+    name: entry.name ?? entry.id ?? "Combatant",
+    hp,
+    maxHp,
+    side: entry.side ?? "enemy",
+    hpPct: pct(hp, maxHp),
+    defeated: hp <= 0,
+  };
+}

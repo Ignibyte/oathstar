@@ -101,6 +101,20 @@ inventory = ["bell_clapper"]
 # this yet (no combat system), it is the forward hook for combat.
 combat = { health = 12 }
 
+# A hungry road-scavenger that haunts the Ashen Road — the beginner combat
+# encounter (ticket #22). `hostile` makes it attackable (its combat profile is
+# required by the hostile contract); `combatant` marks it as a fighter. Winnable
+# by design: 9 health falls to three player strikes (4 each) and its 3-damage
+# bite leaves the player well above zero. It does not gate the oath/boss path.
+[[entities]]
+id = "ashen_stray"
+name = "Ashen Stray"
+description = "A scrawny, ash-matted hound with too many teeth and a low, wet growl."
+aliases = ["stray", "hound", "dog", "ashen stray"]
+kind = "actor"
+roles = ["combatant", "hostile"]
+combat = { health = 9, attack = 3 }
+
 # The beginner oath, offered by the module (module.toml `oath_id`). Swearing it
 # and resolving the Bell-Eater fulfills it.
 [[oaths]]

@@ -74,6 +74,11 @@ y = -2
 z = 0
 glyph = "."
 passable = true
+# Ticket #22: the beginner combat encounter happens here. `combat_enabled` opts
+# this room in (every other room stays non-combat by default), and the Ashen
+# Stray is placed so `attack` can engage it.
+combat_enabled = true
+entities = ["ashen_stray"]
 
 [rooms.exits]
 south = "north_gate"

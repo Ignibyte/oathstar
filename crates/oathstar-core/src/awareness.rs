@@ -473,6 +473,7 @@ mod tests {
             passable: true,
             entities: Vec::new(),
             items: Vec::new(),
+            combat_enabled: false,
         }
     }
 

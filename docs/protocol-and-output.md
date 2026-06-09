@@ -30,6 +30,14 @@ Examples:
 
 Those events can be rendered differently for different clients.
 
+**Implemented (ticket #22).** Combat v1 emits the per-strike play-by-play as
+`LogMessage { component: CombatMessage }` plus typed `CombatStarted` /
+`CombatEnded { outcome }` lifecycle markers, all on the `Combat` channel (the
+finer `CombatHit` / `CombatMiss` granularity above is deferred). The
+`oathstar-datastar` layer renders each into a `danger`-variant feed `<article>`;
+the JSON snapshot carries the live encounter as `GameSnapshot.combat`
+(`CombatSnapshot` — a side-tagged participant list) for the client's battle modal.
+
 ## Representations
 
 JSON representation, reserved for maps/canvas data, diagnostics, tests, and

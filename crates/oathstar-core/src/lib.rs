@@ -6,9 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use awareness::{AwarenessKind, RadiusConfig};
 use command::{parse, Command, Direction};
 use oathstar_protocol::{
-    CommandRequest, CommandResponse, EventChannel, GameEvent, GameEventKind, GameSnapshot,
-    MapRoomSnapshot, MapSnapshot, NearbySnapshot, OathSnapshot, OathStatus, OutputComponent,
-    PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
+    CombatOutcome, CombatSnapshot, CombatantSnapshot, CommandRequest, CommandResponse,
+    EventChannel, GameEvent, GameEventKind, GameSnapshot, MapRoomSnapshot, MapSnapshot,
+    NearbySnapshot, OathSnapshot, OathStatus, OutputComponent, PackItemSnapshot, PlayerSnapshot,
+    RoomSnapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +56,12 @@ pub struct RoomDefinition {
     /// Ids of items lying in this room (item *room-placement* by reference).
     #[serde(default)]
     pub items: Vec<String>,
+    /// Whether combat may start in this room (ticket #22). Additive and authored;
+    /// `#[serde(default)]` keeps every existing room non-combat (`false`), so
+    /// `attack` is refused here unless a module opts the room in. Engine-only —
+    /// not surfaced in the room snapshot.
+    #[serde(default)]
+    pub combat_enabled: bool,
 }
 
 /// A top-level region of the world. Rooms reference a region by id; the registry
@@ -120,13 +127,18 @@ pub struct Entity {
     pub combat: Option<CombatProfile>,
 }
 
-/// Future-combat-ready stats for a `combatant` entity (ticket #21). The
-/// `combatant` role does not require it in v1; it is the authored hook a future
-/// combat system reads.
+/// Authored combat stats for a `combatant`/`hostile` entity (ticket #21,
+/// consumed by the combat loop in #22).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CombatProfile {
-    /// Hit points. Authored; consumed by a future combat system.
+    /// Hit points — the combatant's starting and maximum health.
     pub health: u32,
+    /// Damage this combatant deals to the player per return strike (ticket #22).
+    /// Additive and authored; `#[serde(default)]` keeps an older
+    /// `combat = { health = N }` (no `attack`) valid, defaulting to 0 (a
+    /// combatant that deals no damage).
+    #[serde(default)]
+    pub attack: u32,
 }
 
 /// A typed interaction capability declared by an entity's role tags (ticket #21).
@@ -146,6 +158,9 @@ pub enum Role {
     Combatant,
     /// A `confront` endpoint (tag `"boss"`).
     Boss,
+    /// A hostile that `attack` engages to start combat (tag `"hostile"`, ticket
+    /// #22). Its contract requires a [`CombatProfile`] so it can be fought.
+    Hostile,
 }
 
 impl Role {
@@ -160,6 +175,7 @@ impl Role {
             "shopkeeper" => Some(Self::Shopkeeper),
             "combatant" => Some(Self::Combatant),
             "boss" => Some(Self::Boss),
+            "hostile" => Some(Self::Hostile),
             _ => None,
         }
     }
@@ -173,6 +189,7 @@ impl Role {
             Self::Shopkeeper => "shopkeeper",
             Self::Combatant => "combatant",
             Self::Boss => "boss",
+            Self::Hostile => "hostile",
         }
     }
 }
@@ -583,6 +600,14 @@ impl WorldDefinition {
                         missing: "an oath whose issuer_id names this entity".to_string(),
                     });
                 }
+                if role == Role::Hostile && entity.combat.is_none() {
+                    return Err(WorldValidationError::RoleContractUnmet {
+                        entity_id: entity_id.clone(),
+                        role: role.as_str().to_string(),
+                        missing: "a combat profile (health) so the hostile can be fought"
+                            .to_string(),
+                    });
+                }
             }
         }
 
@@ -620,6 +645,11 @@ pub struct GameState {
     /// `#[serde(default)]` keeps older saved state (without it) loadable.
     #[serde(default)]
     pub offered_oath_id: Option<String>,
+    /// The active combat encounter (ticket #22). `None` outside combat; set when
+    /// `attack` starts a fight and cleared the moment it resolves (win or loss).
+    /// `#[serde(default)]` keeps older saved state (without it) loadable.
+    #[serde(default)]
+    pub combat: Option<CombatState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -632,6 +662,45 @@ pub struct PlayerState {
     pub max_hp: i32,
     pub focus: i32,
     pub max_focus: i32,
+}
+
+/// Damage the player deals per strike (ticket #22). Fixed and deterministic (no
+/// RNG) so combat stays fully testable and mutation-killable; tunable in a later
+/// balance pass.
+const PLAYER_STRIKE_DAMAGE: i32 = 4;
+
+/// An in-progress combat encounter (ticket #22), held on [`GameState::combat`].
+///
+/// Server-authoritative and deterministic. Enemy stats are copied from the
+/// hostile's [`CombatProfile`] when combat starts, so resolution is
+/// self-contained — it survives removing the defeated entity from the room on
+/// victory. The player's HP lives on [`PlayerState`]; only the enemy's HP is
+/// tracked here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CombatState {
+    /// The enemy entity's id.
+    pub enemy_id: String,
+    /// The enemy's display name.
+    pub enemy_name: String,
+    /// The enemy's current hit points (clamped at zero).
+    pub enemy_hp: i32,
+    /// The enemy's maximum hit points.
+    pub enemy_max_hp: i32,
+    /// Damage the enemy deals to the player per return strike.
+    pub enemy_attack: i32,
+    /// Rounds resolved so far (1 after the opening round).
+    pub round: u32,
+    /// The battle play-by-play lines, oldest first.
+    pub log: Vec<String>,
+}
+
+/// A hostile resolved as the target of `attack`, with its authored stats copied
+/// out so [`Engine::start_combat`] can build a self-contained [`CombatState`].
+struct ResolvedHostile {
+    id: String,
+    name: String,
+    health: u32,
+    attack: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -674,6 +743,7 @@ impl Engine {
             oath: None,
             pack: Vec::new(),
             offered_oath_id: None,
+            combat: None,
         };
 
         Ok(Self {
@@ -712,6 +782,7 @@ impl Engine {
                 status: progress.status,
             }),
             pack: self.pack_snapshot(),
+            combat: self.combat_snapshot(),
         }
     }
 
@@ -760,7 +831,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down, swear, confront, talk, take, drop, inventory.",
+                    "Try: look, north, south, east, west, up, down, swear, confront, attack, talk, take, drop, inventory.",
                 ));
             }
             Command::Look { target: None } => {
@@ -782,6 +853,11 @@ impl Engine {
             Command::Confront => {
                 let (accepted, confront_events) = self.confront();
                 events.extend(confront_events);
+                return self.response(accepted, events);
+            }
+            Command::Attack { target } => {
+                let (accepted, attack_events) = self.attack(target.as_deref());
+                events.extend(attack_events);
                 return self.response(accepted, events);
             }
             Command::Talk { target } => {
@@ -1335,6 +1411,239 @@ impl Engine {
         )
     }
 
+    /// Resolve and perform an `attack`/`strike`/`fight` (ticket #22).
+    ///
+    /// While a fight is underway it resolves the next round against the active
+    /// enemy; otherwise it tries to start one. Returns `(accepted, events)` like
+    /// the other handlers; refusals carry `accepted = false` and mutate nothing.
+    fn attack(&mut self, target: Option<&str>) -> (bool, Vec<GameEvent>) {
+        if self.state.combat.is_some() {
+            let mut events = Vec::new();
+            self.resolve_combat_round(&mut events);
+            return (true, events);
+        }
+        self.start_combat(target)
+    }
+
+    /// Start a fight against a hostile in the current room (ticket #22, REQ-001).
+    ///
+    /// Gates on the room's `combat_enabled` flag (REQ-005), resolves the hostile
+    /// (named, or the first one present), copies its authored stats into a
+    /// self-contained [`CombatState`], emits [`GameEventKind::CombatStarted`], and
+    /// resolves the opening round. A failed gate or resolution refuses cleanly with
+    /// no state change.
+    fn start_combat(&mut self, target: Option<&str>) -> (bool, Vec<GameEvent>) {
+        let room = self.current_room().clone();
+        if !room.combat_enabled {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    "This is no place for a fight.",
+                )],
+            );
+        }
+
+        let hostile = match self.find_hostile(&room, target) {
+            Ok(hostile) => hostile,
+            Err(message) => {
+                return (
+                    false,
+                    vec![self.log(
+                        EventChannel::Narrative,
+                        OutputComponent::NarrativeMessage,
+                        message,
+                    )],
+                );
+            }
+        };
+
+        let enemy_max_hp = i32::try_from(hostile.health).unwrap_or(i32::MAX);
+        let enemy_attack = i32::try_from(hostile.attack).unwrap_or(i32::MAX);
+        self.state.combat = Some(CombatState {
+            enemy_id: hostile.id.clone(),
+            enemy_name: hostile.name.clone(),
+            enemy_hp: enemy_max_hp,
+            enemy_max_hp,
+            enemy_attack,
+            round: 0,
+            log: Vec::new(),
+        });
+
+        let mut events = vec![self.event(
+            EventChannel::Combat,
+            GameEventKind::CombatStarted {
+                enemy_id: hostile.id,
+                enemy_name: hostile.name.clone(),
+                text: format!("{} turns on you. Steel yourself.", hostile.name),
+            },
+        )];
+        self.resolve_combat_round(&mut events);
+        (true, events)
+    }
+
+    /// Find the hostile `attack` should engage (ticket #22). `attack <name>`
+    /// resolves the named thing through the shared proximity resolver and requires
+    /// a reachable, hostile actor; a bare `attack` engages the first hostile placed
+    /// in this room. Returns the resolved hostile or a player-facing refusal line.
+    fn find_hostile(
+        &self,
+        room: &RoomDefinition,
+        target: Option<&str>,
+    ) -> Result<ResolvedHostile, String> {
+        let Some(name) = target else {
+            return room
+                .entities
+                .iter()
+                .find_map(|entity_id| self.hostile_stats(entity_id))
+                .ok_or_else(|| "There is nothing here to fight.".to_string());
+        };
+        self.resolve_named_hostile(room, name)
+    }
+
+    /// Resolve `attack <name>` to a reachable hostile actor, or a refusal line.
+    fn resolve_named_hostile(
+        &self,
+        room: &RoomDefinition,
+        target: &str,
+    ) -> Result<ResolvedHostile, String> {
+        let radii = RadiusConfig::default();
+        match awareness::resolve_target(&self.world, room, &radii, target) {
+            None => Err(format!("You see nothing like '{target}' here to fight.")),
+            Some(found) if found.kind != AwarenessKind::Actor => {
+                Err(format!("You cannot fight {}.", found.name))
+            }
+            Some(found) if !found.proximity.is_interactable() => {
+                Err(format!("{} is too far away to fight.", found.name))
+            }
+            Some(found) => self
+                .hostile_stats(&found.id)
+                .ok_or_else(|| format!("{} is not something you can attack.", found.name)),
+        }
+    }
+
+    /// The combat stats of `entity_id` if it declares `Role::Hostile`, else `None`
+    /// (a non-hostile is filtered by `has_role`). The entity lookup and the combat
+    /// profile are construction invariants, not runtime conditions: callers pass a
+    /// world-resolved id, and `validate_entity_contracts` (run in `try_new`) rejects
+    /// any hostile lacking a combat profile — so both `expect`s are unreachable for
+    /// a validated world (ticket #21/#22).
+    fn hostile_stats(&self, entity_id: &str) -> Option<ResolvedHostile> {
+        let entity = self
+            .world
+            .entities
+            .get(entity_id)
+            .expect("hostile_stats is only called with a world-resolved entity id");
+        if !entity.has_role(Role::Hostile) {
+            return None;
+        }
+        let combat = entity
+            .combat
+            .as_ref()
+            .expect("the hostile role contract guarantees a combat profile (validated in try_new)");
+        Some(ResolvedHostile {
+            id: entity.id.clone(),
+            name: entity.name.clone(),
+            health: combat.health,
+            attack: combat.attack,
+        })
+    }
+
+    /// Resolve one combat round against the active enemy (ticket #22): the player
+    /// strikes, and — if the enemy survives — the enemy strikes back. Either side
+    /// reaching zero HP ends the fight (REQ-002/003/004). A no-op when no fight is
+    /// active. Each line is recorded on the battle log (for the modal) and the feed.
+    fn resolve_combat_round(&mut self, events: &mut Vec<GameEvent>) {
+        let damage = PLAYER_STRIKE_DAMAGE;
+        let (player_line, enemy_dead, enemy_name, enemy_attack) = {
+            let combat = self
+                .state
+                .combat
+                .as_mut()
+                .expect("resolve_combat_round is only called with an active encounter");
+            combat.round += 1;
+            combat.enemy_hp = combat.enemy_hp.saturating_sub(damage).max(0);
+            let line = format!(
+                "You strike {} for {damage} ({}/{}).",
+                combat.enemy_name, combat.enemy_hp, combat.enemy_max_hp
+            );
+            combat.log.push(line.clone());
+            (
+                line,
+                combat.enemy_hp <= 0,
+                combat.enemy_name.clone(),
+                combat.enemy_attack,
+            )
+        };
+        events.push(self.log(
+            EventChannel::Combat,
+            OutputComponent::CombatMessage,
+            player_line,
+        ));
+        if enemy_dead {
+            self.end_combat(CombatOutcome::Victory, events);
+            return;
+        }
+
+        self.state.player.hp = self.state.player.hp.saturating_sub(enemy_attack).max(0);
+        let player_hp = self.state.player.hp;
+        let player_max_hp = self.state.player.max_hp;
+        let enemy_line =
+            format!("{enemy_name} hits you for {enemy_attack} ({player_hp}/{player_max_hp}).");
+        self.state
+            .combat
+            .as_mut()
+            .expect("combat remains active until a combatant falls")
+            .log
+            .push(enemy_line.clone());
+        events.push(self.log(
+            EventChannel::Combat,
+            OutputComponent::CombatMessage,
+            enemy_line,
+        ));
+        if player_hp <= 0 {
+            self.end_combat(CombatOutcome::Defeat, events);
+        }
+    }
+
+    /// End the active encounter with `outcome` (ticket #22, REQ-004): emit the
+    /// typed [`GameEventKind::CombatEnded`] marker carrying the compact feed
+    /// summary, apply the outcome (remove the defeated enemy on victory; revive the
+    /// player at full HP on defeat — death penalties are out of scope), and clear
+    /// combat state. A no-op when no fight is active.
+    fn end_combat(&mut self, outcome: CombatOutcome, events: &mut Vec<GameEvent>) {
+        let combat = self
+            .state
+            .combat
+            .take()
+            .expect("end_combat is only called mid-encounter (combat is active)");
+        let enemy_name = combat.enemy_name;
+        let text = match outcome {
+            CombatOutcome::Victory => {
+                self.remove_entity_everywhere(&combat.enemy_id);
+                format!("You have defeated {enemy_name}. Victory!")
+            }
+            CombatOutcome::Defeat => {
+                self.state.player.hp = self.state.player.max_hp;
+                format!("{enemy_name} has bested you. You wake later, battered but whole.")
+            }
+        };
+        events.push(self.event(
+            EventChannel::Combat,
+            GameEventKind::CombatEnded { outcome, text },
+        ));
+    }
+
+    /// Remove an entity's room placement everywhere it appears (ticket #22), so a
+    /// defeated enemy leaves no corpse to re-fight. Mirrors `take_at`'s removal of a
+    /// taken item from its room.
+    fn remove_entity_everywhere(&mut self, entity_id: &str) {
+        for room in self.world.rooms.values_mut() {
+            room.entities.retain(|id| id != entity_id);
+        }
+    }
+
     fn current_room(&self) -> &RoomDefinition {
         // Invariant (ticket #2 / REQ-004): `current_room_id` is always a key in
         // `world.rooms`. `Engine::try_new` rejects a world whose start room is
@@ -1432,6 +1741,35 @@ impl Engine {
             .collect()
     }
 
+    /// The active combat encounter as additive snapshot data (ticket #22), or
+    /// `None` outside combat. Participants are a side-tagged list — the player and
+    /// the enemy in v1 — so the client's battle modal renders both sides and the
+    /// layout extends to multiple combatants later.
+    fn combat_snapshot(&self) -> Option<CombatSnapshot> {
+        let combat = self.state.combat.as_ref()?;
+        let player = &self.state.player;
+        Some(CombatSnapshot {
+            round: combat.round,
+            participants: vec![
+                CombatantSnapshot {
+                    id: player.id.clone(),
+                    name: player.name.clone(),
+                    hp: player.hp,
+                    max_hp: player.max_hp,
+                    side: "player".to_string(),
+                },
+                CombatantSnapshot {
+                    id: combat.enemy_id.clone(),
+                    name: combat.enemy_name.clone(),
+                    hp: combat.enemy_hp,
+                    max_hp: combat.enemy_max_hp,
+                    side: "enemy".to_string(),
+                },
+            ],
+            log: combat.log.clone(),
+        })
+    }
+
     fn log(
         &mut self,
         channel: EventChannel,
@@ -1481,6 +1819,7 @@ mod tests {
                 passable: true,
                 entities: Vec::new(),
                 items: Vec::new(),
+                combat_enabled: false,
             },
         );
         rooms.insert(
@@ -1499,6 +1838,7 @@ mod tests {
                 passable: true,
                 entities: Vec::new(),
                 items: Vec::new(),
+                combat_enabled: false,
             },
         );
 
@@ -1712,6 +2052,7 @@ mod tests {
             passable,
             entities: Vec::new(),
             items: Vec::new(),
+            combat_enabled: false,
         }
     }
 
@@ -3667,4 +4008,514 @@ mod tests {
             "message: {msg}"
         );
     }
+
+    // ============================================================
+    //  ticket #22 — combat encounter v1
+    // ============================================================
+
+    // A world for combat tests. Start room "field" (0,0,0, combat_enabled) holds,
+    // in placement order: a hostile "stray" (health/attack from args), a SECOND
+    // hostile "brute" (so bare-attack's first-hostile order is testable), a
+    // non-hostile actor "elder", and a fixture "idol" — all at distance 0. "haven"
+    // (combat_enabled = false) is the gate-refusal room; "clearing" (combat_enabled,
+    // no hostile) is the no-target room; "ridge" (x = 2, combat_enabled) holds a
+    // distant hostile "wolf" (visible, not interactable) for the too-far path.
+    fn combat_world(stray_health: u32, stray_attack: u32) -> WorldDefinition {
+        let mut field = room_with(
+            "field",
+            true,
+            BTreeMap::from([
+                ("east".to_string(), "haven".to_string()),
+                ("south".to_string(), "clearing".to_string()),
+            ]),
+        );
+        field.combat_enabled = true;
+        field.entities = vec![
+            "stray".to_string(),
+            "brute".to_string(),
+            "elder".to_string(),
+            "idol".to_string(),
+        ];
+
+        let haven = room_with(
+            "haven",
+            true,
+            BTreeMap::from([("west".to_string(), "field".to_string())]),
+        ); // combat_enabled stays false — the gate-refusal room.
+
+        let mut clearing = room_with("clearing", true, BTreeMap::new());
+        clearing.combat_enabled = true; // enabled, but holds no hostile.
+
+        let mut ridge = room_with("ridge", true, BTreeMap::new());
+        ridge.x = 2; // distance 2 from "field" → visible, not interactable.
+        ridge.combat_enabled = true;
+        ridge.entities = vec!["wolf".to_string()];
+
+        let mut rooms = BTreeMap::new();
+        rooms.insert("field".to_string(), field);
+        rooms.insert("haven".to_string(), haven);
+        rooms.insert("clearing".to_string(), clearing);
+        rooms.insert("ridge".to_string(), ridge);
+        let mut world = world_with("field", rooms);
+
+        let mut stray = entity("stray", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        stray.name = "Stray".to_string();
+        stray.combat = Some(CombatProfile {
+            health: stray_health,
+            attack: stray_attack,
+        });
+        world.entities.insert("stray".to_string(), stray);
+
+        let mut brute = entity("brute", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        brute.name = "Brute".to_string();
+        brute.combat = Some(CombatProfile {
+            health: 99,
+            attack: 99,
+        });
+        world.entities.insert("brute".to_string(), brute);
+
+        let mut elder = entity("elder", EntityKind::Actor, &["talkable"], &[]);
+        elder.name = "Elder".to_string();
+        world.entities.insert("elder".to_string(), elder);
+
+        let mut idol = entity("idol", EntityKind::Fixture, &[], &[]);
+        idol.name = "Idol".to_string();
+        world.entities.insert("idol".to_string(), idol);
+
+        let mut wolf = entity("wolf", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        wolf.name = "Wolf".to_string();
+        wolf.combat = Some(CombatProfile {
+            health: 5,
+            attack: 1,
+        });
+        world.entities.insert("wolf".to_string(), wolf);
+
+        world
+    }
+
+    fn combat_engine(stray_health: u32, stray_attack: u32) -> Engine {
+        Engine::try_new(combat_world(stray_health, stray_attack)).expect("valid combat world")
+    }
+
+    // The active combat sub-state of a response snapshot.
+    fn active_combat(response: &CommandResponse) -> oathstar_protocol::CombatSnapshot {
+        response
+            .snapshot
+            .combat
+            .clone()
+            .expect("combat is active in this snapshot")
+    }
+
+    fn enemy_of(
+        combat: &oathstar_protocol::CombatSnapshot,
+    ) -> &oathstar_protocol::CombatantSnapshot {
+        combat
+            .participants
+            .iter()
+            .find(|p| p.side == "enemy")
+            .expect("an enemy participant")
+    }
+
+    fn player_of(
+        combat: &oathstar_protocol::CombatSnapshot,
+    ) -> &oathstar_protocol::CombatantSnapshot {
+        combat
+            .participants
+            .iter()
+            .find(|p| p.side == "player")
+            .expect("a player participant")
+    }
+
+    fn room_has(response: &CommandResponse, name: &str) -> bool {
+        response
+            .snapshot
+            .room
+            .contents
+            .iter()
+            .any(|thing| thing.name == name)
+    }
+
+    // C1/REQ-001: `attack <hostile>` in a combat-enabled room starts an encounter
+    // and emits CombatStarted naming the enemy by id.
+    #[test]
+    fn attack_named_hostile_starts_combat() {
+        let mut engine = combat_engine(10, 3);
+        let response = engine.handle_command(cmd("attack stray"));
+        assert!(response.accepted, "attacking a hostile is accepted");
+        assert_eq!(enemy_of(&active_combat(&response)).name, "Stray");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (EventChannel::Combat, GameEventKind::CombatStarted { enemy_id, enemy_name, .. })
+                    if enemy_id == "stray" && enemy_name == "Stray"
+            )),
+            "emits CombatStarted{{stray, Stray}} on the Combat channel"
+        );
+    }
+
+    // C2/REQ-001 + first-hostile order: a bare `attack` engages the FIRST hostile in
+    // placement order (stray), not the second (brute) — locks find_hostile ordering.
+    #[test]
+    fn bare_attack_engages_first_hostile_in_room() {
+        let mut engine = combat_engine(10, 3);
+        let response = engine.handle_command(cmd("attack"));
+        assert!(response.accepted);
+        assert_eq!(
+            enemy_of(&active_combat(&response)).name,
+            "Stray",
+            "bare attack engages the first-authored hostile, not Brute"
+        );
+    }
+
+    // C3/REQ-002: a strike deals exactly PLAYER_STRIKE_DAMAGE to the enemy and emits
+    // a Combat/CombatMessage event. (attack 0 keeps the player's HP out of it.)
+    #[test]
+    fn strike_deals_deterministic_damage_and_emits_combat_message() {
+        let mut engine = combat_engine(10, 0);
+        let response = engine.handle_command(cmd("strike"));
+        assert_eq!(
+            enemy_of(&active_combat(&response)).hp,
+            10 - PLAYER_STRIKE_DAMAGE,
+            "enemy HP drops by exactly the strike damage"
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (
+                    EventChannel::Combat,
+                    GameEventKind::LogMessage { component: OutputComponent::CombatMessage, text }
+                ) if text.contains("You strike Stray")
+            )),
+            "emits a Combat/CombatMessage strike line"
+        );
+    }
+
+    // C4/REQ-003: a surviving enemy returns deterministic damage to the player.
+    #[test]
+    fn surviving_enemy_returns_deterministic_damage() {
+        let mut engine = combat_engine(20, 3);
+        let response = engine.handle_command(cmd("fight"));
+        assert_eq!(
+            player_of(&active_combat(&response)).hp,
+            20 - 3,
+            "player HP drops by exactly the enemy's attack"
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. } if text.contains("Stray hits you for 3")
+            )),
+            "emits the enemy's return-strike line"
+        );
+    }
+
+    // C5/REQ-004 victory (enemy HP lands EXACTLY on 0 → kills `<= 0` → `>`) + enemy
+    // removal + bystander survival (kills remove_entity_everywhere `!=` → `==`).
+    #[test]
+    fn victory_at_zero_hp_ends_combat_removes_enemy_keeps_bystander() {
+        let mut engine = combat_engine(PLAYER_STRIKE_DAMAGE as u32, 0);
+        let response = engine.handle_command(cmd("attack stray"));
+        assert!(response.accepted);
+        assert!(
+            response.snapshot.combat.is_none(),
+            "combat state is cleared on victory"
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (
+                    EventChannel::Combat,
+                    GameEventKind::CombatEnded {
+                        outcome: CombatOutcome::Victory,
+                        ..
+                    }
+                )
+            )),
+            "emits CombatEnded{{Victory}}"
+        );
+        assert!(
+            !room_has(&response, "Stray"),
+            "the defeated enemy is removed"
+        );
+        assert!(
+            room_has(&response, "Elder"),
+            "a bystander survives the removal"
+        );
+        assert_eq!(
+            response.snapshot.player.hp, 20,
+            "no damage taken (attack 0)"
+        );
+    }
+
+    // C6/REQ-004 defeat (player HP lands EXACTLY on 0 → kills the player-side
+    // `<= 0` → `>`) → revive to max_hp, combat cleared.
+    #[test]
+    fn defeat_at_zero_hp_revives_player_and_clears_combat() {
+        // health 99 survives the 4-damage strike; attack 20 drops the player 20→0.
+        let mut engine = combat_engine(99, 20);
+        let response = engine.handle_command(cmd("attack stray"));
+        assert!(response.accepted);
+        assert!(
+            response.snapshot.combat.is_none(),
+            "combat state is cleared on defeat"
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                (&e.channel, &e.kind),
+                (
+                    EventChannel::Combat,
+                    GameEventKind::CombatEnded {
+                        outcome: CombatOutcome::Defeat,
+                        ..
+                    }
+                )
+            )),
+            "emits CombatEnded{{Defeat}}"
+        );
+        assert_eq!(
+            response.snapshot.player.hp, 20,
+            "the player revives to max_hp (no death penalty in v1)"
+        );
+    }
+
+    // C7/REQ-005: `attack` in a non-combat-enabled room is refused with no state
+    // change.
+    #[test]
+    fn attack_refused_when_room_not_combat_enabled() {
+        let mut engine = combat_engine(10, 3);
+        assert!(engine.handle_command(cmd("east")).accepted, "move to haven");
+        let response = engine.handle_command(cmd("attack stray"));
+        assert!(!response.accepted, "no combat in a non-combat-enabled room");
+        assert!(
+            log_text(&response).contains("no place for a fight"),
+            "refusal explains the room is not combat-enabled: {}",
+            log_text(&response)
+        );
+        assert!(response.snapshot.combat.is_none(), "no combat started");
+        assert_eq!(response.snapshot.player.hp, 20, "no damage on a refusal");
+    }
+
+    // C8/REQ-005: `attack` in a combat-enabled room with no hostile is refused.
+    #[test]
+    fn attack_refused_when_no_hostile_present() {
+        let mut engine = combat_engine(10, 3);
+        assert!(
+            engine.handle_command(cmd("south")).accepted,
+            "move to the empty clearing"
+        );
+        let response = engine.handle_command(cmd("attack"));
+        assert!(!response.accepted, "nothing to fight");
+        assert!(
+            log_text(&response).contains("nothing here to fight"),
+            "refusal: {}",
+            log_text(&response)
+        );
+        assert!(response.snapshot.combat.is_none());
+    }
+
+    // C9/REQ-005 + REQ-007 shape: a non-hostile actor and a fixture are not
+    // attackable (the boss/NPC stays safe). Covers two resolve_named_hostile arms.
+    #[test]
+    fn attack_refused_on_non_hostile_actor_and_fixture() {
+        let mut engine = combat_engine(10, 3);
+        let on_elder = engine.handle_command(cmd("attack elder"));
+        assert!(!on_elder.accepted, "a non-hostile actor is not attackable");
+        assert!(
+            log_text(&on_elder).contains("not something you can attack"),
+            "elder refusal: {}",
+            log_text(&on_elder)
+        );
+        assert!(on_elder.snapshot.combat.is_none());
+
+        let on_idol = engine.handle_command(cmd("attack idol"));
+        assert!(!on_idol.accepted, "a fixture is not attackable");
+        assert!(
+            log_text(&on_idol).contains("cannot fight"),
+            "idol refusal: {}",
+            log_text(&on_idol)
+        );
+    }
+
+    // C10/REQ-005: an unknown name and a visible-but-out-of-reach hostile are both
+    // refused — covers the remaining two resolve_named_hostile arms.
+    #[test]
+    fn attack_refused_on_unknown_and_too_far_targets() {
+        let mut engine = combat_engine(10, 3);
+        let unknown = engine.handle_command(cmd("attack dragon"));
+        assert!(!unknown.accepted);
+        assert!(
+            log_text(&unknown).contains("nothing like 'dragon'"),
+            "unknown refusal: {}",
+            log_text(&unknown)
+        );
+
+        let far = engine.handle_command(cmd("attack wolf"));
+        assert!(!far.accepted, "the distant wolf is out of reach");
+        assert!(
+            log_text(&far).contains("too far away to fight"),
+            "too-far refusal: {}",
+            log_text(&far)
+        );
+    }
+
+    // In-combat: a follow-up `attack` (even naming a different entity) advances the
+    // round against the ACTIVE enemy; the round counter increments 1 → 2.
+    #[test]
+    fn attack_in_combat_ignores_target_and_advances_round() {
+        let mut engine = combat_engine(20, 1);
+        let first = engine.handle_command(cmd("attack stray"));
+        assert_eq!(active_combat(&first).round, 1, "opening round is 1");
+
+        // Naming the other hostile must NOT switch enemies mid-fight.
+        let second = engine.handle_command(cmd("attack brute"));
+        let combat = active_combat(&second);
+        assert_eq!(combat.round, 2, "the round counter advances to 2");
+        assert_eq!(enemy_of(&combat).name, "Stray", "still fighting the Stray");
+        assert_eq!(
+            enemy_of(&combat).hp,
+            20 - PLAYER_STRIKE_DAMAGE * 2,
+            "two strikes have landed on the same enemy"
+        );
+    }
+
+    // C18/REQ-008/009: the combat snapshot exposes both participants by value (kills
+    // combat_snapshot's Some(Default) mutant) plus the round and the battle log.
+    #[test]
+    fn combat_snapshot_exposes_participants_round_and_log_by_value() {
+        let mut engine = combat_engine(10, 3);
+        let response = engine.handle_command(cmd("attack stray"));
+        let combat = active_combat(&response);
+        assert_eq!(combat.round, 1);
+        assert_eq!(combat.participants.len(), 2);
+
+        let player = player_of(&combat);
+        assert_eq!(player.side, "player");
+        assert_eq!(player.hp, 17);
+        assert_eq!(player.max_hp, 20);
+
+        let enemy = enemy_of(&combat);
+        assert_eq!(enemy.side, "enemy");
+        assert_eq!(enemy.name, "Stray");
+        assert_eq!(enemy.hp, 6);
+        assert_eq!(enemy.max_hp, 10);
+
+        assert_eq!(combat.log.len(), 2, "one player line + one enemy line");
+        assert!(combat.log[0].contains("You strike Stray"));
+        assert!(combat.log[1].contains("Stray hits you"));
+    }
+
+    // C19/REQ-008: outside a fight the snapshot carries no combat sub-state.
+    #[test]
+    fn snapshot_has_no_combat_outside_a_fight() {
+        let engine = combat_engine(10, 3);
+        assert!(
+            engine.snapshot().combat.is_none(),
+            "no combat sub-state before any attack"
+        );
+    }
+
+    // I5: a CombatProfile health beyond i32::MAX saturates to i32::MAX (covers the
+    // `try_from(..).unwrap_or(i32::MAX)` path; attack 1 keeps the player alive).
+    #[test]
+    fn oversized_combat_profile_saturates_to_i32_max() {
+        let mut field = room_with("field", true, BTreeMap::new());
+        field.combat_enabled = true;
+        field.entities = vec!["titan".to_string()];
+        let mut rooms = BTreeMap::new();
+        rooms.insert("field".to_string(), field);
+        let mut world = world_with("field", rooms);
+        let mut titan = entity("titan", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        titan.name = "Titan".to_string();
+        titan.combat = Some(CombatProfile {
+            health: u32::MAX,
+            attack: 1,
+        });
+        world.entities.insert("titan".to_string(), titan);
+        let mut engine = Engine::try_new(world).expect("valid titan world");
+
+        let response = engine.handle_command(cmd("attack titan"));
+        let combat = active_combat(&response);
+        let enemy = enemy_of(&combat);
+        assert_eq!(enemy.max_hp, i32::MAX, "health saturates to i32::MAX");
+        assert_eq!(enemy.hp, i32::MAX - PLAYER_STRIKE_DAMAGE);
+    }
+
+    // REQ-007 (core): a boss that is combatant-but-not-hostile is NOT attackable;
+    // the confront/oath path is the only resolution. (Bell-Eater shape, in core.)
+    #[test]
+    fn a_boss_without_the_hostile_role_is_not_attackable() {
+        // oath_world's "warden" is roles=["boss"] in a non-combat-enabled room.
+        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        assert!(
+            engine.handle_command(cmd("east")).accepted,
+            "reach the lair"
+        );
+        let response = engine.handle_command(cmd("attack warden"));
+        assert!(!response.accepted, "the boss is not attackable via combat");
+        assert!(response.snapshot.combat.is_none(), "no combat started");
+        // confront still resolves the boss (REQ-007): swear first, then confront.
+        let mut engine2 = Engine::try_new(oath_world()).expect("valid oath world");
+        assert!(engine2.handle_command(cmd("swear")).accepted);
+        assert!(engine2.handle_command(cmd("east")).accepted);
+        assert!(
+            engine2.handle_command(cmd("confront")).accepted,
+            "confront still fulfills the oath"
+        );
+    }
+
+    // C15: the `hostile` tag round-trips through the typed Role vocabulary.
+    #[test]
+    fn hostile_role_tag_round_trips() {
+        assert_eq!(Role::from_tag("hostile"), Some(Role::Hostile));
+        assert_eq!(Role::Hostile.as_str(), "hostile");
+        let hostile = entity("h", EntityKind::Actor, &["hostile"], &[]);
+        assert!(hostile.has_role(Role::Hostile));
+        assert!(!hostile.has_role(Role::Boss));
+    }
+
+    // C14: the hostile contract requires a combat profile; a hostile without one is
+    // rejected at validation, naming the entity/role/missing.
+    #[test]
+    fn hostile_without_combat_profile_is_rejected() {
+        let mut field = room_with("field", true, BTreeMap::new());
+        field.entities = vec!["ghoul".to_string()];
+        let mut rooms = BTreeMap::new();
+        rooms.insert("field".to_string(), field);
+        let mut world = world_with("field", rooms);
+        // hostile + Actor but NO combat profile → contract unmet.
+        world.entities.insert(
+            "ghoul".to_string(),
+            entity("ghoul", EntityKind::Actor, &["combatant", "hostile"], &[]),
+        );
+        let err = world
+            .validate()
+            .expect_err("a profileless hostile is invalid");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ghoul") && msg.contains("hostile") && msg.contains("combat profile"),
+            "names entity/role/missing: {msg}"
+        );
+
+        // The same entity WITH a combat profile validates.
+        let mut ok_world = world_with(
+            "field",
+            BTreeMap::from([("field".to_string(), {
+                let mut r = room_with("field", true, BTreeMap::new());
+                r.entities = vec!["ghoul".to_string()];
+                r
+            })]),
+        );
+        let mut ghoul = entity("ghoul", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        ghoul.combat = Some(CombatProfile {
+            health: 3,
+            attack: 1,
+        });
+        ok_world.entities.insert("ghoul".to_string(), ghoul);
+        assert_eq!(ok_world.validate(), Ok(()));
+    }
+    // C16 (CombatProfile.attack defaults to 0) and C17 (RoomDefinition.combat_enabled
+    // defaults to false) are proven by real-TOML deserialization in the
+    // oathstar-content tests (the Bell-Eater loads `attack: 0` from
+    // `combat = { health = 12 }`, and the boss roost loads `combat_enabled = false`
+    // from a flagless room) — core has no TOML/JSON dev-dependency to repeat them.
 }

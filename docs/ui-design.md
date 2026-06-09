@@ -71,6 +71,11 @@ Expected early content:
 
 - Nearby: actors, items, fixtures, and quick actions such as `talk`, `look`, and
   `examine`.
+- Nearby combat affordances: hostile actors should be visually flagged when the
+  server says they are hostile, should show whether they are attackable from the
+  current position/area, and should expose an Attack action only when valid.
+  Clicking a Nearby card should open an entity detail view that can show
+  disclosed stats while rendering hidden stats as unknown.
 - Oaths: current oath state, witness, region impact, progress, and break/keep
   implications.
 - Gear: equipment slots such as main hand, off hand, body, left earring, right
@@ -293,3 +298,11 @@ server-authoritative hypermedia shell (see `docs/decisions.md` Decision 032):
   `mapRenderConfig`), current z-plane only, Hi-DPI via `devicePixelRatio`, the room
   glyph drawn on-tile + room title via `aria-label`, no game-engine dependency; the
   server map stays renderer-agnostic JSON.
+- Ticket #22 added the **battle modal**: combat v1 opens a `<dialog id="battle-modal">`
+  (mirroring the room modal) with the battle log on the left and participant state on
+  the right — a pure, tested `toBattle` view-model in `src/client/snapshot.js` drawn by
+  a thin `renderBattle` seam in `client-app.js`. The client opens it when the snapshot
+  carries a `combat` sub-state, closes it when the fight resolves, and leaves the
+  compact result in the server-rendered feed — realizing the "focused modal/view" +
+  "leave a concise summary card" policy above. Combat events still stream to the feed
+  through the existing component catalog (the `Combat` channel renders `danger`).

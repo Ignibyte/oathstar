@@ -44,6 +44,8 @@ struct RoomToml {
     entities: Vec<String>,
     #[serde(default)]
     items: Vec<String>,
+    #[serde(default)]
+    combat_enabled: bool,
 }
 
 /// Regions, subregions, entities, and items for a module, deserialized directly
@@ -128,6 +130,7 @@ fn load_world_from_toml(
                 passable: room.passable,
                 entities: room.entities,
                 items: room.items,
+                combat_enabled: room.combat_enabled,
             },
         );
     }
@@ -441,9 +444,56 @@ mod tests {
         assert!(boss.has_role(oathstar_core::Role::Boss), "boss");
         assert_eq!(
             boss.combat,
-            Some(oathstar_core::CombatProfile { health: 12 }),
-            "future-combat-ready stats load by value"
+            Some(oathstar_core::CombatProfile {
+                health: 12,
+                attack: 0,
+            }),
+            "future-combat-ready stats load by value (attack defaults to 0)"
         );
         assert_eq!(world.validate(), Ok(()));
+    }
+
+    // C23 (ticket #22): the Ashen Stray is the beginner combat encounter — an Actor
+    // that is combatant + hostile with an authored combat profile (health 9 /
+    // attack 3). That the world loads at all proves the hostile contract is met (C22).
+    #[test]
+    fn beginner_ashen_stray_is_a_hostile_combatant() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let stray = world
+            .entities
+            .get("ashen_stray")
+            .expect("ashen_stray entity");
+        assert_eq!(stray.kind, oathstar_core::EntityKind::Actor);
+        assert!(stray.has_role(oathstar_core::Role::Combatant), "combatant");
+        assert!(stray.has_role(oathstar_core::Role::Hostile), "hostile");
+        assert_eq!(
+            stray.combat,
+            Some(oathstar_core::CombatProfile {
+                health: 9,
+                attack: 3,
+            }),
+            "authored combat stats load by value"
+        );
+    }
+
+    // C23 (ticket #22): the Ashen Road opts into combat and places the stray; the
+    // Bell-Eater roost stays non-combat (REQ-007 — the boss is confront-only).
+    #[test]
+    fn beginner_ashen_road_is_combat_enabled_and_boss_roost_is_not() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let road = world.rooms.get("ashen_road").expect("ashen_road room");
+        assert!(road.combat_enabled, "the Ashen Road is combat-enabled");
+        assert!(
+            road.entities.iter().any(|id| id == "ashen_stray"),
+            "the stray is placed on the road"
+        );
+        let roost = world
+            .rooms
+            .get("bell_eater_roost")
+            .expect("bell_eater_roost room");
+        assert!(
+            !roost.combat_enabled,
+            "the boss roost is not combat-enabled (Bell-Eater stays confront-only)"
+        );
     }
 }

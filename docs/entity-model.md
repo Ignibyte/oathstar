@@ -77,6 +77,7 @@ Combatant role requires:
 - Attack profile
 - Hostility state
 - Defeat behavior
+- Stat disclosure rules for what the player can inspect before or during combat
 
 Conversable role requires:
 
@@ -107,8 +108,9 @@ v1 vocabulary and contracts — the minimum each role needs *where applicable* t
 | `talkable` (synonym `conversable`) | must be an `Actor` |
 | `oath_giver` | must be an `Actor` **and** be named as some oath's `issuer_id` |
 | `shopkeeper` | must be an `Actor` (shop stock/economy deferred) |
-| `combatant` | must be an `Actor`; the optional `combat = { health }` is the future hook |
+| `combatant` | must be an `Actor`; the optional `combat = { health, attack }` is the combat profile (read by combat v1, ticket #22) |
 | `boss` | must be an `Actor` (a `confront` endpoint) |
+| `hostile` (ticket #22) | must be an `Actor` **and** carry a `combat` profile so it can be fought; `attack` engages a hostile in a `combat_enabled` room |
 | `fixture` | the `EntityKind::Fixture` classification — carries no interaction role |
 
 Command handlers check capability through `Entity::has_role(Role)` instead of
@@ -120,6 +122,11 @@ The richer per-role metadata sketched above (shop stock, a full combat profile,
 oath acceptance rules) and the code-behind hooks below attach in later tickets
 without changing this foundation: a role gains required metadata by extending its
 contract in `validate`, and behavior by referencing a registered behavior id.
+
+Ticket #23 will add the first player-facing hostile affordances: Nearby entries
+can be marked hostile/attackable by server-authored state, and an entity detail
+view can show disclosed combat stats while leaving hidden stats unknown. The
+client should not infer those values locally.
 
 ## Code-Behind Behavior
 

@@ -143,6 +143,12 @@ fn describe(event: &GameEvent) -> Option<(&'static str, &'static str, String)> {
             let (variant, label) = channel_variant_label(&event.channel);
             Some((variant, label, "Your oath is fulfilled.".to_owned()))
         }
+        GameEventKind::CombatStarted { text, .. } | GameEventKind::CombatEnded { text, .. } => {
+            // Both combat lifecycle markers carry their own feed text (ticket #22),
+            // rendered on the Combat channel like the combat-message play-by-play.
+            let (variant, label) = channel_variant_label(&event.channel);
+            Some((variant, label, text.clone()))
+        }
     }
 }
 
@@ -154,6 +160,8 @@ const fn kind_type(kind: &GameEventKind) -> &'static str {
         GameEventKind::RoomEntered { .. } => "room_entered",
         GameEventKind::OathSworn { .. } => "oath_sworn",
         GameEventKind::OathFulfilled { .. } => "oath_fulfilled",
+        GameEventKind::CombatStarted { .. } => "combat_started",
+        GameEventKind::CombatEnded { .. } => "combat_ended",
     }
 }
 
@@ -477,5 +485,62 @@ mod tests {
             "dedup compares against the last feed-visible event, not skipped ticks"
         );
         assert!(opening_patches(&[], None).is_empty(), "nothing to seed");
+    }
+
+    // C21 (ticket #22): the typed combat lifecycle events render on the Combat
+    // channel (danger variant), carry their own escaped text, and tag their type.
+    #[test]
+    fn combat_events_render_on_the_combat_channel() {
+        let started = GameEvent {
+            event_id: 11,
+            tick: 4,
+            channel: EventChannel::Combat,
+            kind: GameEventKind::CombatStarted {
+                enemy_id: "stray".to_owned(),
+                enemy_name: "Stray".to_owned(),
+                text: "Stray turns on you <ready>".to_owned(),
+            },
+        };
+        let html = render_feed_fragment(&started).expect("combat_started renders");
+        assert!(
+            html.contains(r#"class="log-entry danger""#),
+            "danger variant: {html}"
+        );
+        assert!(
+            html.contains(r#"data-channel="combat""#),
+            "combat channel: {html}"
+        );
+        assert!(
+            html.contains(r#"data-component="combat_started""#),
+            "combat_started type tag: {html}"
+        );
+        assert!(
+            html.contains("Stray turns on you &lt;ready&gt;"),
+            "escaped text body: {html}"
+        );
+        assert!(!html.contains("<ready>"), "no raw markup: {html}");
+
+        let ended = GameEvent {
+            event_id: 12,
+            tick: 5,
+            channel: EventChannel::Combat,
+            kind: GameEventKind::CombatEnded {
+                outcome: oathstar_protocol::CombatOutcome::Victory,
+                text: "You have defeated Stray. Victory!".to_owned(),
+            },
+        };
+        let html = render_feed_fragment(&ended).expect("combat_ended renders");
+        assert!(
+            html.contains(r#"data-component="combat_ended""#),
+            "combat_ended type tag: {html}"
+        );
+        assert!(
+            html.contains(r#"class="log-entry danger""#),
+            "danger variant: {html}"
+        );
+        assert!(
+            html.contains("You have defeated Stray. Victory!"),
+            "summary text in the feed: {html}"
+        );
     }
 }

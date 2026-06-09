@@ -2,6 +2,22 @@
 
 This document captures the current combat direction for Oathstar.
 
+> **v1 implemented** (ticket #22): a deliberately small, deterministic,
+> command-driven battle loop. `attack` / `strike` / `fight` engages a hostile
+> (`Role::Hostile`; its contract requires a `CombatProfile`) in a
+> `combat_enabled` room; the engine resolves one round per command — fixed player
+> damage plus the enemy's authored return strike, no RNG — ending in victory
+> (the enemy is removed) or defeat (the player revives at full HP; death
+> penalties deferred) and clearing combat state. Typed `CombatStarted` /
+> `CombatEnded { outcome }` events bracket the `CombatMessage` play-by-play on the
+> `Combat` channel, and the client opens a battle modal (left log / right
+> participants) that closes to a compact feed summary. The boss/oath `confront`
+> flow is unchanged (the Bell-Eater is not `hostile`, and its roost is not
+> `combat_enabled`). v1 is **command-driven, NOT the server pulse** described
+> below (Decision 023, deferred) — see `decisions.md` Decision 040. The pulse
+> timing, the full combat-state machine, combat roles, and alternate resolutions
+> below remain the long-horizon direction.
+
 ## Core Direction
 
 Combat is a core system, not a rare edge case.
@@ -55,6 +71,16 @@ Normal battles should be:
 ## Combat Timing
 
 Combat runs on server-authoritative pulses layered over the base world tick.
+
+Target follow-up cadence (ticket #24):
+
+- Combat is a repeating two-phase cycle until someone flees or dies.
+- Phase 1 resolves the initial exchange: baseline player/hostile hits and
+  immediate authored reactions.
+- Phase 2 is the skill window: if the player has queued or entered a skill, it
+  resolves; if not, the skill phase is skipped cleanly.
+- After Phase 2, the next cycle begins unless combat has ended through victory,
+  defeat, flee, or a future alternate resolution.
 
 Initial timing:
 

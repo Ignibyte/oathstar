@@ -267,6 +267,34 @@
           </div>
         </form>
       </dialog>
+
+      <!-- Battle modal (ticket #22): opened by the client when a combat snapshot
+           is present (REQ-008). Left pane = battle log, right pane = participant
+           state (REQ-009). Closes when combat resolves; the compact summary stays
+           in the feed (REQ-010). The Attack button issues the next round. -->
+      <dialog id="battle-modal" class="battle-modal" aria-labelledby="battle-modal-title">
+        <div class="battle-modal-shell">
+          <header class="battle-modal-header">
+            <h2 id="battle-modal-title" class="battle-modal-title">Battle</h2>
+            <span id="battle-round" class="battle-round"></span>
+          </header>
+          <div class="battle-modal-body">
+            <section class="battle-log-pane" aria-label="Battle log">
+              <h3 class="battle-subtitle">Battle</h3>
+              <ol id="battle-log" class="battle-log"></ol>
+            </section>
+            <aside class="battle-party-pane" aria-label="Combatants">
+              <h3 class="battle-subtitle">Combatants</h3>
+              <div id="battle-participants" class="battle-participants"></div>
+            </aside>
+          </div>
+          <footer class="battle-modal-actions">
+            <button id="battle-attack-button" class="battle-attack-button" type="button">
+              Attack
+            </button>
+          </footer>
+        </div>
+      </dialog>
     </main>
 
     <script type="module" src="./src/client-app.js"></script>

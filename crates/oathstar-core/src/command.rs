@@ -70,6 +70,11 @@ pub enum Command {
     Swear,
     /// `confront` / `challenge` — resolve the boss at the current room's endpoint.
     Confront,
+    /// `attack` / `strike` / `fight`, optionally with a target (ticket #22). A bare
+    /// verb engages the active foe (or the only hostile present); `attack <name>`
+    /// names the hostile to engage. Starts combat in a combat-enabled room and
+    /// advances it once underway. Target text is preserved like a `Look` target.
+    Attack { target: Option<String> },
     /// `talk` / `speak` with a target — address a nearby actor. The target text is
     /// preserved (case kept, surrounding/repeated whitespace collapsed) exactly as
     /// a `Look` target; a bare `talk` with no target is [`Unknown`](Self::Unknown).
@@ -145,6 +150,10 @@ pub fn parse(input: &str) -> Command {
     }
 
     if let Some(command) = parse_bare_verb(&verb, &rest, input) {
+        return command;
+    }
+
+    if let Some(command) = parse_combat_verb(&verb, &rest) {
         return command;
     }
 
@@ -227,6 +236,23 @@ fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
             input: collapse(input),
         })
     }
+}
+
+/// Parse the optional-target combat verbs (`attack`/`strike`/`fight`, ticket
+/// #22). A bare verb yields `Attack{None}` (engage the active/only foe); trailing
+/// tokens become the target (`Attack{Some(target)}`), preserved like a `look`
+/// target. Returns `None` when `verb` is not a combat verb, so `parse` keeps
+/// trying. Split out to keep `parse` under the clippy line ceiling.
+fn parse_combat_verb(verb: &str, rest: &[&str]) -> Option<Command> {
+    if !matches!(verb, "attack" | "strike" | "fight") {
+        return None;
+    }
+    let target = if rest.is_empty() {
+        None
+    } else {
+        Some(rest.join(" "))
+    };
+    Some(Command::Attack { target })
 }
 
 /// Trim and collapse internal whitespace runs to single spaces, preserving case.
@@ -599,6 +625,41 @@ mod tests {
             parse("drop"),
             Command::Unknown {
                 input: "drop".to_string()
+            }
+        );
+    }
+
+    // C13 (REQ-002): the three combat verbs take an OPTIONAL target. A bare verb is
+    // `Attack{None}` (engage the active/only foe); trailing tokens become the target
+    // (preserved like a `look` target). Each alias maps so the `matches!` arm's
+    // dropped-alias mutants die.
+    #[test]
+    fn attack_verbs_parse_with_optional_target() {
+        for verb in ["attack", "strike", "fight"] {
+            assert_eq!(
+                parse(verb),
+                Command::Attack { target: None },
+                "bare verb: {verb}"
+            );
+        }
+        assert_eq!(
+            parse("attack stray"),
+            Command::Attack {
+                target: Some("stray".to_string())
+            }
+        );
+        // Verb case-folded; multi-word target keeps its case + collapses whitespace.
+        assert_eq!(
+            parse("FIGHT  Ashen  Stray"),
+            Command::Attack {
+                target: Some("Ashen Stray".to_string())
+            }
+        );
+        // A non-combat verb that merely starts with these letters is NOT an attack.
+        assert_eq!(
+            parse("attacker"),
+            Command::Unknown {
+                input: "attacker".to_string()
             }
         );
     }

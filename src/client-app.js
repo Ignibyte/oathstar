@@ -10,7 +10,7 @@
 // verified by smoke, mirroring the prototype `app.js` split.
 
 import { parseEvent } from "./client/wire.js";
-import { toHud, toMenuModel } from "./client/snapshot.js";
+import { toHud, toMenuModel, toBattle } from "./client/snapshot.js";
 import { toRoomDisplay, toExitPad } from "./client/room.js";
 import { toMapModel, DEFAULT_MAP_CONFIG } from "./client/map.js";
 import { canvasSize, toDrawPlan, mapAriaLabel } from "./client/canvas-map.js";
@@ -52,6 +52,12 @@ const el = {
   roomModalDescription: document.querySelector("#room-modal-description"),
   roomModalExits: document.querySelector("#room-modal-exits"),
   roomModalMedia: document.querySelector("#room-modal-media"),
+  battleModal: document.querySelector("#battle-modal"),
+  battleModalTitle: document.querySelector("#battle-modal-title"),
+  battleRound: document.querySelector("#battle-round"),
+  battleLog: document.querySelector("#battle-log"),
+  battleParticipants: document.querySelector("#battle-participants"),
+  battleAttackButton: document.querySelector("#battle-attack-button"),
   map: document.querySelector("#map"),
   mapLabel: document.querySelector("#map-label"),
   hpValue: document.querySelector("#hp-value"),
@@ -141,6 +147,9 @@ function bindEvents() {
       el.roomModal.close();
     }
   });
+
+  // The battle modal's Attack button issues the next combat round (ticket #22).
+  el.battleAttackButton.addEventListener("click", () => runCommand("attack"));
 }
 
 function bindLogAutoscroll() {
@@ -209,7 +218,9 @@ function connectEvents() {
       parsed &&
       (parsed.type === "room_entered" ||
         parsed.type === "oath_sworn" ||
-        parsed.type === "oath_fulfilled")
+        parsed.type === "oath_fulfilled" ||
+        parsed.type === "combat_started" ||
+        parsed.type === "combat_ended")
     ) {
       refreshState();
     }
@@ -265,6 +276,7 @@ function renderAll(snapshot) {
   renderMap(snapshot);
   renderMenu(snapshot);
   renderIntent(snapshot);
+  renderBattle(snapshot);
 }
 
 function renderHud(snapshot) {
@@ -458,6 +470,67 @@ function renderIntent(snapshot) {
     button.addEventListener("click", () => runCommand(command.command));
     el.quickCommands.append(button);
   }
+}
+
+// The battle modal (ticket #22). Opens on a combat snapshot (REQ-008), renders
+// the play-by-play (left) and participant state (right, REQ-009), and closes when
+// combat resolves (REQ-010 — the compact summary remains in the server-rendered
+// feed). The modal is a pure overlay over latestSnapshot; the Attack button (in
+// bindEvents) drives the next round. showModal/close are guarded for jsdom.
+function renderBattle(snapshot) {
+  const battle = toBattle(snapshot);
+
+  if (!battle.active) {
+    if (el.battleModal.open && typeof el.battleModal.close === "function") {
+      el.battleModal.close();
+    }
+    return;
+  }
+
+  const enemyName = battle.enemies.length === 1 ? battle.enemies[0].name : null;
+  el.battleModalTitle.textContent = enemyName ? `Fighting ${enemyName}` : "Battle";
+  el.battleRound.textContent = battle.round ? `Round ${battle.round}` : "";
+
+  el.battleLog.replaceChildren();
+  for (const line of battle.log) {
+    const entry = document.createElement("li");
+    entry.textContent = line;
+    el.battleLog.append(entry);
+  }
+
+  el.battleParticipants.replaceChildren();
+  for (const participant of battle.participants) {
+    el.battleParticipants.append(combatantCard(participant));
+  }
+
+  if (!el.battleModal.open && typeof el.battleModal.showModal === "function") {
+    el.battleModal.showModal();
+  }
+}
+
+function combatantCard(participant) {
+  const card = document.createElement("article");
+  card.className = `combatant-card ${participant.side}${participant.defeated ? " defeated" : ""}`;
+
+  const head = document.createElement("div");
+  head.className = "combatant-head";
+  const name = document.createElement("strong");
+  name.className = "combatant-name";
+  name.textContent = participant.name;
+  const hp = document.createElement("span");
+  hp.className = "combatant-hp";
+  hp.textContent = `${participant.hp}/${participant.maxHp}`;
+  head.append(name, hp);
+
+  const track = document.createElement("div");
+  track.className = "combatant-hp-track";
+  const fill = document.createElement("div");
+  fill.className = "combatant-hp-fill";
+  fill.style.width = `${participant.hpPct}%`;
+  track.append(fill);
+
+  card.append(head, track);
+  return card;
 }
 
 // ---- feed -----------------------------------------------------------------

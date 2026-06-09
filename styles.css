@@ -964,6 +964,176 @@ button.chip {
   gap: 0.4rem;
 }
 
+/* ── ticket #22: battle modal ────────────────────────────────────────────── */
+
+.battle-modal {
+  width: min(48rem, 94vw);
+  max-height: 86vh;
+  padding: 0;
+  color: #ece3d2;
+  background: #161b21;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.battle-modal::backdrop {
+  background: rgba(8, 10, 13, 0.66);
+}
+
+.battle-modal-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1.1rem 1.25rem 1.25rem;
+  max-height: 86vh;
+}
+
+.battle-modal-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.battle-modal-title {
+  font-size: 1.2rem;
+  color: var(--ember);
+}
+
+.battle-round {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.battle-modal-body {
+  display: flex;
+  gap: 1rem;
+  min-height: 0;
+}
+
+.battle-log-pane {
+  flex: 1 1 60%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.battle-party-pane {
+  flex: 1 1 40%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.battle-subtitle {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9aa3ad;
+  margin-bottom: 0.4rem;
+}
+
+.battle-log {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  overflow-y: auto;
+  max-height: 18rem;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.battle-log li {
+  padding: 0.15rem 0;
+  color: #ded4c2;
+}
+
+.battle-participants {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.combatant-card {
+  padding: 0.5rem 0.65rem;
+  background: var(--panel-strong);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--line);
+  border-radius: 8px;
+}
+
+.combatant-card.player {
+  border-left-color: var(--verdigris);
+}
+
+.combatant-card.enemy {
+  border-left-color: var(--wine);
+}
+
+.combatant-card.defeated {
+  opacity: 0.55;
+}
+
+.combatant-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.combatant-name {
+  font-size: 0.95rem;
+}
+
+.combatant-hp {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.combatant-hp-track {
+  height: 6px;
+  background: var(--line-soft);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.combatant-hp-fill {
+  height: 100%;
+  background: var(--verdigris);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.combatant-card.enemy .combatant-hp-fill {
+  background: var(--wine);
+}
+
+.battle-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.battle-attack-button {
+  padding: 0.5rem 1.4rem;
+  font-size: 0.95rem;
+  color: #15110a;
+  background: var(--brass);
+  border: 1px solid var(--brass-bright);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.battle-attack-button:hover {
+  background: var(--brass-bright);
+}
+
 /* ── ticket #14: command-area placement + viewport containment ───────────── */
 
 /* The Exit Pad now lives beside the command input (the "command hand"), not in

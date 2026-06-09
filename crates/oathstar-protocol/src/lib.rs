@@ -39,6 +39,14 @@ pub struct GameSnapshot {
     /// key still deserializes (same additive pattern as `oath`/`room.contents`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pack: Vec<PackItemSnapshot>,
+    /// The active combat encounter, if one is underway (ticket #22). `None` — and
+    /// omitted from JSON — outside combat, so a combatless snapshot is
+    /// byte-identical to before and an old payload without a `combat` key still
+    /// deserializes (the same additive pattern as `oath`/`pack`). Present only
+    /// between combat start and resolution: the client opens the battle modal
+    /// while it is present and closes it when it clears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combat: Option<CombatSnapshot>,
 }
 
 /// One carried item in the player's pack, as renderer-agnostic snapshot data
@@ -159,6 +167,17 @@ pub enum OathStatus {
     Fulfilled,
 }
 
+/// The result of a resolved combat encounter, from the player's perspective
+/// (ticket #22). Carried by [`GameEventKind::CombatEnded`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CombatOutcome {
+    /// The enemy reached zero HP.
+    Victory,
+    /// The player reached zero HP.
+    Defeat,
+}
+
 /// The player's oath as exposed in a [`GameSnapshot`] (the view of the engine's
 /// oath state).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +186,40 @@ pub struct OathSnapshot {
     pub oath_id: String,
     pub title: String,
     pub status: OathStatus,
+}
+
+/// The active combat encounter as exposed in a [`GameSnapshot`] (ticket #22).
+///
+/// Renderer-agnostic JSON state for the client's battle modal — never drawing
+/// instructions. `participants` is a side-tagged list (the player plus the
+/// enemy in v1) so the layout extends to multiple allies/enemies later; `log`
+/// is the running battle play-by-play; `round` counts the rounds resolved so far.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CombatSnapshot {
+    /// Combat rounds resolved so far (1 after the opening round).
+    pub round: u32,
+    /// The combatants and their current state (player + enemy in v1).
+    pub participants: Vec<CombatantSnapshot>,
+    /// The battle play-by-play lines, oldest first. Omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log: Vec<String>,
+}
+
+/// One combatant in a [`CombatSnapshot`] (ticket #22).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CombatantSnapshot {
+    /// The combatant's id (`"player"` or the enemy's entity id).
+    pub id: String,
+    /// The combatant's display name.
+    pub name: String,
+    /// Current hit points (clamped at zero).
+    pub hp: i32,
+    /// Maximum hit points.
+    pub max_hp: i32,
+    /// The side this combatant fights on: `"player"` or `"enemy"` (future: `"ally"`).
+    pub side: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +272,22 @@ pub enum GameEventKind {
     OathFulfilled {
         oath_id: String,
     },
+    /// Combat began against a hostile (emitted on the `Combat` channel, ticket #22).
+    /// A typed lifecycle marker bracketing the play-by-play combat messages so a
+    /// future collapsible combat log can group an encounter; `text` is the
+    /// human-facing opening line shown in the feed.
+    CombatStarted {
+        enemy_id: String,
+        enemy_name: String,
+        text: String,
+    },
+    /// Combat resolved with a win/loss `outcome` (emitted on the `Combat` channel,
+    /// ticket #22). `text` is the compact feed summary the battle modal leaves
+    /// behind when it closes.
+    CombatEnded {
+        outcome: CombatOutcome,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +307,7 @@ pub enum OutputComponent {
 #[cfg(test)]
 mod tests {
     use super::{
+        CombatOutcome, CombatSnapshot, CombatantSnapshot, EventChannel, GameEvent, GameEventKind,
         GameSnapshot, MapSnapshot, NearbySnapshot, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
     };
     use std::collections::BTreeMap;
@@ -339,6 +409,7 @@ mod tests {
             },
             oath: None,
             pack: Vec::new(),
+            combat: None,
         }
     }
 
@@ -412,5 +483,98 @@ mod tests {
             serde_json::from_str(r#"{"id":"x","name":"X","kind":"light"}"#).expect("deserialize");
         assert_eq!(back.kind, "light");
         assert!(back.flags.is_empty());
+    }
+
+    // ---- ticket #22: combat snapshot + events ----
+
+    // C20: the combat snapshot is camelCase JSON and round-trips by value.
+    #[test]
+    fn combat_snapshot_is_camel_case_and_round_trips() {
+        let combat = CombatSnapshot {
+            round: 2,
+            participants: vec![
+                CombatantSnapshot {
+                    id: "player".to_string(),
+                    name: "Oathbearer".to_string(),
+                    hp: 17,
+                    max_hp: 20,
+                    side: "player".to_string(),
+                },
+                CombatantSnapshot {
+                    id: "stray".to_string(),
+                    name: "Stray".to_string(),
+                    hp: 6,
+                    max_hp: 10,
+                    side: "enemy".to_string(),
+                },
+            ],
+            log: vec!["You strike Stray for 4 (6/10).".to_string()],
+        };
+        let value = serde_json::to_value(&combat).expect("serialize");
+        assert_eq!(value["round"], 2);
+        assert_eq!(value["participants"][1]["maxHp"], 10, "camelCase maxHp");
+        assert_eq!(value["participants"][1]["side"], "enemy");
+        let back: CombatSnapshot =
+            serde_json::from_str(&serde_json::to_string(&combat).expect("ser")).expect("de");
+        assert_eq!(back, combat, "round-trips by value");
+    }
+
+    // C20: an empty battle log is omitted from JSON.
+    #[test]
+    fn combat_snapshot_omits_empty_log() {
+        let combat = CombatSnapshot {
+            round: 1,
+            participants: Vec::new(),
+            log: Vec::new(),
+        };
+        let json = serde_json::to_string(&combat).expect("serialize");
+        assert!(!json.contains("log"), "empty log omitted: {json}");
+    }
+
+    // C19/REQ-008 (wire): a combatless GameSnapshot omits `combat`; an old payload
+    // without the key still deserializes.
+    #[test]
+    fn snapshot_combat_is_omitted_and_optional() {
+        let json = serde_json::to_string(&bare_snapshot()).expect("serialize");
+        assert!(!json.contains("\"combat\""), "omitted when None: {json}");
+        let back: GameSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert!(back.combat.is_none());
+    }
+
+    // C20: the typed combat lifecycle events serialize with a snake_case `type`
+    // tag on the Combat channel; CombatOutcome is snake_case.
+    #[test]
+    fn combat_events_serialize_with_snake_case_tags() {
+        let started = GameEvent {
+            event_id: 1,
+            tick: 1,
+            channel: EventChannel::Combat,
+            kind: GameEventKind::CombatStarted {
+                enemy_id: "stray".to_string(),
+                enemy_name: "Stray".to_string(),
+                text: "Stray turns on you.".to_string(),
+            },
+        };
+        let value = serde_json::to_value(&started).expect("serialize");
+        assert_eq!(value["type"], "combat_started");
+        assert_eq!(value["channel"], "combat");
+        assert_eq!(value["text"], "Stray turns on you.");
+
+        let ended = GameEvent {
+            event_id: 2,
+            tick: 2,
+            channel: EventChannel::Combat,
+            kind: GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Defeat,
+                text: "Stray bested you.".to_string(),
+            },
+        };
+        let value = serde_json::to_value(&ended).expect("serialize");
+        assert_eq!(value["type"], "combat_ended");
+        assert_eq!(value["outcome"], "defeat", "CombatOutcome is snake_case");
+
+        // Victory serializes to the other snake_case variant.
+        let victory = serde_json::to_value(CombatOutcome::Victory).expect("serialize");
+        assert_eq!(victory, serde_json::json!("victory"));
     }
 }

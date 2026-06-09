@@ -1,12 +1,12 @@
 ---
 title: TICKET-22-combat-encounter-v1-fast-authored-battle-loop
-status: open
+status: closed
 ticket: 4167bcb6-c807-4c2c-8ed6-311b7b3ae20b
 ticket_number: 22
 type: feature
 created: 2026-06-07
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-combat-encounter-v1.spec.md
 ---
 
 # TICKET-22-combat-encounter-v1-fast-authored-battle-loop

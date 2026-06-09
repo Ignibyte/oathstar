@@ -1894,3 +1894,63 @@ Revisit when:
   contract in `validate`.
 - Code-behind behavior dispatch lands (Decision 004's hook list).
 - Strict unknown-tag rejection or per-kind role taxonomies become worthwhile.
+
+## Decision 040: Combat v1 Is A Deterministic, Command-Driven Encounter With A Battle Modal
+
+Status: Locked
+
+Date: 2026-06-09
+
+Implements the first combat loop (ticket #22) on the typed-role foundation
+(Decision 039), deliberately small per `combat-system.md`: deterministic,
+event-driven, and testable, without starting the class/skill/equipment systems.
+
+Combat is **command-driven**, NOT the real-time server pulse of Decision 023
+(that pulse loop is deferred). `attack` / `strike` / `fight` (optional target)
+both starts an encounter and advances it; the engine resolves one full round per
+command — the player strikes for a fixed `PLAYER_STRIKE_DAMAGE`, and a surviving
+enemy returns its authored `CombatProfile.attack`. There is no RNG, so mutation
+and regression tests stay strong.
+
+Two additive, authored gates control combat (Decisions 007 / 004):
+
+- `Role::Hostile` (tag `"hostile"`) marks an attackable entity; its contract
+  requires a `CombatProfile` (a hostile must be fightable). An entity without the
+  tag is not attackable — the Bell-Eater (`boss` + `combatant`, no `hostile`)
+  stays `confront`-only (REQ-007).
+- `RoomDefinition.combat_enabled: bool` (default false) opts a room into combat;
+  `attack` is refused cleanly elsewhere. Region/subregion-level gating is future.
+
+State and wire are additive (Decisions 028 / 031): `GameState.combat:
+Option<CombatState>` holds the encounter and is cleared the moment it resolves;
+`GameSnapshot.combat: Option<CombatSnapshot>` (skip-if-none) exposes a
+side-tagged participant list (player + enemy in v1, multi-party-extensible); the
+typed `CombatStarted` / `CombatEnded { outcome }` events bracket the per-strike
+`CombatMessage` play-by-play on the existing `Combat` channel. Old saves and
+combatless snapshots stay byte-identical.
+
+Outcomes (death penalties out of scope): victory removes the defeated enemy from
+its room (no corpse, no loot); defeat clears combat and revives the player at
+full HP in place (Decision 008's penalty/relocation deferred). Enemy HP does not
+persist across encounters.
+
+UI: combat opens a focused battle modal (a `<dialog>` mirroring the room modal)
+with the battle log on the left and participant state on the right; the client
+opens it when `snapshot.combat` is present and closes it when the fight resolves,
+leaving a compact summary in the server-rendered feed (Decision 034). The pure
+`toBattle` view-model stays DOM-free (Decision 032).
+
+Rationale:
+
+- Gives the game its first repeatable danger loop while staying deterministic,
+  additive, and fully covered (100% mutation MSI), and leaving the oath/boss flow
+  untouched.
+- Command-driven keeps v1 testable and avoids committing to the pulse engine
+  before it is needed.
+
+Revisit when:
+
+- Real-time pulses (Decision 023), skills/equipment, AI tactics, loot, or death
+  penalties (Decision 008) land — each extends `CombatState` / `CombatProfile`
+  and the resolution without changing this foundation.
+- Multi-party battles need the participant list populated beyond player + enemy.
