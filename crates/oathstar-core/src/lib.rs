@@ -8,8 +8,8 @@ use command::{parse, Command, Direction};
 use oathstar_protocol::{
     CombatOutcome, CombatSnapshot, CombatantSnapshot, CommandRequest, CommandResponse,
     EventChannel, GameEvent, GameEventKind, GameSnapshot, MapRoomSnapshot, MapSnapshot,
-    NearbySnapshot, OathSnapshot, OathStatus, OutputComponent, PackItemSnapshot, PlayerSnapshot,
-    RoomSnapshot,
+    NearbySnapshot, NearbyStatsSnapshot, NearbyThreatSnapshot, OathSnapshot, OathStatus,
+    OutputComponent, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -139,6 +139,12 @@ pub struct CombatProfile {
     /// combatant that deals no damage).
     #[serde(default)]
     pub attack: u32,
+    /// Whether the server discloses this combatant's stats to nearby inspection
+    /// (ticket #23). `#[serde(default)]` ⇒ false (hidden — rendered as "unknown")
+    /// unless a module opts in. Does not affect combat resolution; read only by the
+    /// nearby/snapshot disclosure.
+    #[serde(default)]
+    pub disclose_stats: bool,
 }
 
 /// A typed interaction capability declared by an entity's role tags (ticket #21).
@@ -1663,13 +1669,43 @@ impl Engine {
         // (ticket #17, REQ-005). The client's Nearby panel reads `room.contents`.
         let contents = awareness::perceive(&self.world, room, &RadiusConfig::default())
             .into_iter()
-            .map(|thing| NearbySnapshot {
-                id: thing.id,
-                name: thing.name,
-                kind: thing.kind.as_str().to_string(),
-                distance: thing.distance,
-                proximity: thing.proximity.as_str().to_string(),
-                interactable: thing.proximity.is_interactable(),
+            .map(|thing| {
+                // Server-authored combat affordances (ticket #23): the client reads
+                // these, never inferring hostility/attackability/stats. The perceived
+                // `thing.id` resolves the entity for its typed roles + combat profile.
+                let entity = self.world.entities.get(&thing.id);
+                // `threat` is present iff hostile (the client flags an enemy by its
+                // presence). Attackable needs a reachable hostile in a combat-enabled
+                // room; `has_role(Role::Hostile)` already implies an Actor (contract).
+                let threat = entity.filter(|e| e.has_role(Role::Hostile)).map(|_| {
+                    let attackable = thing.proximity.is_interactable() && room.combat_enabled;
+                    NearbyThreatSnapshot {
+                        attack_command: attackable.then(|| format!("attack {}", thing.name)),
+                        attackable,
+                    }
+                });
+                // `stats` is present iff the entity has a combat profile (any
+                // combatant); each stat is disclosed only when authored to (else
+                // `None` → the client renders "unknown"). Nearby stats are the
+                // authored maxima, not live HP.
+                let stats = entity.and_then(|e| e.combat.as_ref()).map(|profile| {
+                    let disclosed = profile.disclose_stats;
+                    NearbyStatsSnapshot {
+                        health: disclosed.then_some(profile.health),
+                        max_health: disclosed.then_some(profile.health),
+                        attack: disclosed.then_some(profile.attack),
+                    }
+                });
+                NearbySnapshot {
+                    id: thing.id,
+                    name: thing.name,
+                    kind: thing.kind.as_str().to_string(),
+                    distance: thing.distance,
+                    proximity: thing.proximity.as_str().to_string(),
+                    interactable: thing.proximity.is_interactable(),
+                    threat,
+                    stats,
+                }
             })
             .collect();
         RoomSnapshot {
@@ -4063,6 +4099,7 @@ mod tests {
         stray.combat = Some(CombatProfile {
             health: stray_health,
             attack: stray_attack,
+            disclose_stats: false,
         });
         world.entities.insert("stray".to_string(), stray);
 
@@ -4071,6 +4108,7 @@ mod tests {
         brute.combat = Some(CombatProfile {
             health: 99,
             attack: 99,
+            disclose_stats: false,
         });
         world.entities.insert("brute".to_string(), brute);
 
@@ -4087,6 +4125,7 @@ mod tests {
         wolf.combat = Some(CombatProfile {
             health: 5,
             attack: 1,
+            disclose_stats: false,
         });
         world.entities.insert("wolf".to_string(), wolf);
 
@@ -4429,6 +4468,7 @@ mod tests {
         titan.combat = Some(CombatProfile {
             health: u32::MAX,
             attack: 1,
+            disclose_stats: false,
         });
         world.entities.insert("titan".to_string(), titan);
         let mut engine = Engine::try_new(world).expect("valid titan world");
@@ -4509,6 +4549,7 @@ mod tests {
         ghoul.combat = Some(CombatProfile {
             health: 3,
             attack: 1,
+            disclose_stats: false,
         });
         ok_world.entities.insert("ghoul".to_string(), ghoul);
         assert_eq!(ok_world.validate(), Ok(()));
@@ -4518,4 +4559,237 @@ mod tests {
     // oathstar-content tests (the Bell-Eater loads `attack: 0` from
     // `combat = { health = 12 }`, and the boss roost loads `combat_enabled = false`
     // from a flagless room) — core has no TOML/JSON dev-dependency to repeat them.
+
+    // ============================================================
+    //  ticket #23 — Nearby hostile affordances (server-authored)
+    // ============================================================
+
+    // A world for the Nearby-affordance snapshot tests. The start room "yard"
+    // (0,0,0, combat_enabled) holds at distance 0: a hostile "Stray" (disclosed
+    // stats), a non-hostile non-combatant "Warden", and a non-hostile combatant
+    // "Sage" (hidden stats). "ridge" (x=2, combat_enabled) holds a hostile "Wolf"
+    // perceived from the yard as visible-but-not-interactable (too far). "den"
+    // (x=20, combat_enabled = FALSE) holds a hostile "Brute" — reachable only by
+    // moving there (it is beyond the yard's awareness radius), to exercise a
+    // reachable hostile in a non-combat area.
+    fn nearby_world() -> WorldDefinition {
+        let mut yard = room_with(
+            "yard",
+            true,
+            BTreeMap::from([
+                ("east".to_string(), "ridge".to_string()),
+                ("south".to_string(), "den".to_string()),
+            ]),
+        );
+        yard.combat_enabled = true;
+        yard.entities = vec![
+            "stray".to_string(),
+            "warden".to_string(),
+            "sage".to_string(),
+        ];
+
+        let mut ridge = room_with(
+            "ridge",
+            true,
+            BTreeMap::from([("west".to_string(), "yard".to_string())]),
+        );
+        ridge.x = 2; // distance 2 from the yard → perceived as visible, not interactable.
+        ridge.combat_enabled = true;
+        ridge.entities = vec!["wolf".to_string()];
+
+        let mut den = room_with(
+            "den",
+            true,
+            BTreeMap::from([("north".to_string(), "yard".to_string())]),
+        );
+        den.x = 20; // far beyond awareness — only seen once the player moves in.
+        den.combat_enabled = false;
+        den.entities = vec!["brute".to_string()];
+
+        let mut rooms = BTreeMap::new();
+        rooms.insert("yard".to_string(), yard);
+        rooms.insert("ridge".to_string(), ridge);
+        rooms.insert("den".to_string(), den);
+        let mut world = world_with("yard", rooms);
+
+        let mut stray = entity("stray", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        stray.name = "Stray".to_string();
+        stray.combat = Some(CombatProfile {
+            health: 9,
+            attack: 3,
+            disclose_stats: true,
+        });
+        world.entities.insert("stray".to_string(), stray);
+
+        let mut warden = entity("warden", EntityKind::Actor, &["talkable"], &[]);
+        warden.name = "Warden".to_string();
+        world.entities.insert("warden".to_string(), warden);
+
+        let mut sage = entity("sage", EntityKind::Actor, &["combatant"], &[]);
+        sage.name = "Sage".to_string();
+        sage.combat = Some(CombatProfile {
+            health: 7,
+            attack: 2,
+            disclose_stats: false,
+        });
+        world.entities.insert("sage".to_string(), sage);
+
+        let mut wolf = entity("wolf", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        wolf.name = "Wolf".to_string();
+        wolf.combat = Some(CombatProfile {
+            health: 5,
+            attack: 1,
+            disclose_stats: false,
+        });
+        world.entities.insert("wolf".to_string(), wolf);
+
+        let mut brute = entity("brute", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        brute.name = "Brute".to_string();
+        brute.combat = Some(CombatProfile {
+            health: 6,
+            attack: 2,
+            disclose_stats: false,
+        });
+        world.entities.insert("brute".to_string(), brute);
+
+        world
+    }
+
+    fn nearby_engine() -> Engine {
+        Engine::try_new(nearby_world()).expect("valid nearby world")
+    }
+
+    fn thing_named<'a>(snapshot: &'a GameSnapshot, name: &str) -> &'a NearbySnapshot {
+        snapshot
+            .room
+            .contents
+            .iter()
+            .find(|thing| thing.name == name)
+            .expect("a nearby thing with that name")
+    }
+
+    // N1/REQ-001 + N4/REQ-005: a reachable hostile in a combat-enabled room is
+    // attackable, carries the server's `attack <name>` command, and discloses its
+    // authored stats (health == max_health for a not-yet-engaged combatant).
+    #[test]
+    fn nearby_reachable_hostile_is_attackable_with_disclosed_stats() {
+        let snapshot = nearby_engine().snapshot();
+        let stray = thing_named(&snapshot, "Stray");
+        assert_eq!(
+            stray.threat,
+            Some(NearbyThreatSnapshot {
+                attackable: true,
+                attack_command: Some("attack Stray".to_string()),
+            }),
+        );
+        assert_eq!(
+            stray.stats,
+            Some(NearbyStatsSnapshot {
+                health: Some(9),
+                max_health: Some(9),
+                attack: Some(3),
+            }),
+        );
+    }
+
+    // N2/REQ-002: a hostile that is visible but out of reach is hostile yet NOT
+    // attackable (kills the `is_interactable && combat_enabled` → `||` mutant on the
+    // interactable side: false && true == false, mutant false || true == true).
+    #[test]
+    fn nearby_hostile_out_of_reach_is_not_attackable() {
+        let snapshot = nearby_engine().snapshot();
+        let wolf = thing_named(&snapshot, "Wolf");
+        assert!(!wolf.interactable, "the wolf is perceived at a distance");
+        assert_eq!(
+            wolf.threat,
+            Some(NearbyThreatSnapshot {
+                attackable: false,
+                attack_command: None,
+            }),
+        );
+    }
+
+    // N2b/REQ-002: a reachable hostile in a NON-combat-enabled area is hostile yet
+    // NOT attackable (kills the mutant on the combat_enabled side: true && false ==
+    // false, mutant true || false == true).
+    #[test]
+    fn nearby_hostile_in_non_combat_area_is_not_attackable() {
+        let mut engine = nearby_engine();
+        assert!(
+            engine.handle_command(cmd("south")).accepted,
+            "move to the den"
+        );
+        let snapshot = engine.snapshot();
+        let brute = thing_named(&snapshot, "Brute");
+        assert!(brute.interactable, "the brute shares the player's cell");
+        assert_eq!(
+            brute.threat,
+            Some(NearbyThreatSnapshot {
+                attackable: false,
+                attack_command: None,
+            }),
+        );
+    }
+
+    // N3/REQ-003: a non-hostile actor carries no threat (the UI shows no enemy state).
+    #[test]
+    fn nearby_non_hostile_actor_has_no_threat() {
+        let snapshot = nearby_engine().snapshot();
+        assert_eq!(thing_named(&snapshot, "Warden").threat, None);
+    }
+
+    // N5/REQ-005: an undisclosed combatant exposes a stats object whose values are
+    // all `None` — the explicit "unknown" state, distinct from a non-combatant.
+    #[test]
+    fn nearby_undisclosed_combatant_stats_are_unknown() {
+        let snapshot = nearby_engine().snapshot();
+        let sage = thing_named(&snapshot, "Sage");
+        assert_eq!(
+            sage.stats,
+            Some(NearbyStatsSnapshot {
+                health: None,
+                max_health: None,
+                attack: None,
+            }),
+        );
+        assert_eq!(
+            sage.threat, None,
+            "a non-hostile combatant is not attackable"
+        );
+    }
+
+    // N6/REQ-005: a non-combatant exposes no stats object at all (distinct from the
+    // hidden-stats "unknown" state above).
+    #[test]
+    fn nearby_non_combatant_has_no_stats() {
+        let snapshot = nearby_engine().snapshot();
+        assert_eq!(thing_named(&snapshot, "Warden").stats, None);
+    }
+
+    // N7/REQ-001/006: the server-authored `attack_command` is canonical — running it
+    // verbatim through the engine starts combat with that hostile (server-authority
+    // round-trip; the client never builds the command itself).
+    #[test]
+    fn nearby_attack_command_starts_combat_when_run() {
+        let mut engine = nearby_engine();
+        let command = thing_named(&engine.snapshot(), "Stray")
+            .threat
+            .as_ref()
+            .expect("stray is hostile")
+            .attack_command
+            .clone()
+            .expect("stray is attackable");
+        assert_eq!(command, "attack Stray");
+
+        let response = engine.handle_command(cmd(&command));
+        assert!(response.accepted, "the server's attack command is accepted");
+        let combat = response.snapshot.combat.expect("combat starts");
+        assert!(
+            combat
+                .participants
+                .iter()
+                .any(|p| p.name == "Stray" && p.side == "enemy"),
+            "running the server's attack_command engages the hostile",
+        );
+    }
 }

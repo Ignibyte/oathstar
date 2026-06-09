@@ -129,6 +129,53 @@ pub struct NearbySnapshot {
     pub proximity: String,
     /// Whether the player can directly interact (same cell or within reach).
     pub interactable: bool,
+    /// Hostile-combat affordances (ticket #23). `Some` iff the thing is a hostile
+    /// (`Role::Hostile`) — its presence is how the client flags an enemy; absent for
+    /// non-hostiles, so a non-hostile entry is byte-identical to before. Server-authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threat: Option<NearbyThreatSnapshot>,
+    /// Server-disclosed combat stats for entity inspection (ticket #23). `Some` iff the
+    /// thing has a combat profile (any combatant); an absent field is omitted, so
+    /// non-combatants stay byte-identical. Within it, an absent stat is the explicit
+    /// "unknown" (hidden) state — the client renders unknown, never an invented value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<NearbyStatsSnapshot>,
+}
+
+/// Hostile-combat affordances for a [`NearbySnapshot`] (ticket #23).
+///
+/// Present only on a hostile entry; the server decides attackability so the client
+/// never infers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NearbyThreatSnapshot {
+    /// Whether the player can attack this hostile right now — the server's verdict
+    /// (hostile, within interactable reach, and the current area allows combat).
+    pub attackable: bool,
+    /// The canonical command the Attack action sends (`"attack <name>"`); `Some` only
+    /// when `attackable`, so the client never offers an enabled attack otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack_command: Option<String>,
+}
+
+/// Server-disclosed combat stats for a [`NearbySnapshot`] (ticket #23).
+///
+/// Present iff the entity has a combat profile; each stat is `Some` when the server
+/// discloses it and `None` when hidden (rendered as "unknown"). For a not-yet-engaged
+/// nearby combatant these are the authored maxima — live HP belongs to the active
+/// battle snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NearbyStatsSnapshot {
+    /// Disclosed current/authored health, or `None` if hidden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<u32>,
+    /// Disclosed maximum health, or `None` if hidden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_health: Option<u32>,
+    /// Disclosed attack damage, or `None` if hidden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,7 +355,8 @@ pub enum OutputComponent {
 mod tests {
     use super::{
         CombatOutcome, CombatSnapshot, CombatantSnapshot, EventChannel, GameEvent, GameEventKind,
-        GameSnapshot, MapSnapshot, NearbySnapshot, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
+        GameSnapshot, MapSnapshot, NearbySnapshot, NearbyStatsSnapshot, NearbyThreatSnapshot,
+        PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
     };
     use std::collections::BTreeMap;
 
@@ -337,6 +385,8 @@ mod tests {
             distance: 1,
             proximity: "interactable".to_string(),
             interactable: true,
+            threat: None,
+            stats: None,
         }
     }
 
@@ -380,6 +430,77 @@ mod tests {
         assert_eq!(back.contents.len(), 1);
         assert_eq!(back.contents[0].id, "mara");
         assert!(back.contents[0].interactable);
+    }
+
+    // ---- ticket #23: additive hostile affordances + disclosure ----
+
+    // P1 (REQ-001/005): the threat + stats objects serialize as camelCase
+    // (`attackCommand`, `maxHealth`), omit `None` fields, and round-trip by value.
+    #[test]
+    fn nearby_threat_and_stats_round_trip_camel_case() {
+        let mut thing = nearby("stray");
+        thing.threat = Some(NearbyThreatSnapshot {
+            attackable: true,
+            attack_command: Some("attack Stray".to_string()),
+        });
+        thing.stats = Some(NearbyStatsSnapshot {
+            health: Some(9),
+            max_health: Some(9),
+            attack: Some(3),
+        });
+        let value = serde_json::to_value(&thing).expect("serialize");
+        assert_eq!(value["threat"]["attackable"], true);
+        assert_eq!(value["threat"]["attackCommand"], "attack Stray");
+        assert_eq!(value["stats"]["maxHealth"], 9);
+        assert_eq!(value["stats"]["attack"], 3);
+
+        let back: NearbySnapshot =
+            serde_json::from_str(&serde_json::to_string(&thing).expect("ser")).expect("de");
+        assert_eq!(back, thing, "threat + stats round-trip by value");
+    }
+
+    // P1 (REQ-002/005): a not-attackable threat omits `attackCommand`, and an
+    // undisclosed combatant's stats object omits every inner value (→ "unknown").
+    #[test]
+    fn nearby_optional_inner_fields_are_omitted_when_none() {
+        let mut thing = nearby("wolf");
+        thing.threat = Some(NearbyThreatSnapshot {
+            attackable: false,
+            attack_command: None,
+        });
+        thing.stats = Some(NearbyStatsSnapshot {
+            health: None,
+            max_health: None,
+            attack: None,
+        });
+        let json = serde_json::to_string(&thing).expect("serialize");
+        assert!(
+            !json.contains("attackCommand"),
+            "attack_command omitted: {json}"
+        );
+        assert!(!json.contains("health"), "hidden health omitted: {json}");
+        assert!(
+            json.contains("\"attackable\":false"),
+            "attackable kept: {json}"
+        );
+        assert!(
+            json.contains("\"stats\":{}"),
+            "hidden combatant keeps an empty stats: {json}"
+        );
+    }
+
+    // P2 (REQ-007): a non-hostile non-combatant omits threat + stats entirely, and
+    // an old NearbySnapshot JSON without those keys still deserializes (both None).
+    #[test]
+    fn nearby_without_threat_or_stats_is_byte_identical_and_loads() {
+        let json = serde_json::to_string(&nearby("mara")).expect("serialize");
+        assert!(!json.contains("threat"), "threat omitted: {json}");
+        assert!(!json.contains("stats"), "stats omitted: {json}");
+
+        let legacy = r#"{"id":"mara","name":"Mara","kind":"actor","distance":1,"proximity":"interactable","interactable":true}"#;
+        let back: NearbySnapshot = serde_json::from_str(legacy).expect("deserialize legacy");
+        assert_eq!(back.threat, None);
+        assert_eq!(back.stats, None);
     }
 
     // ---- ticket #18: additive pack snapshot ----

@@ -447,8 +447,9 @@ mod tests {
             Some(oathstar_core::CombatProfile {
                 health: 12,
                 attack: 0,
+                disclose_stats: false,
             }),
-            "future-combat-ready stats load by value (attack defaults to 0)"
+            "future-combat-ready stats load by value (attack defaults to 0; stats hidden)"
         );
         assert_eq!(world.validate(), Ok(()));
     }
@@ -471,8 +472,9 @@ mod tests {
             Some(oathstar_core::CombatProfile {
                 health: 9,
                 attack: 3,
+                disclose_stats: true,
             }),
-            "authored combat stats load by value"
+            "authored combat stats load by value (ashen_stray discloses its stats)"
         );
     }
 

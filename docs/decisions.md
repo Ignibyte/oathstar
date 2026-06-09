@@ -1954,3 +1954,58 @@ Revisit when:
   penalties (Decision 008) land — each extends `CombatState` / `CombatProfile`
   and the resolution without changing this foundation.
 - Multi-party battles need the participant list populated beyond player + enemy.
+
+## Decision 041: Nearby Combat Affordances Are Server-Authored On The Snapshot
+
+Status: Locked
+
+Date: 2026-06-09
+
+Builds on combat v1 (Decision 040) and the typed roles (Decision 039): ticket #23
+makes the Nearby panel combat-aware without letting the client infer anything.
+
+The engine computes the affordances in `room_snapshot` and exposes them additively
+on `NearbySnapshot` (Decisions 028/034 — structured JSON, never drawing
+instructions); the client only reads them and never derives hostility,
+attackability, or stats from names, CSS, or local role strings.
+
+- `threat: Option<NearbyThreatSnapshot>` — **present iff the thing is a hostile**
+  (`has_role(Role::Hostile)`), so its presence *is* the enemy flag (no `hostile`
+  bool). It carries `attackable` (= hostile AND within interactable reach AND the
+  current room is `combat_enabled`) and the server-built `attack_command`
+  (`Some("attack <name>")` only when attackable). Running that command verbatim
+  starts the #22 fight — the client never constructs it.
+- `stats: Option<NearbyStatsSnapshot>` — **present iff the entity has a
+  `CombatProfile`** (any combatant). Each stat is `Some` (disclosed) or `None`
+  (hidden → the client renders "unknown"); there is no enum "unknown" variant —
+  `Option` is the unknown. Disclosure is gated by a new authored
+  `CombatProfile.disclose_stats: bool`. Nearby stats are the authored maxima (full
+  HP); live HP belongs to the active battle snapshot.
+
+Both fields are `#[serde(default, skip_serializing_if = "Option::is_none")]`, so a
+non-hostile non-combatant entry is byte-identical to before and old payloads still
+deserialize. A generic entity detail dialog (`#entity-modal`, mirroring the room
+modal) renders an entry's `threat`/`stats` and **sends no command, mutates no
+state** — pure inspection over the snapshot the client already holds.
+
+The grouped `threat`/`stats` *objects* were chosen over flat `hostile`/`attackable`
+bools because skipping a `false` bool from JSON needs an `is_false(&bool)` helper
+that trips clippy `trivially_copy_pass_by_ref` — which the no-suppressions gate
+forbids `#[allow]`-ing. The object-presence shape is serde-clean, byte-identical for
+the common case, and yields a free hidden-stats demo (the Bell-Eater, a non-hostile
+combatant whose stats default hidden).
+
+Rationale:
+
+- Keeps combat discoverable (Nearby teaches `attack` like it teaches `talk`/`take`)
+  while the server stays authoritative and the wire stays additive.
+- The disclosure split (`Option<Object>` presence vs inner `Option<u32>`) models the
+  three real states — not a combatant / combatant with hidden stats / disclosed —
+  and is the reusable basis for richer NPC/item/fixture inspection later.
+
+Revisit when:
+
+- Per-stat or conditional disclosure (perception/skills/oaths) is needed — extend
+  `disclose_stats` into a richer rule and disclose stats individually.
+- The detail dialog grows (description, equipment, resolution paths) or non-hostile
+  combat verbs (persuade/spare/bind, Decision 007) need their own affordances.

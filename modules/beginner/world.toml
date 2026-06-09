@@ -113,7 +113,10 @@ description = "A scrawny, ash-matted hound with too many teeth and a low, wet gr
 aliases = ["stray", "hound", "dog", "ashen stray"]
 kind = "actor"
 roles = ["combatant", "hostile"]
-combat = { health = 9, attack = 3 }
+# Ticket #23: this stray discloses its combat stats to nearby inspection (the
+# visible-stats demo). A combatant without this flag (e.g. the Bell-Eater) renders
+# as "unknown" in the entity detail view.
+combat = { health = 9, attack = 3, disclose_stats = true }
 
 # The beginner oath, offered by the module (module.toml `oath_id`). Swearing it
 # and resolving the Bell-Eater fulfills it.

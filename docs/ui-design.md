@@ -306,3 +306,12 @@ server-authoritative hypermedia shell (see `docs/decisions.md` Decision 032):
   compact result in the server-rendered feed — realizing the "focused modal/view" +
   "leave a concise summary card" policy above. Combat events still stream to the feed
   through the existing component catalog (the `Combat` channel renders `danger`).
+- Ticket #23 made Nearby **combat-aware**: each `NearbySnapshot` carries optional
+  server-authored `threat` (presence = hostile) + `stats` (combat disclosure), so a
+  Nearby card flags a hostile, shows whether it is attackable from here, adds an
+  **Attack** action only when the server allows it (reusing the #22 battle modal),
+  and shows a quiet "too far / can't fight here" status otherwise. Clicking a card's
+  name opens a generic **entity detail dialog** (`#entity-modal`) that renders
+  disclosed stats — hidden stats as "unknown" — and sends no command / mutates no
+  state. The client infers nothing; pure view-models (`toNearby`/`toEntityDetail`)
+  feed the thin glue. See `decisions.md` Decision 041.

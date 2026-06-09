@@ -295,6 +295,26 @@
           </footer>
         </div>
       </dialog>
+
+      <!-- Entity detail dialog (ticket #23): a generic inspection view opened by
+           clicking a Nearby card. Shows the entity name/kind, a hostile/attackable
+           status, and server-disclosed combat stats (hidden stats render as
+           "unknown"). It sends no command and mutates no game state (REQ-004/005). -->
+      <dialog id="entity-modal" class="entity-modal" aria-labelledby="entity-modal-title">
+        <form method="dialog" class="entity-modal-form">
+          <header class="entity-modal-header">
+            <div class="entity-modal-heading">
+              <h2 id="entity-modal-title" class="entity-modal-title"></h2>
+              <span id="entity-modal-kind" class="entity-modal-kind"></span>
+            </div>
+            <button class="entity-modal-close" type="submit" aria-label="Close detail view">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </header>
+          <p id="entity-modal-status" class="entity-modal-status" hidden></p>
+          <div id="entity-modal-stats" class="entity-modal-stats" hidden></div>
+        </form>
+      </dialog>
     </main>
 
     <script type="module" src="./src/client-app.js"></script>

@@ -1,12 +1,12 @@
 ---
 title: TICKET-23-nearby-hostile-affordances-and-entity-inspection
-status: open
-ticket: pending-forge
+status: closed
+ticket: e8eaca33-1701-4009-93c6-e63007f700d7
 ticket_number: 23
 type: feature
 created: 2026-06-09
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-nearby-hostile-affordances-v1.spec.md
 ---
 
 # TICKET-23-nearby-hostile-affordances-and-entity-inspection

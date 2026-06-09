@@ -123,16 +123,53 @@ function toNearbyItem(entry) {
     });
   }
 
+  // Ticket #23: hostile-combat affordances are server-authored — `threat` is
+  // present iff the server marks this thing hostile, and `attackable` is the
+  // server's verdict. The client never infers any of this from name/kind/CSS.
+  const threat = entry.threat ?? null;
+  const hostile = Boolean(threat);
+  const attackable = Boolean(threat?.attackable);
+  // Add Attack only when the server says it is attackable, using the server's
+  // canonical command (REQ-001/006); a hostile that is not attackable gets a
+  // quiet status instead of an enabled action (REQ-002).
+  if (attackable && threat.attackCommand) {
+    actions.push({
+      label: "Attack",
+      command: threat.attackCommand,
+      hint: `Attack ${name}`,
+      variant: "danger",
+    });
+  }
+
   return {
     name,
     kind,
     distance: entry.distance ?? null,
     proximity: entry.proximity ?? null,
     interactable,
+    hostile,
+    attackable,
+    combatStatus: combatStatusLabel(hostile, attackable, interactable),
+    entityDetail: toEntityDetail(entry),
     detail: distanceLabel(entry),
     command: look,
     actions,
   };
+}
+
+/**
+ * The quiet hostile status shown on a Nearby card / detail view (ticket #23).
+ * `null` for non-hostiles (so the UI shows no enemy state, REQ-003); otherwise a
+ * short label flagging whether the hostile can be attacked from here (REQ-002).
+ */
+function combatStatusLabel(hostile, attackable, interactable) {
+  if (!hostile) {
+    return null;
+  }
+  if (attackable) {
+    return "Attackable";
+  }
+  return interactable ? "Can't fight here" : "Too far to attack";
 }
 
 /** Gear panel: the six equipment slots, all empty in v1. */
@@ -208,5 +245,39 @@ function toCombatant(entry) {
     side: entry.side ?? "enemy",
     hpPct: pct(hp, maxHp),
     defeated: hp <= 0,
+  };
+}
+
+/**
+ * Entity detail view model (ticket #23): the focused inspection of one Nearby
+ * entry, for the generic entity detail dialog. Pure — it reads only the
+ * server-authored snapshot entry the client already holds, so opening the detail
+ * view sends no command and mutates no game state (REQ-004). Disclosed combat
+ * stats are numbers; hidden stats are `null` so the view renders them as
+ * "unknown" — never an invented value (REQ-005).
+ */
+export function toEntityDetail(entry) {
+  const safe = entry ?? {};
+  const threat = safe.threat ?? null;
+  const hostile = Boolean(threat);
+  const attackable = Boolean(threat?.attackable);
+  const stats = safe.stats ?? null;
+  return {
+    name: targetName(safe),
+    kind: safe.kind ?? "thing",
+    hostile,
+    attackable,
+    statusLabel: combatStatusLabel(hostile, attackable, canInteract(safe)),
+    stats: stats
+      ? {
+          isCombatant: true,
+          // All-or-nothing disclosure in v1: a disclosed profile carries its
+          // numbers; a hidden one carries none (rendered as "unknown").
+          disclosed: stats.health != null,
+          health: stats.health ?? null,
+          maxHealth: stats.maxHealth ?? null,
+          attack: stats.attack ?? null,
+        }
+      : { isCombatant: false, disclosed: false, health: null, maxHealth: null, attack: null },
   };
 }

@@ -569,11 +569,25 @@ h1 {
   background: #11161b;
 }
 
+/* The name/kind row is a button (ticket #23) that opens the entity detail dialog;
+   reset native button chrome so it still reads as the card heading. */
 .entity-main {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.55rem;
+  width: 100%;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.entity-main:hover .entity-name {
+  color: var(--brass-bright);
 }
 
 .entity-name {
@@ -1168,4 +1182,133 @@ button.chip {
   .command-area .exit-pad {
     justify-self: center;
   }
+}
+
+/* ── ticket #23: Nearby hostile affordances + entity detail dialog ────────── */
+
+.entity-card.hostile {
+  border-color: rgba(168, 79, 98, 0.5);
+  border-left: 3px solid var(--wine);
+}
+
+.entity-card.attackable {
+  border-left-color: var(--ember);
+}
+
+.combat-status {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+
+.combat-status.is-attackable {
+  color: #15110a;
+  background: var(--ember);
+}
+
+.combat-status.is-quiet {
+  color: var(--muted);
+  background: var(--panel-strong);
+  border: 1px solid var(--line-soft);
+}
+
+.entity-actions .action-danger {
+  color: #15110a;
+  background: var(--wine);
+  border-color: var(--ember);
+}
+
+.entity-actions .action-danger:hover {
+  background: var(--ember);
+}
+
+.entity-modal {
+  width: min(28rem, 92vw);
+  padding: 0;
+  color: #ece3d2;
+  background: #161b21;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.entity-modal::backdrop {
+  background: rgba(8, 10, 13, 0.62);
+}
+
+.entity-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.1rem 1.25rem 1.3rem;
+}
+
+.entity-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.entity-modal-title {
+  font-size: 1.15rem;
+}
+
+.entity-modal-kind {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.entity-modal-close {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: #ece3d2;
+  background: #20252b;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.entity-modal-status {
+  color: var(--ember);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.entity-modal-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.entity-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+}
+
+.entity-stat-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+}
+
+.entity-stat-value {
+  font-variant-numeric: tabular-nums;
 }

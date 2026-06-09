@@ -71,6 +71,13 @@ The engine emits **structured JSON, never drawing instructions** (Decisions
   `distance`, `proximity` (`"exact" | "interactable" | "visible"`), and the
   convenience boolean `interactable`. It is omitted from JSON when empty, so empty
   rooms stay byte-identical to before.
+- **Hostile-combat affordances (ticket #23).** Each `NearbySnapshot` additionally
+  carries an optional `threat` (present iff the thing is a hostile — `attackable`
+  plus the server-built `attack <name>` command) and an optional `stats` (server-disclosed
+  combat stats; an absent stat is the explicit "unknown"). Both are computed in
+  `room_snapshot` from `Role::Hostile` + interactable proximity + the room's
+  `combat_enabled` flag and omitted when absent, so the client never infers
+  hostility/attackability/stats. See `decisions.md` Decision 041.
 - The player client's **Nearby panel** already reads `room.contents`
   (`src/client/snapshot.js` `toNearby`), so it becomes data-driven with no client
   logic change. The map payload is untouched — entity/event markers on the canvas

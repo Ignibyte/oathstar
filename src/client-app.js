@@ -58,6 +58,11 @@ const el = {
   battleLog: document.querySelector("#battle-log"),
   battleParticipants: document.querySelector("#battle-participants"),
   battleAttackButton: document.querySelector("#battle-attack-button"),
+  entityModal: document.querySelector("#entity-modal"),
+  entityModalTitle: document.querySelector("#entity-modal-title"),
+  entityModalKind: document.querySelector("#entity-modal-kind"),
+  entityModalStatus: document.querySelector("#entity-modal-status"),
+  entityModalStats: document.querySelector("#entity-modal-stats"),
   map: document.querySelector("#map"),
   mapLabel: document.querySelector("#map-label"),
   hpValue: document.querySelector("#hp-value"),
@@ -150,6 +155,14 @@ function bindEvents() {
 
   // The battle modal's Attack button issues the next combat round (ticket #22).
   el.battleAttackButton.addEventListener("click", () => runCommand("attack"));
+
+  // Clicking the entity-detail dialog backdrop closes it (ticket #23). The detail
+  // dialog is a pure overlay — opening or closing it changes no game state.
+  el.entityModal.addEventListener("click", (event) => {
+    if (event.target === el.entityModal) {
+      el.entityModal.close();
+    }
+  });
 }
 
 function bindLogAutoscroll() {
@@ -570,9 +583,19 @@ function packChip(label) {
 
 function actionCard(item) {
   const card = document.createElement("article");
-  card.className = `entity-card ${item.kind}`;
-  const main = document.createElement("div");
-  main.className = "entity-main";
+  // Ticket #23: server-authored hostile/attackable flags drive the styling hooks
+  // (the client never infers them); the name row opens the detail dialog.
+  card.className = `entity-card ${item.kind}${item.hostile ? " hostile" : ""}${
+    item.attackable ? " attackable" : ""
+  }`;
+
+  // The name/kind row is a button that opens the entity detail dialog (ticket
+  // #23) — inspection only, no command, no state change. The action buttons below
+  // stay separate command-senders, so a button click never opens the dialog.
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "entity-main entity-inspect";
+  main.title = `Inspect ${item.name}`;
   const name = document.createElement("strong");
   name.className = "entity-name";
   name.textContent = item.name;
@@ -580,6 +603,16 @@ function actionCard(item) {
   kind.className = "entity-kind";
   kind.textContent = item.detail ? `${item.kind} / ${item.detail}` : item.kind;
   main.append(name, kind);
+
+  // A quiet hostile status chip (REQ-002): flags hostile/attackable state without
+  // offering an enabled attack when combat is not allowed from here.
+  if (item.combatStatus) {
+    const status = document.createElement("span");
+    status.className = `combat-status ${item.attackable ? "is-attackable" : "is-quiet"}`;
+    status.textContent = item.combatStatus;
+    main.append(status);
+  }
+  main.addEventListener("click", () => openEntityDetail(item.entityDetail));
 
   const actions = document.createElement("div");
   actions.className = "entity-actions";
@@ -589,6 +622,9 @@ function actionCard(item) {
     button.textContent = action.label;
     button.title = action.hint ?? action.command;
     button.disabled = Boolean(action.disabled);
+    if (action.variant) {
+      button.classList.add(`action-${action.variant}`);
+    }
     button.addEventListener("click", () => {
       if (!action.disabled) {
         runCommand(action.command);
@@ -599,6 +635,52 @@ function actionCard(item) {
 
   card.append(main, actions);
   return card;
+}
+
+// The generic entity detail dialog (ticket #23). Renders a server-authored detail
+// view model (name / kind / hostile status / disclosed-or-unknown combat stats)
+// into #entity-modal. A pure overlay over the snapshot the client already holds:
+// opening it sends no command and mutates no game state (REQ-004). Disclosed stats
+// show their values; hidden stats render as "unknown" (REQ-005). showModal is
+// guarded for jsdom (which lacks <dialog>).
+function openEntityDetail(detail) {
+  if (!detail) {
+    return;
+  }
+  el.entityModalTitle.textContent = detail.name;
+  el.entityModalKind.textContent = detail.kind;
+  el.entityModalStatus.textContent = detail.statusLabel ?? "";
+  el.entityModalStatus.hidden = !detail.statusLabel;
+
+  el.entityModalStats.replaceChildren();
+  if (detail.stats.isCombatant) {
+    const health = detail.stats.disclosed
+      ? `${detail.stats.health}/${detail.stats.maxHealth}`
+      : "unknown";
+    const attack = detail.stats.disclosed ? String(detail.stats.attack) : "unknown";
+    for (const [label, value] of [
+      ["Health", health],
+      ["Attack", attack],
+    ]) {
+      const row = document.createElement("div");
+      row.className = "entity-stat";
+      const key = document.createElement("span");
+      key.className = "entity-stat-label";
+      key.textContent = label;
+      const val = document.createElement("span");
+      val.className = "entity-stat-value";
+      val.textContent = value;
+      row.append(key, val);
+      el.entityModalStats.append(row);
+    }
+    el.entityModalStats.hidden = false;
+  } else {
+    el.entityModalStats.hidden = true;
+  }
+
+  if (typeof el.entityModal.showModal === "function") {
+    el.entityModal.showModal();
+  }
 }
 
 function setActiveMenuTab(tabId) {

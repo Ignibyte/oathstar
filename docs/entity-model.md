@@ -123,10 +123,13 @@ oath acceptance rules) and the code-behind hooks below attach in later tickets
 without changing this foundation: a role gains required metadata by extending its
 contract in `validate`, and behavior by referencing a registered behavior id.
 
-Ticket #23 will add the first player-facing hostile affordances: Nearby entries
-can be marked hostile/attackable by server-authored state, and an entity detail
-view can show disclosed combat stats while leaving hidden stats unknown. The
-client should not infer those values locally.
+Ticket #23 added the first player-facing hostile affordances: each `NearbySnapshot`
+carries an optional server-authored `threat` (its presence = hostile; it holds
+`attackable` + the canonical `attack <name>` command) and `stats` (combat
+disclosure — a present stat is disclosed, an absent stat is the explicit
+"unknown"), gated by a new `CombatProfile.disclose_stats` flag. A generic entity
+detail dialog renders them (disclosed values, else "unknown") and sends no command.
+The client infers none of it locally. See `decisions.md` Decision 041.
 
 ## Code-Behind Behavior
 
