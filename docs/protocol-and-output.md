@@ -49,6 +49,18 @@ travels via `/state`, the Decision 034 carve-out). `CombatOutcome` gains
 action — `"flee"` (#24), `"guard"` and `"power_strike"` (#25); the field is an
 open string, so future verbs ride it without protocol changes.
 
+**Implemented (ticket #27).** Scoped announcements add a typed
+`Announcement { severity, text }` event on the `Region` channel, with
+`AnnouncementSeverity` (`notice` / `warning` / `alarm`) driving the feed
+presentation. Delivery is decided at emission — the engine matches the
+announcement's scope (`world` / `region` / `subregion` / `room` / `radius`,
+the radius reusing the spatial-awareness plane + Chebyshev model) against the
+player's current location and emits the event only when it is received, so
+nothing scope-filtered ever serializes and a client never decides receipt.
+Announcement content is authored (v1 carrier:
+`OathDefinition.fulfillment_announcements`, validated at construction); the
+mechanism is the engine's. See `decisions.md` Decision 045.
+
 ## Representations
 
 JSON representation, reserved for maps/canvas data, diagnostics, tests, and

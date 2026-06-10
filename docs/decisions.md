@@ -2188,3 +2188,64 @@ Revisit when:
   pre-existing edge: `take` removes all same-id placements in a room;
   drops are the first mechanism that could legally create such duplicates
   from authored content).
+
+## Decision 045: Announcements Are Engine-Delivered, Content-Authored, And Emitted Only When Received
+
+Status: Locked
+
+Date: 2026-06-10
+
+Ticket #27 (promoted from the announcements intake, item 2 — the Area
+hierarchy stays deferred) gives the world a voice through the existing event
+lifecycle: a typed `Announcement { severity, text }` event on the `Region`
+channel, with delivery decided by the engine at emission.
+
+- **The scope set is world / region / subregion / room / radius.** All four
+  named scopes already exist in the world model; `radius` reuses the
+  spatial-awareness plane + Chebyshev model (`Position::cell_distance` —
+  region + subregion + z gating) as a DELIVERY rule, not a perception query:
+  awareness answers "what can I perceive?", announcements answer "who should
+  be told?". No Area scope until the Area ticket.
+- **Emit-iff-received.** `announce` evaluates the pure
+  `announcement_received(scope)` decision against the player's current room
+  and constructs the event only on a match — nothing scope-filtered ever
+  serializes, so clients render announcements and can never decide (or
+  subvert) receipt. Multiplayer later changes the CALLER (per-session
+  decisions), not the decision function.
+- **Mechanism is engine, content is authored.** `AuthoredAnnouncement
+  { scope, severity, text }` lives on content carriers — v1:
+  `OathDefinition.fulfillment_announcements`, emitted by `confront` after
+  `OathFulfilled` — never hardcoded module fiction in engine code (the
+  `CombatProfile.xp` pattern). Authored scope ids are validated at
+  construction (`AnnouncementScopeMissing`), fail-fast like the entity/item
+  contracts.
+- **Severity is the presentation contract**: `notice` / `warning` / `alarm`
+  (the intake's audibility ladder trimmed to render-meaningful levels),
+  mapped in the Datastar layer onto the existing feed variants
+  (system/danger) with distinct labels — no new CSS, no new channel, no JS
+  changes (the JSON stream carries the event through the existing wire
+  passthrough; announcements change no snapshot state).
+- **The beginner demo is both-arms in play**: fulfilling the Hollow Bell
+  emits a world-scoped alarm (delivered at the roost — the played line) and
+  a hollowmere-region notice (provably NOT delivered in `old_bell_tower`),
+  so scoping is demonstrated, not just asserted.
+
+Rationale:
+
+- Riding the event lifecycle keeps one transport, one render path, and one
+  determinism story; the strongest possible server-authority is structural
+  (unreceived events don't exist).
+- Authored-content/engine-mechanism keeps modules expressive and the engine
+  fiction-free; every future trigger (room entry, schedulers, DM routes,
+  speech verbs) reuses `announce` with its own authored carrier.
+
+Revisit when:
+
+- The Area scope lands (acoustics, interiors — the radius/plane semantics
+  get revisited together).
+- A notification tray / bulletin board needs scope echo, persistence,
+  read-state, or expiry on the wire (deliberately trimmed from v1).
+- Multiplayer fan-out arrives (per-session delivery decisions; the decision
+  fn is ready).
+- Player speech verbs (say/yell) or DM/scheduler triggers land (new callers
+  of `announce`).

@@ -1,9 +1,16 @@
 ---
 title: INTAKE-announcements-notifications-and-area-scopes
-status: intake
+status: promoted
 created: 2026-06-07
-ticket:
+ticket: 5e945705-2a54-4add-a7d2-cce9b60cefc4
+pipeline_spec: docs/planning/pipeline/active/WORK-scoped-announcements-v1.spec.md
 ---
+
+> **Promoted (2026-06-10):** Candidate Future Tickets item 2 became ticket
+> #27 (`WORK-scoped-announcements-v1`) — the notification API + scoped
+> delivery, WITHOUT the Area hierarchy. Items 1 and 3–5 (Area scopes,
+> bulletin boards, region event scheduler, tray/board UI) remain future
+> candidates of this intake.
 
 # INTAKE-announcements-notifications-and-area-scopes
 

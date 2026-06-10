@@ -140,3 +140,17 @@ description = "Recover the bell's stolen clapper and make Hollowmere ring again.
 # `source` records the region origin for future oath-giver UI and faction effects.
 issuer_id = "mara"
 source = "hollowmere"
+
+# Ticket #27: fulfilling the oath rings the bell. The world-scoped alarm is
+# heard wherever the player stands (the played demo line at the roost); the
+# hollowmere notice is scoped to the town region, so the player standing in
+# old_bell_tower provably does NOT receive it — the in-play both-arms demo.
+[[oaths.fulfillment_announcements]]
+scope = "world"
+severity = "alarm"
+text = "The bell of Hollowmere rings again. Its voice rolls out over every road and roof."
+
+[[oaths.fulfillment_announcements]]
+scope = { region = "hollowmere" }
+severity = "notice"
+text = "Hollowmere's streets fill with voices as the bell's song returns."

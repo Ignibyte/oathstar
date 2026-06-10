@@ -525,4 +525,34 @@ mod tests {
         );
         assert_eq!(world.validate(), Ok(()));
     }
+
+    // N10 (ticket #27, REQ-006): the beginner oath authors exactly the two
+    // bell announcements — the world alarm (delivered in play) and the
+    // hollowmere notice (the staged not-delivered arm) — by value.
+    #[test]
+    fn beginner_oath_authors_the_bell_announcements() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let oath = world.oaths.get("hollow_bell").expect("hollow_bell oath");
+        assert_eq!(oath.fulfillment_announcements.len(), 2);
+
+        let alarm = &oath.fulfillment_announcements[0];
+        assert_eq!(alarm.scope, oathstar_core::AnnouncementScope::World);
+        assert_eq!(alarm.severity, oathstar_core::AnnouncementSeverity::Alarm);
+        assert_eq!(
+            alarm.text,
+            "The bell of Hollowmere rings again. Its voice rolls out over every road and roof."
+        );
+
+        let notice = &oath.fulfillment_announcements[1];
+        assert_eq!(
+            notice.scope,
+            oathstar_core::AnnouncementScope::Region("hollowmere".to_string())
+        );
+        assert_eq!(notice.severity, oathstar_core::AnnouncementSeverity::Notice);
+        assert_eq!(
+            notice.text,
+            "Hollowmere's streets fill with voices as the bell's song returns."
+        );
+        assert_eq!(world.validate(), Ok(()));
+    }
 }

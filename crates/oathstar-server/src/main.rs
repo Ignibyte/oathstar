@@ -420,6 +420,27 @@ mod tests {
                 .status,
             OathStatus::Fulfilled
         );
+
+        // N11 (ticket #27): the world-scoped bell alarm is delivered at the
+        // roost with its exact authored text, while the hollowmere-region
+        // notice is provably NOT delivered in the old_bell_tower region —
+        // the in-play both-arms scoped-announcement demo.
+        assert!(
+            confront.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::Announcement { text, .. }
+                    if text == "The bell of Hollowmere rings again. Its voice rolls out over every road and roof."
+            )),
+            "the world-scoped bell alarm is delivered at the roost"
+        );
+        assert!(
+            !confront.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::Announcement { text, .. }
+                    if text.contains("Hollowmere's streets")
+            )),
+            "the hollowmere-region notice is not delivered in old_bell_tower"
+        );
     }
 
     // REQ-003 (smoke): on the real beginner world, swearing before talking to Mara

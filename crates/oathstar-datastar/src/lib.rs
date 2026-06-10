@@ -10,7 +10,9 @@
 //! event (`mode append`). All server-provided text is HTML-escaped (REQ-005) so it
 //! cannot inject markup.
 
-use oathstar_protocol::{EventChannel, GameEvent, GameEventKind, OutputComponent};
+use oathstar_protocol::{
+    AnnouncementSeverity, EventChannel, GameEvent, GameEventKind, OutputComponent,
+};
 
 /// The SSE `event:` name Datastar consumes to patch DOM elements (Datastar v1.0.x).
 pub const PATCH_ELEMENTS_EVENT: &str = "datastar-patch-elements";
@@ -152,6 +154,18 @@ fn describe(event: &GameEvent) -> Option<(&'static str, &'static str, String)> {
             let (variant, label) = channel_variant_label(&event.channel);
             Some((variant, label, text.clone()))
         }
+        GameEventKind::Announcement { severity, text } => {
+            // Ticket #27: the severity drives the feed presentation — the
+            // channel label is not load-bearing for announcements. Warning and
+            // Alarm share the danger variant with distinct labels; a dedicated
+            // announcement style belongs to the future notification-tray work.
+            let (variant, label) = match severity {
+                AnnouncementSeverity::Notice => ("system", "Notice"),
+                AnnouncementSeverity::Warning => ("danger", "Warning"),
+                AnnouncementSeverity::Alarm => ("danger", "Alarm"),
+            };
+            Some((variant, label, text.clone()))
+        }
     }
 }
 
@@ -166,6 +180,7 @@ const fn kind_type(kind: &GameEventKind) -> &'static str {
         GameEventKind::CombatStarted { .. } => "combat_started",
         GameEventKind::CombatEnded { .. } => "combat_ended",
         GameEventKind::CombatPulse { .. } => "combat_pulse",
+        GameEventKind::Announcement { .. } => "announcement",
     }
 }
 
@@ -227,7 +242,8 @@ mod tests {
         should_seed_opening, PATCH_ELEMENTS_EVENT,
     };
     use oathstar_protocol::{
-        CombatOutcome, EventChannel, GameEvent, GameEventKind, OutputComponent,
+        AnnouncementSeverity, CombatOutcome, EventChannel, GameEvent, GameEventKind,
+        OutputComponent,
     };
 
     fn log(text: &str) -> GameEvent {
@@ -474,6 +490,10 @@ mod tests {
             GameEventKind::OathFulfilled {
                 oath_id: ATTACK.to_owned(),
             },
+            GameEventKind::Announcement {
+                severity: AnnouncementSeverity::Alarm,
+                text: ATTACK.to_owned(),
+            },
         ];
         for kind in kinds {
             let event = GameEvent {
@@ -494,6 +514,41 @@ mod tests {
                 .expect("fragment has a <p> body");
             assert!(!body.contains('<'), "raw < in body: {body}");
             assert!(!body.contains('>'), "raw > in body: {body}");
+        }
+    }
+
+    // N7 (ticket #27): the sole pin for the announcement arm — three exact
+    // severity-to-variant/label tuples, the component tag, and the escaped body.
+    #[test]
+    fn announcements_render_by_severity() {
+        for (severity, variant, label) in [
+            (AnnouncementSeverity::Notice, "system", "Notice"),
+            (AnnouncementSeverity::Warning, "danger", "Warning"),
+            (AnnouncementSeverity::Alarm, "danger", "Alarm"),
+        ] {
+            let event = GameEvent {
+                event_id: 8,
+                tick: 2,
+                channel: EventChannel::Region,
+                kind: GameEventKind::Announcement {
+                    severity,
+                    text: "<b>bell</b> rings".to_string(),
+                },
+            };
+            let html = render_feed_fragment(&event).expect("announcements render");
+            assert!(
+                html.contains(&format!(r#"class="log-entry {variant}""#)),
+                "{label} variant: {html}"
+            );
+            assert!(html.contains(label), "{label} label: {html}");
+            assert!(
+                html.contains(r#"data-component="announcement""#),
+                "type tag: {html}"
+            );
+            assert!(
+                html.contains("&lt;b&gt;bell&lt;/b&gt; rings"),
+                "escaped body: {html}"
+            );
         }
     }
 

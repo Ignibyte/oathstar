@@ -354,6 +354,29 @@ pub enum GameEventKind {
     CombatPulse {
         round: u32,
     },
+    /// A scoped world announcement delivered to this player (ticket #27),
+    /// emitted on the `Region` channel. The engine's delivery decision already
+    /// matched the player's location at emission — nothing scope-filtered ever
+    /// serializes, so a client renders announcements and never decides
+    /// receipt. `severity` drives the feed presentation; `text` is the line.
+    Announcement {
+        severity: AnnouncementSeverity,
+        text: String,
+    },
+}
+
+/// How loudly an announcement presents (ticket #27): the announcements
+/// intake's audibility ladder trimmed to render-meaningful levels. Carried by
+/// [`GameEventKind::Announcement`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnouncementSeverity {
+    /// Ambient world news.
+    Notice,
+    /// Something the player should heed.
+    Warning,
+    /// Urgent, region-shaking news.
+    Alarm,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,9 +396,9 @@ pub enum OutputComponent {
 #[cfg(test)]
 mod tests {
     use super::{
-        CombatOutcome, CombatSnapshot, CombatantSnapshot, EventChannel, GameEvent, GameEventKind,
-        GameSnapshot, MapSnapshot, NearbySnapshot, NearbyStatsSnapshot, NearbyThreatSnapshot,
-        PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
+        AnnouncementSeverity, CombatOutcome, CombatSnapshot, CombatantSnapshot, EventChannel,
+        GameEvent, GameEventKind, GameSnapshot, MapSnapshot, NearbySnapshot, NearbyStatsSnapshot,
+        NearbyThreatSnapshot, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
     };
     use std::collections::BTreeMap;
 
@@ -763,6 +786,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // N6 (ticket #27): the announcement event is snake_case on the wire and
+    // every severity round-trips.
+    #[test]
+    fn announcement_serializes_with_snake_case_tag_and_severity() {
+        let event = GameEvent {
+            event_id: 11,
+            tick: 9,
+            channel: EventChannel::Region,
+            kind: GameEventKind::Announcement {
+                severity: AnnouncementSeverity::Alarm,
+                text: "The bell rings.".to_string(),
+            },
+        };
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(value["type"], "announcement");
+        assert_eq!(value["severity"], "alarm");
+        assert_eq!(value["channel"], "region");
+        assert_eq!(value["text"], "The bell rings.");
+        let back: GameEvent = serde_json::from_value(value).expect("deserialize");
+        assert!(matches!(
+            back.kind,
+            GameEventKind::Announcement {
+                severity: AnnouncementSeverity::Alarm,
+                ..
+            }
+        ));
+        for (severity, wire) in [
+            (AnnouncementSeverity::Notice, "notice"),
+            (AnnouncementSeverity::Warning, "warning"),
+            (AnnouncementSeverity::Alarm, "alarm"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(severity).expect("serialize"),
+                serde_json::json!(wire)
+            );
+        }
     }
 
     // P3 (ticket #24): `queuedAction` is additive camelCase — omitted when None

@@ -125,6 +125,15 @@ on `interaction` rather than `sight`:
   trees, shops; multiplayer and DM controls; canvas
   entity/event overlays.
 
+**Perceive vs receive (ticket #27).** Awareness answers "what can I perceive
+nearby?"; the scoped-announcement layer answers "who should be told when
+something happens?" — a deliberately separate delivery layer (Decision 045)
+that REUSES this model's `Position::cell_distance` (the same region +
+subregion + z plane gating and Chebyshev radius) for its `radius` scope, but
+none of the perception filters (`hidden`, proximity bands) — receipt is not
+sight. Future acoustics (cross-area sound, the intake's whisper/yell levels)
+revisit both layers together with the Area-scope ticket.
+
 ## Testing
 
 Radius math, region/subregion/z boundaries, the proximity bands (with their

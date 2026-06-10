@@ -13,6 +13,11 @@ use oathstar_protocol::{
 };
 use serde::{Deserialize, Serialize};
 
+// Re-exported (and used throughout) so core dependents — content tests,
+// future trigger authors — can name the severity carried by
+// [`AuthoredAnnouncement`] without a direct protocol dependency (ticket #27).
+pub use oathstar_protocol::AnnouncementSeverity;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldDefinition {
     pub id: String,
@@ -264,6 +269,51 @@ pub struct OathDefinition {
     /// oath-giver UI and region/faction effects (ticket #19). Authored, optional.
     #[serde(default)]
     pub source: Option<String>,
+    /// Announcements emitted when this oath is fulfilled (ticket #27) — each
+    /// is delivered only if the player's location matches its scope. Empty —
+    /// and absent from TOML — for oaths that announce nothing.
+    #[serde(default)]
+    pub fulfillment_announcements: Vec<AuthoredAnnouncement>,
+}
+
+/// Where an announcement is heard (ticket #27): the delivery scopes from the
+/// announcements intake, minus the deferred Area level.
+///
+/// Serde-authorable in module TOML (externally tagged): `scope = "world"`,
+/// `scope = { region = "hollowmere" }`, or
+/// `scope = { radius = { room_id = "bell_eater_roost", radius = 2 } }`.
+/// Authored scope ids are validated at construction
+/// ([`WorldValidationError::AnnouncementScopeMissing`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnouncementScope {
+    /// Every listener, everywhere.
+    World,
+    /// Listeners whose current room lies in this region.
+    Region(String),
+    /// Listeners whose current room lies in this subregion.
+    Subregion(String),
+    /// Listeners standing in exactly this room.
+    Room(String),
+    /// Listeners within `radius` cells of the origin room, on the same
+    /// awareness plane (region + subregion + z) — the ticket #17 spatial
+    /// model, reused as a delivery rule rather than a perception query.
+    Radius { room_id: String, radius: u32 },
+}
+
+/// An authored announcement (ticket #27): what a content trigger says, how
+/// loudly, and to which scope.
+///
+/// v1's only carrier is [`OathDefinition::fulfillment_announcements`]; future
+/// triggers (room entry, schedulers, DM routes) reuse the same shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthoredAnnouncement {
+    /// Who receives it.
+    pub scope: AnnouncementScope,
+    /// How loudly it presents.
+    pub severity: AnnouncementSeverity,
+    /// The message line, exactly as the feed shows it.
+    pub text: String,
 }
 
 /// Authored conversation lines for a conversable NPC (ticket #19).
@@ -339,6 +389,13 @@ pub enum WorldValidationError {
     OathMissing { oath_id: String },
     /// An oath names an `issuer_id` that is not in the entity registry.
     OathIssuerMissing { oath_id: String, issuer_id: String },
+    /// An oath's authored announcement names a scope id that is not in the
+    /// corresponding registry (ticket #27).
+    AnnouncementScopeMissing {
+        oath_id: String,
+        scope_kind: String,
+        id: String,
+    },
     /// An entity declares a role whose v1 contract is unmet (ticket #21): names the
     /// entity, the role, and the missing requirement.
     RoleContractUnmet {
@@ -417,6 +474,14 @@ impl std::fmt::Display for WorldValidationError {
             Self::OathIssuerMissing { oath_id, issuer_id } => {
                 write!(f, "oath '{oath_id}' references missing issuer '{issuer_id}'")
             }
+            Self::AnnouncementScopeMissing {
+                oath_id,
+                scope_kind,
+                id,
+            } => write!(
+                f,
+                "oath '{oath_id}' announces to missing {scope_kind} '{id}'"
+            ),
             Self::RoleContractUnmet {
                 entity_id,
                 role,
@@ -573,6 +638,31 @@ impl WorldDefinition {
                     return Err(WorldValidationError::OathIssuerMissing {
                         oath_id: oath_id.clone(),
                         issuer_id: issuer_id.clone(),
+                    });
+                }
+            }
+
+            // Ticket #27: every authored announcement scope id must resolve in
+            // its registry — fail fast on broken content, like the entity and
+            // item contracts.
+            for announcement in &oath.fulfillment_announcements {
+                let missing = match &announcement.scope {
+                    AnnouncementScope::World => None,
+                    AnnouncementScope::Region(id) => {
+                        (!self.regions.contains_key(id)).then_some(("region", id))
+                    }
+                    AnnouncementScope::Subregion(id) => {
+                        (!self.subregions.contains_key(id)).then_some(("subregion", id))
+                    }
+                    AnnouncementScope::Room(id) | AnnouncementScope::Radius { room_id: id, .. } => {
+                        (!self.rooms.contains_key(id)).then_some(("room", id))
+                    }
+                };
+                if let Some((scope_kind, id)) = missing {
+                    return Err(WorldValidationError::AnnouncementScopeMissing {
+                        oath_id: oath_id.clone(),
+                        scope_kind: scope_kind.to_string(),
+                        id: id.clone(),
                     });
                 }
             }
@@ -1604,9 +1694,30 @@ impl Engine {
                 OutputComponent::CombatMessage,
                 format!("You overcome {boss_name}, and your oath is fulfilled."),
             );
-            let fulfilled =
-                self.event(EventChannel::Oath, GameEventKind::OathFulfilled { oath_id });
-            return (true, vec![outcome, fulfilled]);
+            let fulfilled = self.event(
+                EventChannel::Oath,
+                GameEventKind::OathFulfilled {
+                    oath_id: oath_id.clone(),
+                },
+            );
+            let mut events = vec![outcome, fulfilled];
+            // Ticket #27: the oath's authored announcements ride fulfillment —
+            // each is delivered only when the player's location matches its
+            // scope, so an undelivered announcement emits nothing at all.
+            // The sworn oath id always resolves: `swear` only records the
+            // try_new-validated designated oath (the same invariant `swear`
+            // itself expects on).
+            let announcements = self
+                .world
+                .oaths
+                .get(&oath_id)
+                .expect("sworn oath is a try_new-validated invariant")
+                .fulfillment_announcements
+                .clone();
+            for announcement in &announcements {
+                events.extend(self.announce(announcement));
+            }
+            return (true, events);
         }
 
         // Boss present, but the oath is not swearable-to-fulfilled here: either it
@@ -2026,6 +2137,48 @@ impl Engine {
         for room in self.world.rooms.values_mut() {
             room.entities.retain(|id| id != entity_id);
         }
+    }
+
+    /// Whether the player's current location receives an announcement with
+    /// `scope` (ticket #27). Pure and deterministic over the current room —
+    /// the single delivery decision a multiplayer server later applies per
+    /// session. Radius reuses the awareness plane + Chebyshev model
+    /// ([`awareness::Position::cell_distance`]): a different region,
+    /// subregion, or floor is "not near", and an unknown origin room
+    /// delivers nothing.
+    fn announcement_received(&self, scope: &AnnouncementScope) -> bool {
+        let room = self.current_room();
+        match scope {
+            AnnouncementScope::World => true,
+            AnnouncementScope::Region(id) => room.region == *id,
+            AnnouncementScope::Subregion(id) => room.subregion.as_deref() == Some(id.as_str()),
+            AnnouncementScope::Room(id) => room.id == *id,
+            AnnouncementScope::Radius { room_id, radius } => self
+                .world
+                .rooms
+                .get(room_id)
+                .and_then(|origin| {
+                    awareness::Position::from_room(room)
+                        .cell_distance(&awareness::Position::from_room(origin))
+                })
+                .is_some_and(|distance| distance <= *radius),
+        }
+    }
+
+    /// Emit an announcement iff the player receives it (ticket #27). The
+    /// delivery decision happens at emission, so nothing scope-filtered ever
+    /// reaches a client — clients render announcements and never decide
+    /// receipt (REQ-005).
+    fn announce(&mut self, announcement: &AuthoredAnnouncement) -> Option<GameEvent> {
+        self.announcement_received(&announcement.scope).then(|| {
+            self.event(
+                EventChannel::Region,
+                GameEventKind::Announcement {
+                    severity: announcement.severity,
+                    text: announcement.text.clone(),
+                },
+            )
+        })
     }
 
     fn current_room(&self) -> &RoomDefinition {
@@ -3012,6 +3165,7 @@ mod tests {
                 description: "Do the thing.".to_string(),
                 issuer_id: None,
                 source: None,
+                fulfillment_announcements: Vec::new(),
             },
         );
 
@@ -3902,6 +4056,7 @@ mod tests {
                 description: "Mend the bell.".to_string(),
                 issuer_id: Some("mara".to_string()),
                 source: Some("hollowmere".to_string()),
+                fulfillment_announcements: Vec::new(),
             },
         );
         world.oaths = oaths;
@@ -4348,6 +4503,7 @@ mod tests {
                     description: "d".to_string(),
                     issuer_id: issuer.map(str::to_owned),
                     source: None,
+                    fulfillment_announcements: Vec::new(),
                 },
             );
         }
@@ -6343,5 +6499,338 @@ mod tests {
             "a fresh encounter starts: {:?}",
             again.events
         );
+    }
+
+    // ---- ticket #27: scoped announcements ----
+
+    /// A world spanning two regions, two subregions, and two z-levels so every
+    /// announcement scope has a received AND a not-received position
+    /// (PR-claude-fixture-distinguishable-transitions-001). Tests reposition
+    /// the player directly; no exits are needed.
+    fn scoped_engine() -> Engine {
+        let mut rooms = BTreeMap::new();
+        for (id, region, subregion, x, z) in [
+            ("a", "r1", Some("s1"), 0, 0),
+            ("b", "r1", Some("s1"), 3, 0),
+            ("c", "r1", Some("s2"), 1, 0),
+            ("e", "r1", Some("s1"), 0, 1),
+            ("f", "r1", None, 0, 0),
+            ("g", "r2", None, 1, 0),
+        ] {
+            let mut room = room_with(id, true, BTreeMap::new());
+            room.region = region.to_string();
+            room.subregion = subregion.map(str::to_string);
+            room.x = x;
+            room.z = z;
+            rooms.insert(id.to_string(), room);
+        }
+        let mut world = world_with("a", rooms);
+        for (id, region) in [("s1", "r1"), ("s2", "r1")] {
+            world.subregions.insert(
+                id.to_string(),
+                SubregionDefinition {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    region: region.to_string(),
+                },
+            );
+        }
+        Engine::try_new(world).expect("valid scoped world")
+    }
+
+    /// Reposition the player (every id is a validated room of the fixture).
+    fn at(engine: &mut Engine, room: &str) {
+        engine.state.current_room_id = room.to_string();
+    }
+
+    // N1 (REQ-001): world scope is received everywhere — the only pin for the
+    // `World => true` arm.
+    #[test]
+    fn world_scope_is_received_everywhere() {
+        let mut engine = scoped_engine();
+        for room in ["a", "c", "g"] {
+            at(&mut engine, room);
+            assert!(
+                engine.announcement_received(&AnnouncementScope::World),
+                "world scope reaches {room}"
+            );
+        }
+    }
+
+    // N2 (REQ-002): region scope both arms, plus no subregion-id crosstalk.
+    #[test]
+    fn region_scope_matches_only_the_named_region() {
+        let mut engine = scoped_engine();
+        at(&mut engine, "a");
+        assert!(engine.announcement_received(&AnnouncementScope::Region("r1".to_string())));
+        at(&mut engine, "g");
+        assert!(
+            !engine.announcement_received(&AnnouncementScope::Region("r1".to_string())),
+            "another region does not receive it"
+        );
+        at(&mut engine, "a");
+        assert!(
+            !engine.announcement_received(&AnnouncementScope::Region("s1".to_string())),
+            "a subregion id never matches as a region"
+        );
+    }
+
+    // N3 (REQ-002): subregion both arms, the no-subregion room, and no
+    // region-id crosstalk.
+    #[test]
+    fn subregion_scope_matches_only_the_named_subregion() {
+        let mut engine = scoped_engine();
+        at(&mut engine, "a");
+        assert!(engine.announcement_received(&AnnouncementScope::Subregion("s1".to_string())));
+        at(&mut engine, "c");
+        assert!(
+            !engine.announcement_received(&AnnouncementScope::Subregion("s1".to_string())),
+            "a sibling subregion does not receive it"
+        );
+        at(&mut engine, "f");
+        assert!(
+            !engine.announcement_received(&AnnouncementScope::Subregion("s1".to_string())),
+            "a room with no subregion receives no subregion scope"
+        );
+        at(&mut engine, "a");
+        assert!(
+            !engine.announcement_received(&AnnouncementScope::Subregion("r1".to_string())),
+            "a region id never matches as a subregion"
+        );
+    }
+
+    // N4 (REQ-002): room scope both arms.
+    #[test]
+    fn room_scope_matches_only_the_exact_room() {
+        let mut engine = scoped_engine();
+        at(&mut engine, "a");
+        assert!(engine.announcement_received(&AnnouncementScope::Room("a".to_string())));
+        assert!(
+            !engine.announcement_received(&AnnouncementScope::Room("b".to_string())),
+            "another room does not receive it"
+        );
+    }
+
+    // N5 (REQ-003): radius follows the awareness plane model — inclusive
+    // boundary, beyond, cross-floor, cross-subregion, cross-region, unknown
+    // origin, and the origin cell itself.
+    #[test]
+    fn radius_scope_follows_the_awareness_plane_model() {
+        let mut engine = scoped_engine();
+        let from_a = |radius| AnnouncementScope::Radius {
+            room_id: "a".to_string(),
+            radius,
+        };
+        at(&mut engine, "b"); // (3,0,0) on a's plane
+        assert!(
+            engine.announcement_received(&from_a(3)),
+            "distance == radius is received (inclusive boundary)"
+        );
+        assert!(
+            !engine.announcement_received(&from_a(2)),
+            "beyond the radius is not received"
+        );
+        at(&mut engine, "e"); // (0,0,1): a's x,y one floor up
+        assert!(
+            !engine.announcement_received(&from_a(99)),
+            "a different floor is not near"
+        );
+        at(&mut engine, "c"); // (1,0,0) in the sibling subregion
+        assert!(
+            !engine.announcement_received(&from_a(99)),
+            "a different subregion is not near"
+        );
+        at(&mut engine, "g"); // r2, subregion None
+        assert!(
+            !engine.announcement_received(&AnnouncementScope::Radius {
+                room_id: "f".to_string(),
+                radius: 99,
+            }),
+            "a different region is not near even with matching None subregions"
+        );
+        at(&mut engine, "a");
+        assert!(
+            !engine.announcement_received(&AnnouncementScope::Radius {
+                room_id: "ghost".to_string(),
+                radius: 99,
+            }),
+            "an unknown origin room delivers nothing"
+        );
+        assert!(
+            engine.announcement_received(&AnnouncementScope::Radius {
+                room_id: "a".to_string(),
+                radius: 0,
+            }),
+            "radius 0 reaches the origin cell itself"
+        );
+    }
+
+    /// `oath_world` with authored fulfillment announcements: one scoped to the
+    /// confrontation room (delivered in play) and one to the start room
+    /// (provably not delivered at the lair).
+    fn announcing_oath_engine() -> Engine {
+        let mut world = oath_world();
+        world
+            .oaths
+            .get_mut("o1")
+            .expect("o1 exists")
+            .fulfillment_announcements = vec![
+            AuthoredAnnouncement {
+                scope: AnnouncementScope::Room("lair".to_string()),
+                severity: AnnouncementSeverity::Alarm,
+                text: "The lair shudders.".to_string(),
+            },
+            AuthoredAnnouncement {
+                scope: AnnouncementScope::Room("town".to_string()),
+                severity: AnnouncementSeverity::Notice,
+                text: "Town hears nothing of this.".to_string(),
+            },
+        ];
+        Engine::try_new(world).expect("valid announcing world")
+    }
+
+    // N9 (REQ-002/005/006): fulfillment delivers the in-scope announcement —
+    // after OathFulfilled, exact severity/text, on the Region channel — and
+    // emits nothing at all for the out-of-scope one.
+    #[test]
+    fn fulfillment_delivers_only_in_scope_announcements() {
+        let mut engine = announcing_oath_engine();
+        engine.handle_command(cmd("swear"));
+        engine.handle_command(cmd("east"));
+        let response = engine.handle_command(cmd("confront"));
+        assert!(response.accepted);
+        let fulfilled_at = response
+            .events
+            .iter()
+            .position(|e| matches!(e.kind, GameEventKind::OathFulfilled { .. }))
+            .expect("the oath fulfills");
+        let announcement_at = response
+            .events
+            .iter()
+            .position(|e| {
+                matches!(
+                    (&e.channel, &e.kind),
+                    (
+                        EventChannel::Region,
+                        GameEventKind::Announcement {
+                            severity: AnnouncementSeverity::Alarm,
+                            text,
+                        }
+                    ) if text == "The lair shudders."
+                )
+            })
+            .expect("the in-scope announcement is delivered");
+        assert!(
+            announcement_at > fulfilled_at,
+            "announcements follow the fulfillment: {:?}",
+            response.events
+        );
+        assert!(
+            !response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::Announcement { text, .. } if text == "Town hears nothing of this."
+            )),
+            "the out-of-scope announcement emits nothing at all"
+        );
+    }
+
+    // N8 (REQ-005): identical command sequences produce identical event
+    // streams — announcement delivery is deterministic.
+    #[test]
+    fn announcement_delivery_is_deterministic() {
+        let run = || {
+            let mut engine = announcing_oath_engine();
+            engine.handle_command(cmd("swear"));
+            engine.handle_command(cmd("east"));
+            format!("{:?}", engine.handle_command(cmd("confront")).events)
+        };
+        assert_eq!(run(), run());
+    }
+
+    // N12 (REQ-006) + inspect I5/I6: every missing scope id fails construction
+    // with the exact error — including the Radius case reporting the "room"
+    // label — and every scope kind validates when its ids resolve.
+    #[test]
+    fn announcement_scopes_are_validated_at_construction() {
+        let cases = [
+            (
+                AnnouncementScope::Region("ghost".to_string()),
+                "oath 'o1' announces to missing region 'ghost'",
+            ),
+            (
+                AnnouncementScope::Subregion("ghost".to_string()),
+                "oath 'o1' announces to missing subregion 'ghost'",
+            ),
+            (
+                AnnouncementScope::Room("ghost".to_string()),
+                "oath 'o1' announces to missing room 'ghost'",
+            ),
+            (
+                AnnouncementScope::Radius {
+                    room_id: "ghost".to_string(),
+                    radius: 1,
+                },
+                "oath 'o1' announces to missing room 'ghost'",
+            ),
+        ];
+        for (scope, display) in cases {
+            let mut world = oath_world();
+            world
+                .oaths
+                .get_mut("o1")
+                .expect("o1")
+                .fulfillment_announcements = vec![AuthoredAnnouncement {
+                scope: scope.clone(),
+                severity: AnnouncementSeverity::Notice,
+                text: "x".to_string(),
+            }];
+            let err = world.validate().expect_err("a missing scope id must fail");
+            assert_eq!(err.to_string(), display, "{scope:?}");
+        }
+
+        let mut world = oath_world();
+        world.subregions.insert(
+            "district".to_string(),
+            SubregionDefinition {
+                id: "district".to_string(),
+                name: "District".to_string(),
+                region: "r".to_string(),
+            },
+        );
+        world
+            .oaths
+            .get_mut("o1")
+            .expect("o1")
+            .fulfillment_announcements = vec![
+            AuthoredAnnouncement {
+                scope: AnnouncementScope::World,
+                severity: AnnouncementSeverity::Notice,
+                text: "w".to_string(),
+            },
+            AuthoredAnnouncement {
+                scope: AnnouncementScope::Region("r".to_string()),
+                severity: AnnouncementSeverity::Notice,
+                text: "r".to_string(),
+            },
+            AuthoredAnnouncement {
+                scope: AnnouncementScope::Subregion("district".to_string()),
+                severity: AnnouncementSeverity::Warning,
+                text: "s".to_string(),
+            },
+            AuthoredAnnouncement {
+                scope: AnnouncementScope::Room("lair".to_string()),
+                severity: AnnouncementSeverity::Alarm,
+                text: "rm".to_string(),
+            },
+            AuthoredAnnouncement {
+                scope: AnnouncementScope::Radius {
+                    room_id: "town".to_string(),
+                    radius: 2,
+                },
+                severity: AnnouncementSeverity::Alarm,
+                text: "rad".to_string(),
+            },
+        ];
+        assert_eq!(world.validate(), Ok(()), "all scope kinds validate");
     }
 }
