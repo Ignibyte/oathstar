@@ -472,17 +472,25 @@ Use levels for broad milestone growth, but use percentage-based skills for maste
 
 The game should be local-first.
 
-Initial persistence:
+Shipped (ticket #28, [Decision 046](./decisions.md#decision-046-saves-are-the-complete-versioned-session-and-loading-is-an-untrusted-input-boundary)):
 
-- Browser localStorage in prototype
-- Tauri-safe local save later
+- A save is the COMPLETE session — the mutated world + game state + event
+  counter under a format version — written as JSON to a named slot through
+  the hardened `oathstar-storage` layer (slot validation, symlink defense,
+  atomic temp+rename writes). Default slot `quicksave`; save root
+  `OATHSTAR_SAVE_DIR` (default `saves/`, gitignored).
+- Loading is an untrusted-input boundary: version mismatch, world
+  re-validation, and state/world coherence are all typed refusals that
+  leave the running session untouched. Mid-combat saves persist and resume
+  the exact pulse cadence.
+- Server `POST /save` / `POST /load` swap the engine atomically under the
+  engine lock; the client Save/Load buttons drive them.
 
-Future Tauri save direction:
+Future direction:
 
-- Save to app data directory
-- JSON format while iterating
-- Include version field for migrations
-- Support autosave plus manual save slots
+- Tauri app-data save root (the configurable root is the hook)
+- Migration tooling when version 2 exists (v1 rejects loudly)
+- Autosave plus manual save slots / slot-picker UI
 
 ## Content Authoring
 

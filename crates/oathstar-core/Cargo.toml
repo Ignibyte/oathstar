@@ -9,5 +9,10 @@ license.workspace = true
 oathstar-protocol = { path = "../oathstar-protocol" }
 serde.workspace = true
 
+[dev-dependencies]
+# Byte-identity witnesses for the save/load round-trip tests (ticket #28):
+# snapshots and payloads are compared as serde_json::Value.
+serde_json.workspace = true
+
 [lints]
 workspace = true

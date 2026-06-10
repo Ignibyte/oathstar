@@ -135,10 +135,10 @@ function bindEvents() {
     refreshState();
     focusCommandInput();
   });
-  const unavailable = () =>
-    appendLine("system", "System", "Save/load isn't wired into this shell yet.");
-  el.saveButton.addEventListener("click", unavailable);
-  el.loadButton.addEventListener("click", unavailable);
+  // Save/load (ticket #28): the buttons drive POST /save and /load; the
+  // server owns every decision (slot validation, file IO, load refusals).
+  el.saveButton.addEventListener("click", () => saveGame());
+  el.loadButton.addEventListener("click", () => loadGame());
 
   for (const tab of el.menuTabs) {
     tab.addEventListener("click", () => setActiveMenuTab(tab.dataset.tab));
@@ -290,6 +290,51 @@ async function runCommand(rawInput) {
   } finally {
     focusCommandInput();
   }
+}
+
+// Shared save/load POST glue (ticket #28): reports an in-band refusal (the
+// server's `{ ok, error }` body) or a transport failure, and returns whether
+// the request succeeded so the caller renders its own success line.
+async function persistenceRequest(path, verb) {
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!response.ok) {
+      appendLine("danger", "System", `The ${verb} failed (${response.status}).`);
+      return false;
+    }
+    const data = await response.json();
+    if (data && data.ok) {
+      return true;
+    }
+    const reason = data && data.error ? data.error : "unknown error";
+    appendLine("danger", "System", `The ${verb} was refused: ${reason}`);
+    return false;
+  } catch (_err) {
+    appendLine("danger", "System", "Could not reach the server.");
+    return false;
+  }
+}
+
+async function saveGame() {
+  if (await persistenceRequest("/save", "save")) {
+    appendLine("system", "System", "Game saved.");
+  }
+  focusCommandInput();
+}
+
+async function loadGame() {
+  if (await persistenceRequest("/load", "load")) {
+    // The loaded session's feed history is not persisted; a cleared log plus
+    // a fresh snapshot is the honest render (the New-button pattern).
+    el.log.replaceChildren();
+    appendLine("system", "System", "Game loaded.");
+    await refreshState();
+  }
+  focusCommandInput();
 }
 
 // ---- rendering ------------------------------------------------------------

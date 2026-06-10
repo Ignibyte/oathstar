@@ -162,7 +162,16 @@ impl SaveStore for FileSaveStore {
             .with_context(|| format!("failed to create save directory {}", self.root.display()))?;
         self.ensure_not_symlink(&path)?;
         let json = serde_json::to_string_pretty(value).context("failed to serialize save JSON")?;
-        fs::write(&path, json).with_context(|| format!("failed to write {}", path.display()))?;
+        // Write a temp sibling, then rename over the slot: the replacement is
+        // atomic within the directory, so a crash or a concurrent save can
+        // leave a stale temp file but never torn JSON at the slot itself.
+        let tmp = self.root.join(format!("{name}.json.tmp"));
+        self.ensure_not_symlink(&tmp)?;
+        fs::write(&tmp, json).with_context(|| format!("failed to write {}", tmp.display()))?;
+        if let Err(error) = fs::rename(&tmp, &path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(error).with_context(|| format!("failed to write {}", path.display()));
+        }
         Ok(())
     }
 
@@ -204,6 +213,11 @@ mod tests {
             .expect("write should succeed");
         // the bytes actually land at root/<name>.json
         assert!(dir.join("hero.json").exists(), "save file written");
+        // ticket #28 (atomic write): the temp sibling was renamed into place.
+        assert!(
+            !dir.join("hero.json.tmp").exists(),
+            "no temp file remains after a successful write"
+        );
         let loaded: Hero = store.read_json("hero").expect("read should succeed");
         assert_eq!(loaded, original);
         std::fs::remove_dir_all(&dir).ok();
@@ -267,6 +281,12 @@ mod tests {
         assert!(
             err.to_string().contains("failed to write"),
             "unexpected error: {err}"
+        );
+        // ticket #28 (atomic write): the failed rename cleans up its temp
+        // sibling instead of littering the save root.
+        assert!(
+            !dir.join("hero.json.tmp").exists(),
+            "the temp file is removed after a failed rename"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

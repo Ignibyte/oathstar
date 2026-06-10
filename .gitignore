@@ -12,3 +12,6 @@ src-tauri/target/
 # mutation testing output
 mutants.out/
 mutants.out.old/
+
+# local save slots (ticket #28) — player data, never source
+saves/

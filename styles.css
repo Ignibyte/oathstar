@@ -334,6 +334,9 @@ h1 {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.92rem;
   line-height: 1.42;
+  /* Server refusal lines can carry long unbroken tokens (file paths); wrap
+     them instead of forcing the feed to scroll horizontally (ticket #28). */
+  overflow-wrap: anywhere;
 }
 
 .log-entry.command {

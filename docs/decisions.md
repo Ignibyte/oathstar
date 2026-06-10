@@ -2249,3 +2249,71 @@ Revisit when:
   fn is ready).
 - Player speech verbs (say/yell) or DM/scheduler triggers land (new callers
   of `announce`).
+
+## Decision 046: Saves Are The Complete Versioned Session, And Loading Is An Untrusted-Input Boundary
+
+Status: Locked
+
+Date: 2026-06-10
+
+What was decided (ticket #28):
+
+- **The payload is the complete session.** `SaveData { version, world,
+  state, next_event_id }` in `oathstar-core` — the MUTATED
+  `WorldDefinition` rides along (the #26 lesson: `GameState` alone misses
+  removed placements, dropped items, and cleared inventories), and the
+  event counter keeps post-load ids from colliding with the loaded
+  session's own history. `SAVE_FORMAT_VERSION = 1`; any other version is
+  refused loudly — no migration tooling until a version 2 exists.
+- **Load constructs a new engine through the validation boundary.**
+  `Engine::from_save` is the codebase's first real file-input surface and
+  treats the payload as untrusted (§14): the version gate, then
+  `world.validate()` (the same boundary as `try_new`), then exactly the
+  state/world coherence gates that protect engine expect-invariants —
+  `current_room_id ∈ rooms`, `combat.enemy_id ∈ entities`,
+  `oath.oath_id ∈ oaths` — each a typed `LoadError` naming its offender.
+  Orphan ids no invariant depends on (pack, discovered rooms, offered
+  oath) are tolerated and render through total fallbacks.
+- **State-reachable arithmetic saturates.** A crafted save can carry any
+  integer, so the additions loaded state can reach (`tick`,
+  `next_pulse_at`, `next_event_id`, `combat.round`) use `saturating_add`.
+  **Standing rule:** every ticket that grows `GameState` (or adds an
+  engine `expect`) re-runs the audit — and the audit sweeps by OPERATOR
+  over the engine, not by payload field list
+  (PR-claude-operator-sweep-untrusted-arithmetic-001: the field-list sweep
+  missed `combat.round` and an inspect critic proved the panic).
+- **Storage stays the one hardened path, now atomic.** Every byte goes
+  through `validate_save_slot_name` + `FileSaveStore`; `write_json` writes
+  a temp sibling and renames it over the slot, so a crash or a concurrent
+  save can never leave torn JSON at the slot.
+- **The server swap is in-lock; IO is out-of-lock.** `POST /save` clones
+  the payload under the engine lock and writes after dropping it;
+  `POST /load` reads, parses, and builds the new engine BEFORE taking the
+  lock, then `*engine = loaded` — the tick loop and commands serialize
+  through the same mutex, so no partial session is ever observable and
+  every failure leaves the running session untouched. Refusals are in-band
+  `{ ok: false, error }` at HTTP 200 (the `/command` `accepted: false`
+  convention); a missing save maps to a player-readable "no save exists in
+  slot '…' yet" instead of a raw OS error.
+- **Feedback is client-side; the feed clears on load.** The server
+  broadcasts nothing for save/load. The client prints "Game saved." /
+  "Game loaded.", and load clears the feed (the New-button pattern)
+  because feed history is deliberately not persisted — a stale log would
+  lie about the restored session. Default slot `quicksave`; save root
+  `OATHSTAR_SAVE_DIR` (default `saves/`, gitignored).
+- **Deliberately accepted for v1:** the opening-scene seed stays the boot
+  world's (verified byte-identical for same-module saves — `begin()`
+  renders only static room fields); passive subscribers aren't notified of
+  a load (single local client); blocking `std::fs` in the handlers
+  (sub-ms payloads, lock never held across IO).
+
+Revisit when:
+
+- A second save-format version exists (migration tooling replaces
+  loud rejection).
+- Multiple slots / autosave / a slot-picker UI land (the optional `slot`
+  request field is the hook).
+- Multiplayer or a second live client arrives (load needs a broadcast; the
+  #27 announcement machinery is the candidate).
+- The Tauri shell picks its app-data save root (`OATHSTAR_SAVE_DIR` is the
+  seam).

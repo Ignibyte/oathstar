@@ -8,14 +8,21 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use oathstar_core::Engine;
+use oathstar_core::{Engine, SaveData};
 use oathstar_datastar::{feed_patch, opening_patches};
 use oathstar_protocol::{CommandRequest, CommandResponse, GameEvent, GameSnapshot};
+use oathstar_storage::{FileSaveStore, SaveStore};
+use serde::{Deserialize, Serialize};
 use tokio::{
     net::TcpListener,
     sync::{broadcast, Mutex},
     time,
 };
+
+/// The slot a save/load request without an explicit `slot` uses (ticket #28).
+/// The v1 client always saves and loads here; named slots are exercised by
+/// callers that pass one.
+const DEFAULT_SAVE_SLOT: &str = "quicksave";
 
 #[derive(Clone)]
 struct AppState {
@@ -26,6 +33,46 @@ struct AppState {
     /// client renders the start room without sending `look` first (REQ-001 /
     /// Decision 031: `try_new` emits nothing; `begin` is the on-start emitter).
     opening: Arc<Vec<GameEvent>>,
+    /// Where save slots live (ticket #28): the hardened `FileSaveStore` rooted
+    /// at `OATHSTAR_SAVE_DIR` (default `saves`). The store is the only
+    /// persistence path — slot validation and symlink defense come with it.
+    saves: FileSaveStore,
+}
+
+/// The JSON body of POST `/save` and `/load` (ticket #28). The body itself is
+/// required (the client sends `{}`); the `slot` FIELD is optional and an
+/// omitted one means [`DEFAULT_SAVE_SLOT`]. The slot name is validated by the
+/// storage layer before any filesystem contact.
+#[derive(Debug, Deserialize)]
+struct SaveLoadRequest {
+    #[serde(default)]
+    slot: Option<String>,
+}
+
+/// The in-band result of POST `/save` and `/load` (ticket #28): `ok` plus an
+/// error message on refusal — the `/command` `accepted: false` convention, so
+/// a failed save/load is a readable refusal, not a bare status code.
+#[derive(Debug, Serialize)]
+struct SaveLoadResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl SaveLoadResponse {
+    const fn success() -> Self {
+        Self {
+            ok: true,
+            error: None,
+        }
+    }
+
+    fn refusal(error: impl std::fmt::Display) -> Self {
+        Self {
+            ok: false,
+            error: Some(error.to_string()),
+        }
+    }
 }
 
 #[tokio::main]
@@ -37,10 +84,12 @@ async fn main() -> anyhow::Result<()> {
     let opening = Arc::new(engine.begin());
     let (events, _) = broadcast::channel(256);
 
+    let save_dir = std::env::var("OATHSTAR_SAVE_DIR").unwrap_or_else(|_| "saves".to_string());
     let app_state = AppState {
         engine: Arc::new(Mutex::new(engine)),
         events,
         opening,
+        saves: FileSaveStore::new(save_dir),
     };
 
     spawn_tick_loop(app_state.clone());
@@ -50,6 +99,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/state", get(state_snapshot))
         .route("/command", post(command))
+        .route("/save", post(save))
+        .route("/load", post(load))
         .route("/events", get(events_json))
         .route("/events/json", get(events_json))
         .route("/events/datastar", get(events_datastar))
@@ -96,6 +147,68 @@ async fn command(
     }
 
     Json(response)
+}
+
+/// POST `/save` (ticket #28): capture the running session and write it to the
+/// requested slot. The payload is cloned under the engine lock; the disk write
+/// happens after the lock drops, so pulses never stall on IO. A refused slot
+/// or a failed write is an in-band refusal and the session is untouched
+/// (saving never mutates it either way).
+async fn save(
+    State(app): State<AppState>,
+    Json(request): Json<SaveLoadRequest>,
+) -> Json<SaveLoadResponse> {
+    let slot = request.slot.as_deref().unwrap_or(DEFAULT_SAVE_SLOT);
+    let engine = app.engine.lock().await;
+    let data = engine.save_data();
+    drop(engine);
+
+    Json(match app.saves.write_json(slot, &data) {
+        Ok(()) => SaveLoadResponse::success(),
+        // anyhow alternate keeps the context chain ("failed to write …: …").
+        Err(error) => SaveLoadResponse::refusal(format!("{error:#}")),
+    })
+}
+
+/// POST `/load` (ticket #28): read the requested slot, rebuild the engine
+/// through [`Engine::from_save`] (the untrusted-input boundary), and only on
+/// success swap it in under the engine lock — the tick loop and concurrent
+/// commands serialize through the same lock, so no partial session is ever
+/// observable. Any failure (slot, file, parse, version, validation,
+/// incoherence) is an in-band refusal that leaves the running session
+/// unchanged.
+async fn load(
+    State(app): State<AppState>,
+    Json(request): Json<SaveLoadRequest>,
+) -> Json<SaveLoadResponse> {
+    let slot = request.slot.as_deref().unwrap_or(DEFAULT_SAVE_SLOT);
+    let data: SaveData = match app.saves.read_json(slot) {
+        Ok(data) => data,
+        Err(error) => {
+            // The commonest refusal — no save yet — gets a player-readable
+            // line instead of a raw OS error with a filesystem path.
+            let refusal = if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::NotFound)
+            }) {
+                format!("no save exists in slot '{slot}' yet")
+            } else {
+                format!("{error:#}")
+            };
+            return Json(SaveLoadResponse::refusal(refusal));
+        }
+    };
+    let loaded = match Engine::from_save(data) {
+        Ok(engine) => engine,
+        Err(error) => return Json(SaveLoadResponse::refusal(error)),
+    };
+
+    let mut engine = app.engine.lock().await;
+    *engine = loaded;
+    drop(engine);
+
+    Json(SaveLoadResponse::success())
 }
 
 async fn events_json(
@@ -246,6 +359,7 @@ mod tests {
             engine: Arc::new(Mutex::new(engine)),
             events: events.clone(),
             opening,
+            saves: FileSaveStore::new(scratch_save_dir("tick-loop")),
         };
         let mut rx = events.subscribe();
         spawn_tick_loop(state);
@@ -256,7 +370,22 @@ mod tests {
         assert!(matches!(event.kind, GameEventKind::Tick { .. }));
     }
 
+    /// A per-test save root under the OS temp dir, namespaced by pid + tag so
+    /// parallel test binaries and parallel tests never share a slot file.
+    fn scratch_save_dir(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "oathstar-server-saves-{}-{tag}",
+            std::process::id()
+        ))
+    }
+
     fn test_app_state() -> AppState {
+        test_app_state_with_saves("shared-readonly")
+    }
+
+    /// Like [`test_app_state`], with the save store rooted at a caller-owned
+    /// scratch tag — save/load tests pass their own tag so they never collide.
+    fn test_app_state_with_saves(tag: &str) -> AppState {
         let world = oathstar_content::load_beginner_world().expect("beginner world loads");
         let (events, _rx) = broadcast::channel(16);
         let mut engine = Engine::try_new(world).expect("valid beginner world");
@@ -265,6 +394,7 @@ mod tests {
             engine: Arc::new(Mutex::new(engine)),
             events,
             opening,
+            saves: FileSaveStore::new(scratch_save_dir(tag)),
         }
     }
 
@@ -749,5 +879,242 @@ mod tests {
             state.0.player.hp > 0 && state.0.player.hp <= state.0.player.max_hp,
             "player state stays coherent under interleaving"
         );
+    }
+
+    // ---- ticket #28: save & load over the live server seam ----
+
+    fn slot_request(slot: Option<&str>) -> Json<SaveLoadRequest> {
+        Json(SaveLoadRequest {
+            slot: slot.map(str::to_owned),
+        })
+    }
+
+    async fn state_value(app: &AppState) -> serde_json::Value {
+        serde_json::to_value(&state_snapshot(State(app.clone())).await.0)
+            .expect("snapshots serialize")
+    }
+
+    // SV1 (REQ-005/006): the endpoint round-trip — save lands the default
+    // slot file under the configured root (the DEFAULT_SAVE_SLOT/env-root
+    // killer), the session walks away, and load swaps the at-save /state
+    // back in byte-for-byte.
+    #[tokio::test]
+    async fn save_then_load_round_trips_state() {
+        let app = test_app_state_with_saves("sv1-round-trip");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+        walk_to_ashen_road(&app).await;
+
+        let saved = save(State(app.clone()), slot_request(None)).await;
+        assert!(saved.0.ok, "save accepted: {:?}", saved.0.error);
+        assert!(
+            app.saves.root().join("quicksave.json").exists(),
+            "the default slot file lands under the configured root"
+        );
+        let at_save = state_value(&app).await;
+
+        let back = command(State(app.clone()), req("south")).await;
+        assert!(back.0.accepted);
+        assert_ne!(
+            state_value(&app).await,
+            at_save,
+            "the live session diverges after the save"
+        );
+
+        let loaded = load(State(app.clone()), slot_request(None)).await;
+        assert!(loaded.0.ok, "load accepted: {:?}", loaded.0.error);
+        assert_eq!(
+            state_value(&app).await,
+            at_save,
+            "the restored /state equals the at-save /state byte-for-byte"
+        );
+        std::fs::remove_dir_all(app.saves.root()).ok();
+    }
+
+    // SV2 (REQ-004): an invalid slot is refused through the storage layer's
+    // validation, end to end, without any filesystem contact.
+    #[tokio::test]
+    async fn invalid_slot_is_refused_without_touching_the_filesystem() {
+        let app = test_app_state_with_saves("sv2-invalid-slot");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+        let response = save(State(app.clone()), slot_request(Some("../evil"))).await;
+        assert!(!response.0.ok, "a traversal slot is refused");
+        let error = response.0.error.expect("the refusal names the cause");
+        assert!(
+            error.contains("save slot id '../evil' must not contain a path separator"),
+            "the storage validation surfaces verbatim: {error}"
+        );
+        assert!(
+            !app.saves.root().exists(),
+            "no save directory is created for a rejected slot"
+        );
+    }
+
+    // SV3a (REQ-003/005): loading with no save on disk refuses with the
+    // friendly first-load line — no OS error, no filesystem path — and the
+    // running session is untouched (the NotFound branch's friendly arm).
+    #[tokio::test]
+    async fn missing_save_load_is_refused_and_state_unchanged() {
+        let app = test_app_state_with_saves("sv3-missing");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+        let before = state_value(&app).await;
+        let response = load(State(app.clone()), slot_request(None)).await;
+        assert!(!response.0.ok, "a missing save refuses the load");
+        assert_eq!(
+            response.0.error.as_deref(),
+            Some("no save exists in slot 'quicksave' yet"),
+            "the friendly refusal, not a raw OS error"
+        );
+        assert_eq!(
+            state_value(&app).await,
+            before,
+            "a refused load leaves the session untouched"
+        );
+    }
+
+    // SV3b: the NotFound branch's OTHER arm — a present-but-corrupt slot
+    // keeps the parse-context refusal (kills a branch-flip mutant on the
+    // ErrorKind check) and still leaves the session untouched.
+    #[tokio::test]
+    async fn corrupt_save_load_is_refused_with_the_parse_context() {
+        let app = test_app_state_with_saves("sv3-corrupt");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+        std::fs::create_dir_all(app.saves.root()).expect("make the save root");
+        std::fs::write(app.saves.root().join("quicksave.json"), b"{ not json")
+            .expect("seed a corrupt slot");
+        let before = state_value(&app).await;
+        let response = load(State(app.clone()), slot_request(None)).await;
+        assert!(!response.0.ok, "a corrupt save refuses the load");
+        let error = response.0.error.expect("the refusal names the cause");
+        assert!(
+            error.contains("failed to parse"),
+            "the non-NotFound arm keeps the context chain: {error}"
+        );
+        assert_eq!(
+            state_value(&app).await,
+            before,
+            "a refused load leaves the session untouched"
+        );
+        std::fs::remove_dir_all(app.saves.root()).ok();
+    }
+
+    // SV3c: a version-mismatched file refuses through Engine::from_save and
+    // the typed message is forwarded verbatim (the from_save match arm's
+    // killer at the endpoint layer).
+    #[tokio::test]
+    async fn version_mismatched_save_load_is_refused_via_from_save() {
+        let app = test_app_state_with_saves("sv3-version");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+        let saved = save(State(app.clone()), slot_request(None)).await;
+        assert!(saved.0.ok);
+        let slot_path = app.saves.root().join("quicksave.json");
+        let mut on_disk: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&slot_path).expect("the slot file reads"),
+        )
+        .expect("the slot file parses");
+        on_disk["version"] = serde_json::json!(2);
+        std::fs::write(&slot_path, on_disk.to_string()).expect("rewrite the slot");
+
+        let response = load(State(app.clone()), slot_request(None)).await;
+        assert!(!response.0.ok, "a future-version save refuses the load");
+        assert_eq!(
+            response.0.error.as_deref(),
+            Some("save format version 2 is not supported (this build reads version 1)"),
+            "the typed LoadError display is forwarded verbatim"
+        );
+        std::fs::remove_dir_all(app.saves.root()).ok();
+    }
+
+    // SV4 (REQ-007): the played acceptance loop — earn the xp and the fang,
+    // save, lose both, load: restored, standing back on the road.
+    #[tokio::test(start_paused = true)]
+    async fn played_loop_xp_and_fang_survive_save_and_load() {
+        let app = test_app_state_with_saves("sv4-played-loop");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+        walk_to_ashen_road(&app).await;
+        let mut rx = app.events.subscribe();
+        assert!(command(State(app.clone()), req("attack")).await.0.accepted);
+        spawn_tick_loop(app.clone());
+        let _ = drain_combat_until_ended(&mut rx).await;
+        assert!(
+            command(State(app.clone()), req("take fang"))
+                .await
+                .0
+                .accepted
+        );
+
+        let saved = save(State(app.clone()), slot_request(None)).await;
+        assert!(saved.0.ok, "{:?}", saved.0.error);
+
+        assert!(
+            command(State(app.clone()), req("drop fang"))
+                .await
+                .0
+                .accepted
+        );
+        assert!(command(State(app.clone()), req("south")).await.0.accepted);
+
+        let loaded = load(State(app.clone()), slot_request(None)).await;
+        assert!(loaded.0.ok, "{:?}", loaded.0.error);
+        let state = state_snapshot(State(app.clone())).await;
+        assert_eq!(state.0.player.xp, 5, "the earned xp survives the loop");
+        assert!(
+            state.0.pack.iter().any(|item| item.name == "Cracked Fang"),
+            "the taken fang survives the loop"
+        );
+        assert_eq!(
+            state.0.current_room_id, "ashen_road",
+            "the player stands back on the road"
+        );
+        std::fs::remove_dir_all(app.saves.root()).ok();
+    }
+
+    // SV5 (REQ-005): the swap under fire — save mid-combat, let the REAL
+    // tick loop finish the live fight, then load the mid-fight save back in
+    // UNDER the running loop: /state is the at-save encounter byte-for-byte
+    // and the restored fight pulses to the same deterministic victory.
+    #[tokio::test(start_paused = true)]
+    async fn mid_combat_save_and_load_resume_the_saved_fight() {
+        let app = test_app_state_with_saves("sv5-swap-under-fire");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+        walk_to_ashen_road(&app).await;
+        assert!(command(State(app.clone()), req("attack")).await.0.accepted);
+
+        let saved = save(State(app.clone()), slot_request(None)).await;
+        assert!(saved.0.ok, "{:?}", saved.0.error);
+        let at_save = state_value(&app).await;
+
+        let mut rx = app.events.subscribe();
+        spawn_tick_loop(app.clone());
+        let _ = drain_combat_until_ended(&mut rx).await;
+        let post = state_snapshot(State(app.clone())).await;
+        assert!(post.0.combat.is_none(), "the live fight ran to its end");
+
+        let mut rx = app.events.subscribe();
+        let loaded = load(State(app.clone()), slot_request(None)).await;
+        assert!(loaded.0.ok, "{:?}", loaded.0.error);
+        assert_eq!(
+            state_value(&app).await,
+            at_save,
+            "the loaded /state is the at-save mid-encounter session"
+        );
+
+        let kinds = drain_combat_until_ended(&mut rx).await;
+        assert!(
+            matches!(
+                kinds.last(),
+                Some(GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                })
+            ),
+            "the running loop pulses the restored fight to victory: {kinds:?}"
+        );
+        let end = state_snapshot(State(app.clone())).await;
+        assert_eq!(end.0.player.xp, 5, "the restored fight pays the reward");
+        assert_eq!(
+            end.0.player.hp, 14,
+            "the replayed pulses land the saved fight's exact damage"
+        );
+        std::fs::remove_dir_all(app.saves.root()).ok();
     }
 }

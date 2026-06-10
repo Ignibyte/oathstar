@@ -813,16 +813,16 @@ pub struct CombatState {
     /// The player's queued between-pulse action (ticket #24), resolved by the
     /// next pulse's Phase 2 skill window — `None` skips the phase cleanly.
     ///
-    /// These three fields are plain (no `#[serde(default)]`): mid-encounter
-    /// state is never persisted (`oathstar-storage` validates slot names only),
-    /// and a defaulted `pulse_rate` of 0 would mean "pulse every tick" — a
-    /// wrong-by-default worse than rejecting a payload shape that never exists.
+    /// These three fields are plain (no `#[serde(default)]`): a v1 save
+    /// (ticket #28) always writes the complete struct, so a payload missing
+    /// one is malformed — and a defaulted `pulse_rate` of 0 would mean "pulse
+    /// every tick", a wrong-by-default worse than refusing the parse.
     pub queued_action: Option<CombatAction>,
     /// A one-shot guard charge (ticket #25): set when a queued guard resolves
     /// in the Phase-2 window, consumed by the next enemy return strike from
     /// any source (pulse Phase 1 or a manual round), which it turns aside
-    /// entirely. Plain like its siblings above — never persisted, and it dies
-    /// with the encounter state on every combat end.
+    /// entirely. Plain like its siblings above; it dies with the encounter
+    /// state on every combat end and round-trips through a mid-combat save.
     pub guard_charge: bool,
 }
 
@@ -896,6 +896,65 @@ struct ResolvedHostile {
     attack: u32,
 }
 
+/// The on-disk save format version (ticket #28).
+///
+/// [`Engine::from_save`] rejects any other value loudly; there is no migration
+/// tooling in v1, only the version field and the refusal.
+pub const SAVE_FORMAT_VERSION: u32 = 1;
+
+/// A complete saved session (ticket #28): the mutated world, the game state,
+/// and the event counter, under a format version.
+///
+/// Produced by [`Engine::save_data`] and consumed by [`Engine::from_save`].
+/// The world is the SESSION's world — placements removed, inventories cleared,
+/// and items dropped in play are all captured (the #26 lesson: [`GameState`]
+/// alone misses world mutations). `next_event_id` rides along so post-load
+/// event ids never collide with the loaded session's own history (loading an
+/// OLDER save still rewinds ids relative to the live feed — consumers key on
+/// event type, not id).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveData {
+    /// The format version; must equal [`SAVE_FORMAT_VERSION`] to load.
+    pub version: u32,
+    /// The session's (possibly mutated) world.
+    pub world: WorldDefinition,
+    /// The session's game state.
+    pub state: GameState,
+    /// The next event id the engine would allocate.
+    pub next_event_id: u64,
+}
+
+/// Why a [`SaveData`] payload was rejected by [`Engine::from_save`].
+///
+/// A save file is untrusted input (§14): every arm is a typed refusal at the
+/// load boundary, so no crafted payload can reach an engine invariant — and
+/// panic — later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadError {
+    /// The payload's format version is not [`SAVE_FORMAT_VERSION`].
+    VersionMismatch { found: u32, supported: u32 },
+    /// The payload's world fails [`WorldDefinition::validate`].
+    InvalidWorld(WorldValidationError),
+    /// The payload's state references its world incoherently; accepting it
+    /// would violate an engine invariant later. `what` names the offender.
+    StateIncoherent { what: String },
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::VersionMismatch { found, supported } => write!(
+                f,
+                "save format version {found} is not supported (this build reads version {supported})"
+            ),
+            Self::InvalidWorld(error) => write!(f, "saved world failed validation: {error}"),
+            Self::StateIncoherent { what } => write!(f, "saved state is incoherent: {what}"),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
 #[derive(Debug, Clone)]
 pub struct Engine {
     world: WorldDefinition,
@@ -946,6 +1005,69 @@ impl Engine {
         })
     }
 
+    /// Capture the complete running session as a versioned [`SaveData`]
+    /// (ticket #28).
+    ///
+    /// Clones the session; the running engine is never mutated by a save.
+    #[must_use]
+    pub fn save_data(&self) -> SaveData {
+        SaveData {
+            version: SAVE_FORMAT_VERSION,
+            world: self.world.clone(),
+            state: self.state.clone(),
+            next_event_id: self.next_event_id,
+        }
+    }
+
+    /// Reconstruct an engine from a saved session (ticket #28).
+    ///
+    /// A save file is untrusted input (§14). The version is checked first, the
+    /// world is re-validated through the same boundary as [`Engine::try_new`],
+    /// and then the state's world references are checked against the loaded
+    /// world — the current room, the active combat enemy, and the sworn oath
+    /// are exactly the state-reachable engine invariants, so a crafted payload
+    /// is refused here instead of panicking later.
+    ///
+    /// # Errors
+    /// Returns a [`LoadError`] naming the first rejection: a version mismatch,
+    /// a world validation failure, or a state/world incoherence.
+    pub fn from_save(data: SaveData) -> Result<Self, LoadError> {
+        if data.version != SAVE_FORMAT_VERSION {
+            return Err(LoadError::VersionMismatch {
+                found: data.version,
+                supported: SAVE_FORMAT_VERSION,
+            });
+        }
+        data.world.validate().map_err(LoadError::InvalidWorld)?;
+        if !data.world.rooms.contains_key(&data.state.current_room_id) {
+            let room = &data.state.current_room_id;
+            return Err(LoadError::StateIncoherent {
+                what: format!("current room '{room}' is not in the world"),
+            });
+        }
+        if let Some(combat) = data.state.combat.as_ref() {
+            if !data.world.entities.contains_key(&combat.enemy_id) {
+                let enemy = &combat.enemy_id;
+                return Err(LoadError::StateIncoherent {
+                    what: format!("combat enemy '{enemy}' is not in the world"),
+                });
+            }
+        }
+        if let Some(oath) = data.state.oath.as_ref() {
+            if !data.world.oaths.contains_key(&oath.oath_id) {
+                let oath_id = &oath.oath_id;
+                return Err(LoadError::StateIncoherent {
+                    what: format!("sworn oath '{oath_id}' is not in the world"),
+                });
+            }
+        }
+        Ok(Self {
+            world: data.world,
+            state: data.state,
+            next_event_id: data.next_event_id,
+        })
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> GameSnapshot {
         let room = self.current_room();
@@ -986,7 +1108,8 @@ impl Engine {
     /// are deterministic and reproducible (REQ-006) — the engine never reads
     /// wall-clock time. Returns the `Tick` event followed by any pulse events.
     pub fn tick(&mut self) -> Vec<GameEvent> {
-        self.state.tick += 1;
+        // Saturating: a crafted save can carry `u64::MAX` (ticket #28).
+        self.state.tick = self.state.tick.saturating_add(1);
         let mut events = vec![self.event(
             EventChannel::Debug,
             GameEventKind::Tick {
@@ -1011,12 +1134,12 @@ impl Engine {
         if self.state.tick < combat.next_pulse_at {
             return;
         }
-        let round = combat.round + 1;
+        let round = combat.round.saturating_add(1);
         events.push(self.event(EventChannel::Combat, GameEventKind::CombatPulse { round }));
         self.resolve_combat_round(events);
         self.resolve_queued_action(events);
         if let Some(combat) = self.state.combat.as_mut() {
-            combat.next_pulse_at = self.state.tick + combat.pulse_rate;
+            combat.next_pulse_at = self.state.tick.saturating_add(combat.pulse_rate);
         }
     }
 
@@ -1834,7 +1957,7 @@ impl Engine {
             round: 0,
             log: Vec::new(),
             pulse_rate: DEFAULT_COMBAT_PULSE_TICKS,
-            next_pulse_at: self.state.tick + DEFAULT_COMBAT_PULSE_TICKS,
+            next_pulse_at: self.state.tick.saturating_add(DEFAULT_COMBAT_PULSE_TICKS),
             queued_action: None,
             guard_charge: false,
         });
@@ -1930,7 +2053,7 @@ impl Engine {
                 .combat
                 .as_mut()
                 .expect("resolve_combat_round is only called with an active encounter");
-            combat.round += 1;
+            combat.round = combat.round.saturating_add(1);
             combat.enemy_hp = combat.enemy_hp.saturating_sub(damage).max(0);
             let line = format!(
                 "You strike {} for {damage} ({}/{}).",
@@ -2362,7 +2485,7 @@ impl Engine {
             channel,
             kind,
         };
-        self.next_event_id += 1;
+        self.next_event_id = self.next_event_id.saturating_add(1);
         event
     }
 }
@@ -6832,5 +6955,331 @@ mod tests {
             },
         ];
         assert_eq!(world.validate(), Ok(()), "all scope kinds validate");
+    }
+
+    // ---- ticket #28: save & load — the engine persistence surface ----
+
+    /// A mid-session spoils engine: fight to victory, take the dropped fang.
+    /// The session has every mutation class the payload must carry — earned
+    /// xp, a packed item, a removed placement, and a cleared inventory.
+    fn played_spoils_engine() -> Engine {
+        let mut engine = spoils_engine(8, 1, 7, true);
+        engine.handle_command(cmd("attack stray"));
+        let _ = engine.tick();
+        let _ = engine.tick(); // pulse round 2: victory, fang drops, xp lands
+        engine.handle_command(cmd("take fang"));
+        engine
+    }
+
+    fn snapshot_value(engine: &Engine) -> serde_json::Value {
+        serde_json::to_value(engine.snapshot()).expect("snapshots serialize")
+    }
+
+    // SL1 (REQ-001): the save payload carries the COMPLETE mutated session —
+    // world mutations included (the #26 lesson) — and never mutates the
+    // running engine. By-value asserts are the fn-replace killers for
+    // save_data in this package.
+    #[test]
+    fn save_data_captures_the_mutated_session_without_mutating_it() {
+        let engine = played_spoils_engine();
+        let before = snapshot_value(&engine);
+        let data = engine.save_data();
+        assert_eq!(
+            snapshot_value(&engine),
+            before,
+            "saving never mutates the running session"
+        );
+
+        assert_eq!(
+            data.version, SAVE_FORMAT_VERSION,
+            "stamped with the format version"
+        );
+        assert_eq!(data.state.player.xp, 7, "earned xp rides in the payload");
+        assert_eq!(
+            data.state.pack,
+            vec!["fang".to_string()],
+            "the taken fang rides in the pack"
+        );
+        let field = data.world.rooms.get("field").expect("field saved");
+        assert!(
+            !field.entities.iter().any(|id| id == "stray"),
+            "the defeated stray's placement is gone from the SAVED world"
+        );
+        assert!(
+            !field.items.iter().any(|id| id == "fang"),
+            "the taken fang's ground placement is gone from the SAVED world"
+        );
+        assert!(
+            data.world
+                .entities
+                .get("stray")
+                .expect("the registry entry survives placement removal")
+                .inventory
+                .is_empty(),
+            "the dropped inventory is cleared in the SAVED world"
+        );
+        assert_eq!(
+            data.next_event_id, engine.next_event_id,
+            "the event counter rides along"
+        );
+    }
+
+    // SL2 (REQ-002): restoring a save reproduces the session byte-for-byte —
+    // the restored snapshot equals the at-save snapshot as serde_json::Value.
+    #[test]
+    fn from_save_restores_a_byte_identical_snapshot() {
+        let engine = played_spoils_engine();
+        let at_save = snapshot_value(&engine);
+        let restored = Engine::from_save(engine.save_data()).expect("a self-produced save loads");
+        assert_eq!(
+            snapshot_value(&restored),
+            at_save,
+            "the restored snapshot is byte-identical to the at-save snapshot"
+        );
+    }
+
+    // SL3 (REQ-002, mid-combat variant): a save taken mid-encounter — queued
+    // action armed, guard charge banked — restores an engine whose future
+    // (events AND snapshot) replays the unsaved twin's exactly, pulse for
+    // pulse. Event ids and ticks match because both persist.
+    #[test]
+    fn mid_combat_save_resumes_the_exact_cadence_and_queued_action() {
+        let mut engine = spoils_engine(30, 1, 0, false);
+        engine.handle_command(cmd("attack stray")); // round 1; pulse due at +2
+        engine.handle_command(cmd("guard"));
+        let _ = engine.tick();
+        let _ = engine.tick(); // pulse 2: guard resolves, charge armed
+        engine.handle_command(cmd("power strike")); // queued for pulse 3
+
+        let data = engine.save_data();
+        let combat = data
+            .state
+            .combat
+            .as_ref()
+            .expect("mid-combat save persists the encounter");
+        assert_eq!(
+            combat.queued_action,
+            Some(CombatAction::PowerStrike),
+            "the queued action rides in the payload"
+        );
+        assert!(combat.guard_charge, "the banked guard charge rides too");
+
+        let mut restored = Engine::from_save(data).expect("a mid-combat save loads");
+        let twin_events: Vec<GameEvent> = (0..2).flat_map(|_| engine.tick()).collect();
+        let restored_events: Vec<GameEvent> = (0..2).flat_map(|_| restored.tick()).collect();
+        assert_eq!(
+            serde_json::to_value(&restored_events).expect("events serialize"),
+            serde_json::to_value(&twin_events).expect("events serialize"),
+            "the restored future replays the unsaved twin's, event for event"
+        );
+        assert_eq!(
+            snapshot_value(&restored),
+            snapshot_value(&engine),
+            "and the post-pulse snapshots agree"
+        );
+    }
+
+    // SL4 (REQ-003): every refusal arm, staged BOTH ways (the fixture-
+    // distinguishability rule): the version gate by value, world
+    // re-validation, and each of the three state-coherence gates naming its
+    // offender — with the matching valid payload loading fine.
+    #[test]
+    fn from_save_rejects_a_version_mismatch_by_value() {
+        let engine = played_spoils_engine();
+        let mut data = engine.save_data();
+        data.version = 2;
+        assert_eq!(
+            Engine::from_save(data.clone()).err(),
+            Some(LoadError::VersionMismatch {
+                found: 2,
+                supported: SAVE_FORMAT_VERSION,
+            }),
+            "an unknown version is refused loudly, naming both sides"
+        );
+        data.version = SAVE_FORMAT_VERSION;
+        assert!(
+            Engine::from_save(data).is_ok(),
+            "the same payload at the supported version loads"
+        );
+    }
+
+    #[test]
+    fn from_save_revalidates_the_world() {
+        let engine = played_spoils_engine();
+        let mut data = engine.save_data();
+        data.world
+            .rooms
+            .get_mut("field")
+            .expect("field saved")
+            .exits
+            .insert("west".to_string(), "ghost".to_string());
+        assert_eq!(
+            Engine::from_save(data).err(),
+            Some(LoadError::InvalidWorld(
+                WorldValidationError::DanglingExit {
+                    room_id: "field".to_string(),
+                    direction: "west".to_string(),
+                    target_room_id: "ghost".to_string(),
+                }
+            )),
+            "a corrupted world is refused through the same boundary as try_new"
+        );
+        assert!(
+            Engine::from_save(engine.save_data()).is_ok(),
+            "the uncorrupted payload loads"
+        );
+    }
+
+    #[test]
+    fn from_save_rejects_an_unknown_current_room() {
+        let engine = played_spoils_engine();
+        let mut data = engine.save_data();
+        data.state.current_room_id = "ghost".to_string();
+        assert_eq!(
+            Engine::from_save(data).err(),
+            Some(LoadError::StateIncoherent {
+                what: "current room 'ghost' is not in the world".to_string(),
+            }),
+            "a state pointing at a missing room is refused, naming the room"
+        );
+        assert!(
+            Engine::from_save(engine.save_data()).is_ok(),
+            "the coherent payload loads"
+        );
+    }
+
+    #[test]
+    fn from_save_rejects_an_unknown_combat_enemy() {
+        let mut engine = spoils_engine(30, 1, 0, false);
+        engine.handle_command(cmd("attack stray"));
+        let mut data = engine.save_data();
+        data.state
+            .combat
+            .as_mut()
+            .expect("encounter is active")
+            .enemy_id = "ghost".to_string();
+        assert_eq!(
+            Engine::from_save(data).err(),
+            Some(LoadError::StateIncoherent {
+                what: "combat enemy 'ghost' is not in the world".to_string(),
+            }),
+            "a combat state naming a missing enemy is refused"
+        );
+        assert!(
+            Engine::from_save(engine.save_data()).is_ok(),
+            "the real mid-combat payload loads"
+        );
+    }
+
+    #[test]
+    fn from_save_rejects_an_unknown_sworn_oath() {
+        let engine = Engine::try_new(oath_world()).expect("valid oath world");
+        let mut data = engine.save_data();
+        data.state.oath = Some(OathProgress {
+            oath_id: "ghost".to_string(),
+            title: "Ghost Oath".to_string(),
+            status: OathStatus::Sworn,
+        });
+        assert_eq!(
+            Engine::from_save(data).err(),
+            Some(LoadError::StateIncoherent {
+                what: "sworn oath 'ghost' is not in the world".to_string(),
+            }),
+            "an oath state naming a missing oath is refused"
+        );
+        let mut valid = engine.save_data();
+        valid.state.oath = Some(OathProgress {
+            oath_id: "o1".to_string(),
+            title: "Test Oath".to_string(),
+            status: OathStatus::Sworn,
+        });
+        assert!(
+            Engine::from_save(valid).is_ok(),
+            "the same oath state naming a real oath loads"
+        );
+    }
+
+    // SL4b: the LoadError Display texts are part of the refusal contract the
+    // server forwards verbatim to the player feed.
+    #[test]
+    fn load_error_messages_render() {
+        assert_eq!(
+            LoadError::VersionMismatch {
+                found: 9,
+                supported: 1
+            }
+            .to_string(),
+            "save format version 9 is not supported (this build reads version 1)"
+        );
+        assert_eq!(
+            LoadError::InvalidWorld(WorldValidationError::StartRoomMissing {
+                start_room_id: "x".to_string()
+            })
+            .to_string(),
+            "saved world failed validation: start room 'x' does not exist"
+        );
+        assert_eq!(
+            LoadError::StateIncoherent {
+                what: "current room 'ghost' is not in the world".to_string()
+            }
+            .to_string(),
+            "saved state is incoherent: current room 'ghost' is not in the world"
+        );
+    }
+
+    // SL5 (REQ-003, the tolerated class): orphan state ids that no engine
+    // invariant depends on load fine and render through total fallbacks —
+    // the audit's tolerance line, pinned.
+    #[test]
+    fn from_save_tolerates_orphan_pack_and_discovered_ids() {
+        let engine = spoils_engine(8, 1, 0, false);
+        let mut data = engine.save_data();
+        data.state.pack.push("phantom_relic".to_string());
+        data.state.discovered_rooms.insert("atlantis".to_string());
+        let restored = Engine::from_save(data).expect("orphan ids are tolerated, not gated");
+        let snapshot = restored.snapshot();
+        let phantom = snapshot
+            .pack
+            .iter()
+            .find(|item| item.id == "phantom_relic")
+            .expect("the orphan pack id still renders");
+        assert_eq!(
+            phantom.name, "phantom_relic",
+            "an unknown item falls back to its id instead of panicking"
+        );
+    }
+
+    // SL6 (REQ-003 / inspect finding 1): the saturation rails. A crafted
+    // save at the integer ceilings — tick and next_event_id at u64::MAX,
+    // combat round at u32::MAX and due NOW — ticks, pulses, and emits
+    // events without panicking; a debug build would otherwise abort on the
+    // first overflow. Two ticks prove the rail holds, not just one step.
+    #[test]
+    fn loaded_integer_ceilings_saturate_instead_of_panicking() {
+        let mut engine = spoils_engine(30, 1, 0, false);
+        engine.handle_command(cmd("attack stray"));
+        let mut data = engine.save_data();
+        data.state.tick = u64::MAX;
+        data.next_event_id = u64::MAX;
+        {
+            let combat = data.state.combat.as_mut().expect("encounter is active");
+            combat.round = u32::MAX;
+            combat.next_pulse_at = 0;
+        }
+        let mut restored =
+            Engine::from_save(data).expect("ceiling values are coherent, just extreme");
+        let events = restored.tick();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.kind, GameEventKind::CombatPulse { round: u32::MAX })),
+            "the overdue pulse fires at the round rail: {events:?}"
+        );
+        assert_eq!(
+            restored.snapshot().tick,
+            u64::MAX,
+            "the tick clock saturates at the rail"
+        );
+        let _ = restored.tick();
     }
 }
