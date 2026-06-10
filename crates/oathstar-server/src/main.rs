@@ -194,12 +194,22 @@ async fn events_datastar(
 fn spawn_tick_loop(app: AppState) {
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(1));
+        // A suspended/stalled process must not fast-forward the world: the
+        // default Burst behavior fires every missed 1s tick back-to-back on
+        // resume, which would resolve whole real-time combats in one instant
+        // (ticket #24). Skip drops the missed ticks and resumes the cadence.
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
             let mut engine = app.engine.lock().await;
-            let event = engine.tick();
+            // A tick now returns the Tick event plus any combat-pulse events
+            // (ticket #24); broadcast in order, after the lock drops, like the
+            // /command handler.
+            let events = engine.tick();
             drop(engine);
-            let _ = app.events.send(event);
+            for event in events {
+                let _ = app.events.send(event);
+            }
         }
     });
 }
@@ -214,7 +224,9 @@ fn event_to_json(event: &GameEvent) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oathstar_protocol::{EventChannel, GameEventKind, OathStatus, OutputComponent};
+    use oathstar_protocol::{
+        CombatOutcome, EventChannel, GameEventKind, OathStatus, OutputComponent,
+    };
 
     #[tokio::test]
     async fn root_serves_the_status_line() {
@@ -535,6 +547,163 @@ mod tests {
         assert!(
             joined.contains("log-entry"),
             "seed uses feed-entry markup: {joined}"
+        );
+    }
+
+    // ---- ticket #24: the real-time pulse loop over the live server seam ----
+    // `start_paused`: tokio's virtual clock auto-advances whenever every task is
+    // idle, so the REAL 1s `spawn_tick_loop` drives fully deterministic pulses
+    // with no real waiting — the integration-layer face of REQ-006.
+
+    fn req(input: &str) -> Json<CommandRequest> {
+        Json(CommandRequest {
+            input: input.to_string(),
+            actor_id: None,
+        })
+    }
+
+    /// Walk the authored route from the start room to the combat-enabled
+    /// Ashen Road (two cells north), where the beginner hostile waits.
+    async fn walk_to_ashen_road(app: &AppState) {
+        for step in ["north", "north"] {
+            let moved = command(State(app.clone()), req(step)).await;
+            assert!(moved.0.accepted, "move {step} accepted");
+        }
+    }
+
+    /// Drain the subscription's Combat-channel events until `CombatEnded`,
+    /// returning the kinds in arrival order. Virtual time advances while the
+    /// recv awaits, so the tick loop keeps pulsing underneath.
+    async fn drain_combat_until_ended(
+        rx: &mut broadcast::Receiver<GameEvent>,
+    ) -> Vec<GameEventKind> {
+        let mut kinds = Vec::new();
+        loop {
+            let event = tokio::time::timeout(Duration::from_mins(5), rx.recv())
+                .await
+                .expect("combat resolves within virtual time")
+                .expect("broadcast stays open");
+            if !matches!(event.channel, EventChannel::Combat) {
+                continue;
+            }
+            let done = matches!(event.kind, GameEventKind::CombatEnded { .. });
+            kinds.push(event.kind);
+            if done {
+                return kinds;
+            }
+        }
+    }
+
+    // S1 (REQ-001/003): the real tick loop streams the whole deterministic
+    // combat sequence to a subscriber — no command after the opening attack —
+    // and /state reflects the resolved fight (the battle modal's data pair).
+    #[tokio::test(start_paused = true)]
+    async fn pulses_stream_combat_to_subscribers_until_victory() {
+        let app = test_app_state();
+        walk_to_ashen_road(&app).await;
+        let mut rx = app.events.subscribe();
+        let attack = command(State(app.clone()), req("attack")).await;
+        assert!(
+            attack.0.accepted,
+            "the bare attack engages the road hostile"
+        );
+        spawn_tick_loop(app.clone());
+
+        let kinds = drain_combat_until_ended(&mut rx).await;
+        // Ashen Stray (9 hp / attack 3) vs strike 4: round 1 from the command
+        // (5/9, 17/20), pulse round 2 (1/9, 14/20), pulse round 3 (0/9 — no
+        // return after the kill).
+        assert_eq!(kinds.len(), 9, "the exact combat sequence: {kinds:?}");
+        assert!(
+            matches!(&kinds[0], GameEventKind::CombatStarted { enemy_id, .. } if enemy_id == "ashen_stray")
+        );
+        assert!(matches!(kinds[3], GameEventKind::CombatPulse { round: 2 }));
+        assert!(matches!(kinds[6], GameEventKind::CombatPulse { round: 3 }));
+        assert!(matches!(
+            &kinds[8],
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Victory,
+                ..
+            }
+        ));
+
+        let state = state_snapshot(State(app)).await;
+        assert!(state.0.combat.is_none(), "combat cleared after the victory");
+        assert_eq!(state.0.player.hp, 14, "two enemy returns landed (20 → 14)");
+    }
+
+    // S2 (REQ-003/004): a flee submitted between pulses queues, and the next
+    // pulse's skill window ends the encounter as fled — streamed live.
+    #[tokio::test(start_paused = true)]
+    async fn flee_between_pulses_ends_the_encounter_fled() {
+        let app = test_app_state();
+        walk_to_ashen_road(&app).await;
+        let mut rx = app.events.subscribe();
+        assert!(command(State(app.clone()), req("attack")).await.0.accepted);
+        let flee = command(State(app.clone()), req("flee")).await;
+        assert!(flee.0.accepted);
+        assert_eq!(
+            flee.0
+                .snapshot
+                .combat
+                .as_ref()
+                .and_then(|combat| combat.queued_action.as_deref()),
+            Some("flee"),
+            "the queued action rides the command snapshot"
+        );
+        spawn_tick_loop(app.clone());
+
+        let kinds = drain_combat_until_ended(&mut rx).await;
+        // started + round-1 pair + the flee confirmation + pulse marker +
+        // round-2 pair + fled end.
+        assert_eq!(kinds.len(), 8, "the exact fled sequence: {kinds:?}");
+        assert!(matches!(kinds[4], GameEventKind::CombatPulse { round: 2 }));
+        assert!(matches!(
+            &kinds[7],
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Fled,
+                ..
+            }
+        ));
+
+        let state = state_snapshot(State(app)).await;
+        assert!(state.0.combat.is_none(), "fled clears combat");
+        assert_eq!(state.0.player.hp, 14, "post-exchange HP kept — no revive");
+    }
+
+    // S3 (REQ-007): a command burst interleaves safely with the running tick
+    // loop — the engine mutex serializes them, everything completes, and the
+    // final state is coherent.
+    #[tokio::test(start_paused = true)]
+    async fn commands_and_tick_loop_interleave_safely() {
+        let app = test_app_state();
+        walk_to_ashen_road(&app).await;
+        spawn_tick_loop(app.clone());
+        let mut rx = app.events.subscribe();
+
+        let (attack, looked, flee) = tokio::join!(
+            command(State(app.clone()), req("attack")),
+            command(State(app.clone()), req("look")),
+            command(State(app.clone()), req("flee")),
+        );
+        assert!(attack.0.accepted && looked.0.accepted && flee.0.accepted);
+
+        let kinds = drain_combat_until_ended(&mut rx).await;
+        assert!(
+            matches!(
+                kinds.last(),
+                Some(GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Fled,
+                    ..
+                })
+            ),
+            "the queued flee resolves the interleaved fight: {kinds:?}"
+        );
+        let state = state_snapshot(State(app)).await;
+        assert!(state.0.combat.is_none(), "no encounter survives");
+        assert!(
+            state.0.player.hp > 0 && state.0.player.hp <= state.0.player.max_hp,
+            "player state stays coherent under interleaving"
         );
     }
 }

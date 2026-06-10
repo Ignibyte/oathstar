@@ -57,7 +57,9 @@ const el = {
   battleRound: document.querySelector("#battle-round"),
   battleLog: document.querySelector("#battle-log"),
   battleParticipants: document.querySelector("#battle-participants"),
+  battleStatus: document.querySelector("#battle-status"),
   battleAttackButton: document.querySelector("#battle-attack-button"),
+  battleFleeButton: document.querySelector("#battle-flee-button"),
   entityModal: document.querySelector("#entity-modal"),
   entityModalTitle: document.querySelector("#entity-modal-title"),
   entityModalKind: document.querySelector("#entity-modal-kind"),
@@ -155,6 +157,9 @@ function bindEvents() {
 
   // The battle modal's Attack button issues the next combat round (ticket #22).
   el.battleAttackButton.addEventListener("click", () => runCommand("attack"));
+  // The Flee button queues the between-pulse flee action (ticket #24); the next
+  // combat pulse's skill window resolves it into a fled outcome.
+  el.battleFleeButton.addEventListener("click", () => runCommand("flee"));
 
   // Clicking the entity-detail dialog backdrop closes it (ticket #23). The detail
   // dialog is a pure overlay — opening or closing it changes no game state.
@@ -233,7 +238,10 @@ function connectEvents() {
         parsed.type === "oath_sworn" ||
         parsed.type === "oath_fulfilled" ||
         parsed.type === "combat_started" ||
-        parsed.type === "combat_ended")
+        parsed.type === "combat_ended" ||
+        // A combat pulse resolved server-side without a command (ticket #24) —
+        // refetch so the battle modal and HUD update live (REQ-003).
+        parsed.type === "combat_pulse")
     ) {
       refreshState();
     }
@@ -515,6 +523,11 @@ function renderBattle(snapshot) {
   for (const participant of battle.participants) {
     el.battleParticipants.append(combatantCard(participant));
   }
+
+  // The queued between-pulse action (ticket #24): a quiet status line so a
+  // queued flee is visible while it waits for the next pulse's skill window.
+  // The label decision lives in the toBattle view-model; this is glue only.
+  el.battleStatus.textContent = battle.queuedActionLabel ?? "";
 
   if (!el.battleModal.open && typeof el.battleModal.showModal === "function") {
     el.battleModal.showModal();

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { toBattle } from "../src/client/snapshot.js";
 import { toComponent } from "../src/client/components.js";
+import { parseEvent } from "../src/client/wire.js";
 
 // A `/state` snapshot carrying an active combat encounter (camelCase, as the
 // server emits — CombatantSnapshot is #[serde(rename_all = "camelCase")]).
@@ -122,4 +123,42 @@ test("combat end leaves an inactive battle and a feed summary", () => {
   assert.equal(ended.variant, "danger");
   assert.equal(ended.label, "Combat");
   assert.equal(ended.text, "You have defeated Ashen Stray. Victory!");
+});
+
+// ---- ticket #24: the real-time pulse loop, client side ----
+
+// J1 (REQ-004): the queued between-pulse action and its label are view-model
+// decisions — null-safe when absent, mapped when queued, and never invented
+// for an unknown action.
+test("toBattle exposes the queued action and its label", () => {
+  assert.equal(toBattle({}).queuedAction, null);
+  assert.equal(toBattle({}).queuedActionLabel, null);
+
+  const idle = toBattle(combatSnapshot());
+  assert.equal(idle.queuedAction, null, "no queuedAction key → null");
+  assert.equal(idle.queuedActionLabel, null);
+
+  const fleeing = toBattle(combatSnapshot({ queuedAction: "flee" }));
+  assert.equal(fleeing.queuedAction, "flee");
+  assert.equal(fleeing.queuedActionLabel, "Looking for an opening to flee…");
+
+  const unknown = toBattle(combatSnapshot({ queuedAction: "ward" }));
+  assert.equal(unknown.queuedAction, "ward", "the raw action passes through");
+  assert.equal(unknown.queuedActionLabel, null, "no label is invented for unknown actions");
+});
+
+// J3 (REQ-003): the wire adapter passes the pulse marker through with its type
+// intact (the default case), so the client's /state-refresh predicate matches
+// it and the battle modal updates live without a command.
+test("parseEvent passes combat_pulse through with type intact", () => {
+  const parsed = parseEvent({
+    type: "combat_pulse",
+    eventId: 12,
+    tick: 4,
+    channel: "combat",
+    round: 2,
+  });
+  assert.equal(parsed.type, "combat_pulse");
+  assert.equal(parsed.channel, "combat");
+  assert.equal(parsed.id, 12);
 });

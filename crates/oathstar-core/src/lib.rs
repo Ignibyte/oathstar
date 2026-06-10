@@ -675,6 +675,12 @@ pub struct PlayerState {
 /// balance pass.
 const PLAYER_STRIKE_DAMAGE: i32 = 4;
 
+/// World ticks between combat pulses (ticket #24, Decision 023): with the 1s
+/// world tick this is the ~2s default combat pulse. Copied onto each encounter
+/// at start, so per-actor variation later is a one-line copy from the profile;
+/// v2 ships the single default.
+const DEFAULT_COMBAT_PULSE_TICKS: u64 = 2;
+
 /// An in-progress combat encounter (ticket #22), held on [`GameState::combat`].
 ///
 /// Server-authoritative and deterministic. Enemy stats are copied from the
@@ -698,6 +704,44 @@ pub struct CombatState {
     pub round: u32,
     /// The battle play-by-play lines, oldest first.
     pub log: Vec<String>,
+    /// World ticks between combat pulses (ticket #24); copied from
+    /// [`DEFAULT_COMBAT_PULSE_TICKS`] when combat starts.
+    pub pulse_rate: u64,
+    /// The absolute world tick the next combat pulse is due at (ticket #24).
+    /// Re-anchored after each pulse the encounter survives; manual commands
+    /// never move it, so the cadence holds (REQ-004).
+    pub next_pulse_at: u64,
+    /// The player's queued between-pulse action (ticket #24), resolved by the
+    /// next pulse's Phase 2 skill window — `None` skips the phase cleanly.
+    ///
+    /// These three fields are plain (no `#[serde(default)]`): mid-encounter
+    /// state is never persisted (`oathstar-storage` validates slot names only),
+    /// and a defaulted `pulse_rate` of 0 would mean "pulse every tick" — a
+    /// wrong-by-default worse than rejecting a payload shape that never exists.
+    pub queued_action: Option<CombatAction>,
+}
+
+/// A player action queued between combat pulses (ticket #24).
+///
+/// Resolved in the pulse's Phase 2 (the skill window). `Flee` is the sole v2
+/// action; authored skills become further variants when the skills/classes
+/// system lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CombatAction {
+    /// Break away from the encounter: the resolving pulse ends combat with a
+    /// fled outcome — the enemy survives in place and the player keeps their
+    /// current HP.
+    Flee,
+}
+
+impl CombatAction {
+    /// The action's wire label, surfaced as `CombatSnapshot::queued_action`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Flee => "flee",
+        }
+    }
 }
 
 /// A hostile resolved as the target of `attack`, with its authored stats copied
@@ -792,14 +836,59 @@ impl Engine {
         }
     }
 
-    pub const fn tick(&mut self) -> GameEvent {
+    /// Advance the world one tick and resolve a due combat pulse (ticket #24).
+    ///
+    /// The tick stream is the engine's only clock: the server's 1s interval
+    /// calls this in real time and tests call it directly, so combat pulses
+    /// are deterministic and reproducible (REQ-006) — the engine never reads
+    /// wall-clock time. Returns the `Tick` event followed by any pulse events.
+    pub fn tick(&mut self) -> Vec<GameEvent> {
         self.state.tick += 1;
-        self.event(
+        let mut events = vec![self.event(
             EventChannel::Debug,
             GameEventKind::Tick {
                 value: self.state.tick,
             },
-        )
+        )];
+        self.combat_pulse_if_due(&mut events);
+        events
+    }
+
+    /// Resolve one combat cycle when the active encounter's pulse is due
+    /// (ticket #24): emit the typed [`GameEventKind::CombatPulse`] marker, run
+    /// Phase 1 (the baseline exchange — the v1 round), then Phase 2 (the
+    /// queued-action skill window, a clean skip when nothing is queued), and
+    /// re-anchor the next pulse if the encounter survives. A no-op outside
+    /// combat or before the due tick, so idle ticking emits nothing and an
+    /// ended encounter stops pulsing (REQ-001/002/005).
+    fn combat_pulse_if_due(&mut self, events: &mut Vec<GameEvent>) {
+        let Some(combat) = self.state.combat.as_ref() else {
+            return;
+        };
+        if self.state.tick < combat.next_pulse_at {
+            return;
+        }
+        let round = combat.round + 1;
+        events.push(self.event(EventChannel::Combat, GameEventKind::CombatPulse { round }));
+        self.resolve_combat_round(events);
+        self.resolve_queued_action(events);
+        if let Some(combat) = self.state.combat.as_mut() {
+            combat.next_pulse_at = self.state.tick + combat.pulse_rate;
+        }
+    }
+
+    /// Phase 2 — the skill window (ticket #24): resolve the queued between-pulse
+    /// action, or skip the phase cleanly when none is queued (REQ-002). Runs
+    /// only while the encounter survived Phase 1 — a fallen side ends the fight
+    /// first, and an unreached queued flee is dropped with the cleared state
+    /// ("you didn't find the opening in time").
+    fn resolve_queued_action(&mut self, events: &mut Vec<GameEvent>) {
+        let Some(combat) = self.state.combat.as_mut() else {
+            return;
+        };
+        if combat.queued_action.take() == Some(CombatAction::Flee) {
+            self.end_combat(CombatOutcome::Fled, events);
+        }
     }
 
     /// Produce the opening scene for a freshly started game (REQ-001).
@@ -837,7 +926,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down, swear, confront, attack, talk, take, drop, inventory.",
+                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, talk, take, drop, inventory.",
                 ));
             }
             Command::Look { target: None } => {
@@ -864,6 +953,11 @@ impl Engine {
             Command::Attack { target } => {
                 let (accepted, attack_events) = self.attack(target.as_deref());
                 events.extend(attack_events);
+                return self.response(accepted, events);
+            }
+            Command::Flee => {
+                let (accepted, flee_events) = self.flee();
+                events.extend(flee_events);
                 return self.response(accepted, events);
             }
             Command::Talk { target } => {
@@ -1251,16 +1345,26 @@ impl Engine {
             )];
         }
 
+        // Leaving the encounter room breaks the fight off as a flee (ticket
+        // #24): combat now advances on real-time pulses, so a lingering
+        // encounter would keep striking the player from rooms away every
+        // pulse. Walking out is the fled outcome — the same event and
+        // semantics as a queued flee (enemy survives, HP kept, pulses stop).
+        let mut events = Vec::new();
+        if self.state.combat.is_some() {
+            self.end_combat(CombatOutcome::Fled, &mut events);
+        }
+
         self.state.current_room_id = next_room.id.clone();
         self.state.discovered_rooms.insert(next_room.id.clone());
 
-        let mut events = vec![self.event(
+        events.push(self.event(
             EventChannel::Room,
             GameEventKind::RoomEntered {
                 room_id: next_room.id,
                 title: next_room.title,
             },
-        )];
+        ));
         events.extend(self.describe_current_room());
         events
     }
@@ -1431,6 +1535,36 @@ impl Engine {
         self.start_combat(target)
     }
 
+    /// Queue the flee action for the active encounter, or refuse cleanly when
+    /// there is nothing to flee from (ticket #24, REQ-004). Fleeing is a
+    /// between-pulse command: it queues [`CombatAction::Flee`], and the next
+    /// pulse's Phase 2 skill window ends the encounter with a fled outcome —
+    /// the queue *is* the pulse boundary, so the cadence is never disturbed.
+    /// Re-queueing is a no-op with its own line.
+    fn flee(&mut self) -> (bool, Vec<GameEvent>) {
+        let Some(combat) = self.state.combat.as_mut() else {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    "There is nothing to flee from.",
+                )],
+            );
+        };
+        let line = if combat.queued_action == Some(CombatAction::Flee) {
+            "You are already watching for an opening to flee."
+        } else {
+            combat.queued_action = Some(CombatAction::Flee);
+            "You watch for an opening to flee."
+        };
+        combat.log.push(line.to_string());
+        (
+            true,
+            vec![self.log(EventChannel::Combat, OutputComponent::CombatMessage, line)],
+        )
+    }
+
     /// Start a fight against a hostile in the current room (ticket #22, REQ-001).
     ///
     /// Gates on the room's `combat_enabled` flag (REQ-005), resolves the hostile
@@ -1475,6 +1609,9 @@ impl Engine {
             enemy_attack,
             round: 0,
             log: Vec::new(),
+            pulse_rate: DEFAULT_COMBAT_PULSE_TICKS,
+            next_pulse_at: self.state.tick + DEFAULT_COMBAT_PULSE_TICKS,
+            queued_action: None,
         });
 
         let mut events = vec![self.event(
@@ -1634,6 +1771,9 @@ impl Engine {
                 self.state.player.hp = self.state.player.max_hp;
                 format!("{enemy_name} has bested you. You wake later, battered but whole.")
             }
+            // The fled outcome (ticket #24) leaves the world as it stands: the
+            // enemy survives in place and the player keeps their current HP.
+            CombatOutcome::Fled => format!("You break away from {enemy_name} and escape."),
         };
         events.push(self.event(
             EventChannel::Combat,
@@ -1803,6 +1943,9 @@ impl Engine {
                 },
             ],
             log: combat.log.clone(),
+            queued_action: combat
+                .queued_action
+                .map(|action| action.as_str().to_string()),
         })
     }
 
@@ -1925,8 +2068,9 @@ mod tests {
     #[test]
     fn tick_increments_and_reports_value() {
         let mut engine = Engine::try_new(test_world()).expect("valid test world");
-        let event = engine.tick();
-        assert!(matches!(event.kind, GameEventKind::Tick { value } if value == 1));
+        let events = engine.tick();
+        assert_eq!(events.len(), 1, "an idle tick emits only the Tick event");
+        assert!(matches!(events[0].kind, GameEventKind::Tick { value } if value == 1));
         assert_eq!(engine.snapshot().tick, 1);
     }
 
@@ -1935,8 +2079,8 @@ mod tests {
         let mut engine = Engine::try_new(test_world()).expect("valid test world");
         let first = engine.tick();
         let second = engine.tick();
-        assert_eq!(first.event_id, 1);
-        assert_eq!(second.event_id, 2);
+        assert_eq!(first[0].event_id, 1);
+        assert_eq!(second[0].event_id, 2);
     }
 
     #[test]
@@ -4790,6 +4934,402 @@ mod tests {
                 .iter()
                 .any(|p| p.name == "Stray" && p.side == "enemy"),
             "running the server's attack_command engages the hostile",
+        );
+    }
+
+    // ---- ticket #24: the real-time two-phase pulse loop ----
+
+    // T13/REQ-006: starting combat initializes the pulse fields by value. The
+    // anchor is taken off-zero (tick 1) so `tick + rate` is pinned as addition.
+    #[test]
+    fn start_combat_initializes_pulse_fields() {
+        let mut engine = combat_engine(40, 1);
+        let _ = engine.tick(); // tick 1 — keep the anchor off zero (inspect I4)
+        let response = engine.handle_command(cmd("attack stray"));
+        assert!(response.accepted);
+        let combat = engine.state.combat.as_ref().expect("combat is active");
+        assert_eq!(combat.pulse_rate, 2, "the default 2-tick combat pulse");
+        assert_eq!(combat.next_pulse_at, 3, "anchored at start tick 1 + 2");
+        assert_eq!(combat.queued_action, None, "nothing queued at start");
+    }
+
+    // T1/T2/T11/T12 (REQ-001/004/006/008) — the cadence keystone. Off-zero anchor
+    // (inspect I4): combat starts at tick 1, so pulses are due at ticks 3 and 5
+    // and the re-anchor `3 + 2 = 5` differs from the `3 * 2 = 6` mutant (a
+    // zero-anchored fixture cannot tell them apart). Quiet ticks, the pulse
+    // burst, and a manual mid-cadence round are all asserted by value.
+    #[test]
+    fn pulses_fire_on_schedule_and_manual_attack_keeps_cadence() {
+        let mut engine = combat_engine(40, 1);
+        let _ = engine.tick(); // tick 1
+        engine.handle_command(cmd("attack stray")); // round 1; next pulse at tick 3
+
+        let t2 = engine.tick();
+        assert_eq!(t2.len(), 1, "tick 2 is quiet — only the Tick event: {t2:?}");
+
+        let t3 = engine.tick();
+        assert_eq!(
+            t3.len(),
+            4,
+            "tick 3: Tick + CombatPulse + the exchange: {t3:?}"
+        );
+        assert!(
+            matches!(
+                (&t3[1].channel, &t3[1].kind),
+                (
+                    EventChannel::Combat,
+                    GameEventKind::CombatPulse { round: 2 }
+                )
+            ),
+            "the pulse marker leads the burst with the cycle it resolves"
+        );
+        let combat = engine.snapshot().combat.expect("combat continues");
+        assert_eq!(
+            combat.round, 2,
+            "the pulse resolved the round its marker named"
+        );
+        assert_eq!(enemy_of(&combat).hp, 40 - 2 * PLAYER_STRIKE_DAMAGE);
+        assert_eq!(player_of(&combat).hp, 18, "two enemy returns at attack 1");
+
+        // A manual round between pulses must not move the schedule (REQ-004).
+        let response = engine.handle_command(cmd("attack"));
+        assert_eq!(
+            active_combat(&response).round,
+            3,
+            "manual attack still advances"
+        );
+
+        let t4 = engine.tick();
+        assert_eq!(
+            t4.len(),
+            1,
+            "tick 4 is quiet — the manual round did not re-anchor the pulse: {t4:?}"
+        );
+
+        let t5 = engine.tick();
+        assert!(
+            t5.iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatPulse { round: 4 })),
+            "tick 5 pulses on the re-anchored schedule (3 + 2): {t5:?}"
+        );
+        let combat = engine.snapshot().combat.expect("combat continues");
+        assert_eq!(enemy_of(&combat).hp, 40 - 4 * PLAYER_STRIKE_DAMAGE);
+        assert_eq!(player_of(&combat).hp, 16);
+    }
+
+    // T5/T15 (REQ-004): `flee` queues the between-pulse action with its exact
+    // confirmation line, surfaces it in the snapshot and the battle log, and
+    // leaves the pulse schedule untouched — the queue IS the boundary.
+    #[test]
+    fn flee_queues_between_pulses_without_moving_the_schedule() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray")); // tick 0 → next pulse at 2
+        let response = engine.handle_command(cmd("flee"));
+        assert!(response.accepted);
+        assert!(
+            matches!(
+                (&response.events[0].channel, &response.events[0].kind),
+                (
+                    EventChannel::Combat,
+                    GameEventKind::LogMessage { component: OutputComponent::CombatMessage, text }
+                ) if text == "You watch for an opening to flee."
+            ),
+            "the queue confirmation is a combat line: {:?}",
+            response.events
+        );
+        let combat = active_combat(&response);
+        assert_eq!(combat.queued_action.as_deref(), Some("flee"));
+        assert_eq!(
+            combat.log.last().map(String::as_str),
+            Some("You watch for an opening to flee."),
+            "the battle log mirrors the confirmation"
+        );
+        assert_eq!(
+            engine.state.combat.as_ref().expect("active").next_pulse_at,
+            2,
+            "flee never re-anchors the pulse"
+        );
+        let t1 = engine.tick();
+        assert_eq!(t1.len(), 1, "the queued flee waits for the pulse boundary");
+    }
+
+    // T6 (REQ-004): flee refuses cleanly outside combat — nothing mutated.
+    #[test]
+    fn flee_refuses_cleanly_outside_combat() {
+        let mut engine = combat_engine(10, 3);
+        let response = engine.handle_command(cmd("flee"));
+        assert!(!response.accepted, "nothing to flee from");
+        assert!(
+            matches!(
+                &response.events[0].kind,
+                GameEventKind::LogMessage { component: OutputComponent::SystemMessage, text }
+                    if text == "There is nothing to flee from."
+            ),
+            "refusal line by value: {:?}",
+            response.events
+        );
+        assert!(response.snapshot.combat.is_none());
+    }
+
+    // Re-queueing is a no-op with its own line; the action stays queued once.
+    #[test]
+    fn flee_requeue_is_a_noop_with_its_own_line() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.handle_command(cmd("flee"));
+        let again = engine.handle_command(cmd("flee"));
+        assert!(again.accepted);
+        assert!(
+            matches!(
+                &again.events[0].kind,
+                GameEventKind::LogMessage { component: OutputComponent::CombatMessage, text }
+                    if text == "You are already watching for an opening to flee."
+            ),
+            "the re-queue line by value: {:?}",
+            again.events
+        );
+        assert_eq!(active_combat(&again).queued_action.as_deref(), Some("flee"));
+    }
+
+    // T3 (REQ-002/004/005): the queued flee resolves at the next pulse's skill
+    // window — Phase 1 exchanges first, then CombatEnded{Fled}: the enemy
+    // survives in place, the player keeps post-exchange HP (no revive), state
+    // clears, and pulsing stops.
+    #[test]
+    fn queued_flee_resolves_at_the_pulse_boundary() {
+        let mut engine = combat_engine(10, 3);
+        engine.handle_command(cmd("attack stray")); // round 1: enemy 6, player 17
+        engine.handle_command(cmd("flee"));
+        let t1 = engine.tick();
+        assert_eq!(t1.len(), 1);
+        let t2 = engine.tick();
+        assert_eq!(
+            t2.len(),
+            5,
+            "Tick + CombatPulse + exchange pair + CombatEnded: {t2:?}"
+        );
+        assert!(matches!(
+            t2[1].kind,
+            GameEventKind::CombatPulse { round: 2 }
+        ));
+        assert!(
+            matches!(
+                &t2[4].kind,
+                GameEventKind::CombatEnded { outcome: CombatOutcome::Fled, text }
+                    if text == "You break away from Stray and escape."
+            ),
+            "the fled summary by value: {t2:?}"
+        );
+        let snapshot = engine.snapshot();
+        assert!(snapshot.combat.is_none(), "fled clears combat state");
+        assert_eq!(
+            snapshot.player.hp, 14,
+            "post-exchange HP is kept — no revive on flee"
+        );
+        assert!(
+            snapshot.room.contents.iter().any(|t| t.name == "Stray"),
+            "the enemy survives in place"
+        );
+        let t3 = engine.tick();
+        assert_eq!(t3.len(), 1, "a fled encounter stops pulsing");
+    }
+
+    // T4 (REQ-002): nothing queued → the skill window skips cleanly and the
+    // cycle continues.
+    #[test]
+    fn pulse_skill_window_skips_cleanly_when_nothing_queued() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert_eq!(
+            t2.len(),
+            4,
+            "Tick + CombatPulse + the Phase-1 exchange only: {t2:?}"
+        );
+        assert!(
+            !t2.iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatEnded { .. })),
+            "no CombatEnded on a queue-less pulse"
+        );
+        let combat = engine.snapshot().combat.expect("the encounter continues");
+        assert_eq!(combat.round, 2);
+        assert_eq!(combat.queued_action, None, "the skip leaves nothing queued");
+    }
+
+    // T7 (REQ-005): a pulse driving the enemy to exactly zero ends in Victory,
+    // removes the enemy (the bystanders survive), and stops pulsing.
+    #[test]
+    fn pulse_victory_at_exact_zero_stops_pulsing_and_removes_enemy() {
+        let mut engine = combat_engine(8, 1);
+        engine.handle_command(cmd("attack stray")); // round 1: enemy 4, player 19
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert_eq!(
+            t2.len(),
+            4,
+            "Tick + CombatPulse + killing strike + CombatEnded (no return): {t2:?}"
+        );
+        assert!(matches!(
+            &t2[3].kind,
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Victory,
+                ..
+            }
+        ));
+        let snapshot = engine.snapshot();
+        assert!(snapshot.combat.is_none());
+        assert_eq!(snapshot.player.hp, 19, "the dead enemy never strikes back");
+        assert!(
+            !snapshot.room.contents.iter().any(|t| t.name == "Stray"),
+            "the defeated enemy is removed"
+        );
+        assert!(
+            snapshot.room.contents.iter().any(|t| t.name == "Brute"),
+            "bystanders survive the removal"
+        );
+        let t3 = engine.tick();
+        assert_eq!(t3.len(), 1, "a won encounter stops pulsing");
+    }
+
+    // T8 (REQ-005): a pulse driving the player to exactly zero ends in Defeat,
+    // revives at full HP (the v1 loss semantics), and stops pulsing.
+    #[test]
+    fn pulse_defeat_at_exact_zero_revives_and_stops_pulsing() {
+        let mut engine = combat_engine(40, 10);
+        engine.handle_command(cmd("attack stray")); // round 1: enemy 36, player 10
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert_eq!(
+            t2.len(),
+            5,
+            "Tick + CombatPulse + strike + fatal return + CombatEnded: {t2:?}"
+        );
+        assert!(matches!(
+            &t2[4].kind,
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Defeat,
+                ..
+            }
+        ));
+        let snapshot = engine.snapshot();
+        assert!(snapshot.combat.is_none());
+        assert_eq!(
+            snapshot.player.hp, 20,
+            "defeat revives the player at max HP"
+        );
+        let t3 = engine.tick();
+        assert_eq!(t3.len(), 1, "a lost encounter stops pulsing");
+    }
+
+    // T9 (REQ-005/008): a fled enemy re-engages from its authored health while
+    // the player's HP carries between encounters.
+    #[test]
+    fn fled_enemy_reengages_at_authored_health() {
+        let mut engine = combat_engine(10, 3);
+        engine.handle_command(cmd("attack stray")); // enemy 6, player 17
+        engine.handle_command(cmd("flee"));
+        let _ = engine.tick();
+        let _ = engine.tick(); // fled at the boundary; player 14
+        let response = engine.handle_command(cmd("attack stray"));
+        assert!(response.accepted, "a fled enemy can be fought again");
+        let combat = active_combat(&response);
+        assert_eq!(enemy_of(&combat).max_hp, 10);
+        assert_eq!(
+            enemy_of(&combat).hp,
+            6,
+            "the fresh encounter restarts from authored health (10 - one strike)"
+        );
+        assert_eq!(
+            player_of(&combat).hp,
+            11,
+            "player HP carries between encounters (14 - one return)"
+        );
+    }
+
+    // F6/inspect I5 (REQ-002/005): Phase 1 outranks the queued flee — a killing
+    // exchange ends the fight before the skill window, and the unfound opening
+    // is dropped with the cleared state.
+    #[test]
+    fn pulse_victory_preempts_a_queued_flee() {
+        let mut engine = combat_engine(8, 1);
+        engine.handle_command(cmd("attack stray")); // enemy 4, player 19
+        engine.handle_command(cmd("flee"));
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        let ended: Vec<_> = t2
+            .iter()
+            .filter(|e| matches!(e.kind, GameEventKind::CombatEnded { .. }))
+            .collect();
+        assert_eq!(ended.len(), 1, "exactly one resolution: {t2:?}");
+        assert!(
+            matches!(
+                &ended[0].kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                }
+            ),
+            "death wins the pulse — Victory, not Fled"
+        );
+        let snapshot = engine.snapshot();
+        assert!(snapshot.combat.is_none());
+        assert!(!snapshot.room.contents.iter().any(|t| t.name == "Stray"));
+    }
+
+    // Inspect I1 (REQ-005): leaving the encounter room breaks the fight off as
+    // Fled — under real-time pulses a lingering encounter would keep striking
+    // the player from rooms away.
+    #[test]
+    fn moving_out_of_the_encounter_room_disengages_as_fled() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray")); // player 19
+        let response = engine.handle_command(cmd("east")); // into haven
+        assert!(
+            matches!(
+                &response.events[0].kind,
+                GameEventKind::CombatEnded { outcome: CombatOutcome::Fled, text }
+                    if text == "You break away from Stray and escape."
+            ),
+            "the break-away leads the move events: {:?}",
+            response.events
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::RoomEntered { room_id, .. } if room_id == "haven"
+            )),
+            "the move itself still happens"
+        );
+        assert!(response.snapshot.combat.is_none());
+        assert_eq!(response.snapshot.player.hp, 19, "HP is kept on disengage");
+        let t1 = engine.tick();
+        assert_eq!(t1.len(), 1, "no pulses follow the player out");
+        let back = engine.handle_command(cmd("west"));
+        assert!(room_has(&back, "Stray"), "the enemy survives in its room");
+    }
+
+    // Inspect I1 (REQ-004): a refused move neither disengages nor disturbs the
+    // cadence — the next pulse still lands on schedule.
+    #[test]
+    fn refused_move_keeps_the_encounter_and_cadence() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray")); // next pulse at tick 2
+        let response = engine.handle_command(cmd("north")); // field has no north exit
+        assert!(
+            !response
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatEnded { .. })),
+            "a blocked move does not end combat"
+        );
+        assert!(response.snapshot.combat.is_some());
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert!(
+            t2.iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatPulse { round: 2 })),
+            "the cadence is intact after the refused move: {t2:?}"
         );
     }
 }

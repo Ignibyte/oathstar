@@ -216,10 +216,28 @@ export function toMenuModel(snapshot) {
  * group allies vs enemies (multi-party-ready, REQ-009); each carries an `hpPct`
  * for its meter. Reads only server-authored `snapshot.combat`, never invented.
  */
+/**
+ * The status line shown for a queued between-pulse action (ticket #24), keyed
+ * by the server's `queuedAction` value. Label decisions live here in the
+ * view-model (the `combatStatusLabel` pattern), not in the DOM glue.
+ */
+const QUEUED_ACTION_LABELS = {
+  flee: "Looking for an opening to flee…",
+};
+
 export function toBattle(snapshot) {
   const combat = snapshot?.combat;
   if (!combat) {
-    return { active: false, round: 0, log: [], participants: [], allies: [], enemies: [] };
+    return {
+      active: false,
+      round: 0,
+      log: [],
+      participants: [],
+      allies: [],
+      enemies: [],
+      queuedAction: null,
+      queuedActionLabel: null,
+    };
   }
   const participants = (Array.isArray(combat.participants) ? combat.participants : []).map(
     toCombatant,
@@ -231,6 +249,10 @@ export function toBattle(snapshot) {
     participants,
     allies: participants.filter((entry) => entry.side !== "enemy"),
     enemies: participants.filter((entry) => entry.side === "enemy"),
+    // The server-queued between-pulse action (ticket #24), e.g. "flee"; null
+    // when nothing is queued. Read-only server data, never invented here.
+    queuedAction: combat.queuedAction ?? null,
+    queuedActionLabel: QUEUED_ACTION_LABELS[combat.queuedAction] ?? null,
   };
 }
 

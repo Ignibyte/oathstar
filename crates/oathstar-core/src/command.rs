@@ -75,6 +75,10 @@ pub enum Command {
     /// names the hostile to engage. Starts combat in a combat-enabled room and
     /// advances it once underway. Target text is preserved like a `Look` target.
     Attack { target: Option<String> },
+    /// `flee` — break away from the active encounter (ticket #24). A bare,
+    /// strict-arity verb like `swear`: it queues the between-pulse flee action,
+    /// which the next combat pulse's skill window resolves into a fled outcome.
+    Flee,
     /// `talk` / `speak` with a target — address a nearby actor. The target text is
     /// preserved (case kept, surrounding/repeated whitespace collapsed) exactly as
     /// a `Look` target; a bare `talk` with no target is [`Unknown`](Self::Unknown).
@@ -218,7 +222,7 @@ pub fn parse(input: &str) -> Command {
 }
 
 /// Parse the bare, strict-arity verbs (`swear`/`vow`, `confront`/`challenge`,
-/// `inventory`/`pack`/`i`) — each takes no trailing tokens. Returns
+/// `flee`, `inventory`/`pack`/`i`) — each takes no trailing tokens. Returns
 /// `Some(command)` when `verb` is one of them (a trailing token yields
 /// `Some(Unknown)`); `None` when `verb` is not a bare verb so `parse` keeps
 /// trying. Grouping these keeps `parse` under the clippy line ceiling (#20).
@@ -226,6 +230,7 @@ fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
     let command = match verb {
         "swear" | "vow" => Command::Swear,
         "confront" | "challenge" => Command::Confront,
+        "flee" => Command::Flee,
         "inventory" | "pack" | "i" => Command::Inventory,
         _ => return None,
     };
@@ -661,6 +666,20 @@ mod tests {
             Command::Unknown {
                 input: "attacker".to_string()
             }
+        );
+    }
+
+    // T14 (ticket #24, REQ-004): `flee` is a bare, strict-arity verb like `swear`.
+    #[test]
+    fn flee_parses_as_bare_strict_arity_verb() {
+        assert_eq!(parse("flee"), Command::Flee);
+        assert_eq!(parse("FLEE"), Command::Flee, "the verb is case-folded");
+        assert_eq!(
+            parse("flee now"),
+            Command::Unknown {
+                input: "flee now".to_string()
+            },
+            "trailing tokens refuse — strict arity"
         );
     }
 }

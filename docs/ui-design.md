@@ -315,3 +315,12 @@ server-authoritative hypermedia shell (see `docs/decisions.md` Decision 032):
   disclosed stats — hidden stats as "unknown" — and sends no command / mutates no
   state. The client infers nothing; pure view-models (`toNearby`/`toEntityDetail`)
   feed the thin glue. See `decisions.md` Decision 041.
+- Ticket #24 made the battle modal **live**: combat now advances on server
+  pulses (Decision 042), and the client refreshes `/state` when the typed
+  `combat_pulse` marker arrives over the JSON SSE stream — the modal's log,
+  HP meters, and the HUD update every pulse with no command (the pulse marker
+  renders nothing in the Datastar feed; the exchange lines narrate). The modal
+  footer gains a **Flee** button (`runCommand("flee")`) beside Attack and a
+  quiet `#battle-status` line driven by the view-model's `queuedActionLabel`
+  ("Looking for an opening to flee…") while a queued flee waits for the next
+  pulse's skill window.

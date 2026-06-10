@@ -13,10 +13,26 @@ This document captures the current combat direction for Oathstar.
 > `Combat` channel, and the client opens a battle modal (left log / right
 > participants) that closes to a compact feed summary. The boss/oath `confront`
 > flow is unchanged (the Bell-Eater is not `hostile`, and its roost is not
-> `combat_enabled`). v1 is **command-driven, NOT the server pulse** described
-> below (Decision 023, deferred) — see `decisions.md` Decision 040. The pulse
-> timing, the full combat-state machine, combat roles, and alternate resolutions
-> below remain the long-horizon direction.
+> `combat_enabled`). See `decisions.md` Decision 040.
+
+> **v2 implemented** (ticket #24): the **server-authoritative pulse loop**
+> (Decision 023) now drives an active encounter in real time, layered on the v1
+> foundation — see `decisions.md` Decision 042. The combat pulse rides the 1s
+> world tick (`Engine::tick()`; default cadence 2 ticks ≈ 2s, per-encounter
+> `pulse_rate` representable): each due pulse emits a typed
+> `CombatPulse { round }` marker, resolves **Phase 1** (the baseline exchange —
+> the v1 round: player auto-strike + the enemy's authored return), then
+> **Phase 2** (the skill window): a queued between-pulse action resolves, or
+> the phase skips cleanly. `flee` is the v2 queued action — it resolves at the
+> next pulse boundary into `CombatEnded { fled }` (the enemy survives in
+> place; the player keeps current HP), and **leaving the encounter room
+> disengages as fled** (no remote pulsing). Manual `attack` between pulses
+> still resolves a round immediately without moving the cadence. The engine
+> stays wall-clock-free — the tick stream is its only clock, so pulses are
+> deterministic and test-driven; real time exists only in the server's tokio
+> interval (missed ticks are skipped, never burst). The full combat-state
+> machine, authored skills content, per-actor/boss pulse tuning, and alternate
+> resolutions below remain the long-horizon direction.
 
 ## Core Direction
 
@@ -72,7 +88,9 @@ Normal battles should be:
 
 Combat runs on server-authoritative pulses layered over the base world tick.
 
-Target follow-up cadence (ticket #24):
+Implemented cadence (ticket #24 — the two-phase cycle below is live; authored
+skills content, variable per-actor cadence, and `paused_sequence` are still to
+come):
 
 - Combat is a repeating two-phase cycle until someone flees or dies.
 - Phase 1 resolves the initial exchange: baseline player/hostile hits and

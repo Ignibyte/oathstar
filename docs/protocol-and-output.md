@@ -38,6 +38,16 @@ finer `CombatHit` / `CombatMiss` granularity above is deferred). The
 the JSON snapshot carries the live encounter as `GameSnapshot.combat`
 (`CombatSnapshot` — a side-tagged participant list) for the client's battle modal.
 
+**Implemented (ticket #24).** The real-time pulse loop adds a typed
+`CombatPulse { round }` marker on the `Combat` channel, emitted once per due
+pulse ahead of its exchange events. It carries no feed text and the Datastar
+layer renders nothing for it (like `Tick`) — the JSON client uses it as the
+refresh trigger that keeps the battle modal live without a command (state still
+travels via `/state`, the Decision 034 carve-out). `CombatOutcome` gains
+`fled`, and `CombatSnapshot` gains the additive camelCase `queuedAction`
+(omitted when nothing is queued) surfacing the player's queued between-pulse
+action (`"flee"` in v2).
+
 ## Representations
 
 JSON representation, reserved for maps/canvas data, diagnostics, tests, and

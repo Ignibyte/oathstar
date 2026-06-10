@@ -289,8 +289,14 @@
             </aside>
           </div>
           <footer class="battle-modal-actions">
+            <!-- The queued between-pulse action (ticket #24): empty unless an
+                 action (flee) is waiting for the next pulse's skill window. -->
+            <span id="battle-status" class="battle-status"></span>
             <button id="battle-attack-button" class="battle-attack-button" type="button">
               Attack
+            </button>
+            <button id="battle-flee-button" class="battle-flee-button" type="button">
+              Flee
             </button>
           </footer>
         </div>

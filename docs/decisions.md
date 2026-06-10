@@ -2009,3 +2009,72 @@ Revisit when:
   `disclose_stats` into a richer rule and disclose stats individually.
 - The detail dialog grows (description, equipment, resolution paths) or non-hostile
   combat verbs (persuade/spare/bind, Decision 007) need their own affordances.
+
+## Decision 042: The Combat Pulse Rides The World Tick
+
+Status: Locked
+
+Date: 2026-06-09
+
+Realizes Decision 023's server-authoritative pulses (ticket #24), layered on
+combat v1 (Decision 040) without rewriting it. There is **no second clock and
+no new background task**: `Engine::tick()` — already driven by the server's 1s
+tokio interval (`spawn_tick_loop`) — now returns `Vec<GameEvent>` and resolves
+one full combat cycle whenever an encounter is active and due.
+
+- **Cadence state lives on the encounter.** `CombatState` gains `pulse_rate`
+  (ticks per pulse, copied from `DEFAULT_COMBAT_PULSE_TICKS = 2` at start — a
+  per-actor value later is a one-line copy from the profile) and
+  `next_pulse_at` (absolute tick; due when `tick >= next_pulse_at`,
+  re-anchored to `tick + pulse_rate` after each surviving pulse). Manual
+  commands never move the anchor — "apply at the pulse boundary" (REQ-004) is
+  the queue plus the engine lock's atomicity, not a schedule change.
+- **One pulse = one two-phase cycle.** A typed `CombatPulse { round }` marker
+  leads the burst; Phase 1 is the v1 round reused verbatim (player auto-strike
+  + authored enemy return — Decision 023's "engaged actors auto-attack" with
+  zero new combat math); Phase 2 is the **queued-action window**:
+  `CombatState.queued_action: Option<CombatAction>` resolves (`Flee` is the
+  sole v2 variant — authored skills become more variants) or skips cleanly.
+  Phase 1's outcome outranks the queue — a killing exchange ends the fight and
+  drops the unfound opening.
+- **`flee` is a queued between-pulse command.** It queues `CombatAction::Flee`
+  (idempotent, with its own already-queued line) and the next pulse ends the
+  encounter as the additive `CombatOutcome::Fled`: the enemy survives in
+  place, the player keeps current HP (no revive), state clears, pulsing stops.
+  **Leaving the encounter room disengages as fled** — under a clock-driven
+  loop, v1's harmless "movement doesn't end combat" would have become
+  autonomous remote damage (caught at inspect; `BF-combat-pulse-follows-
+  player-001`).
+- **The engine never reads a wall clock.** The tick stream is its only time
+  source, so every pulse behavior is deterministic and driven explicitly by
+  tests (`engine.tick()`), preserving the 100% MSI discipline. Real time
+  exists only in `oathstar-server`, whose interval sets
+  `MissedTickBehavior::Skip` so a suspended process resumes the cadence
+  instead of burst-fast-forwarding whole fights
+  (`BF-tokio-interval-burst-fastforward-001`).
+- **Live updates reuse the Decision 034 carve-out.** Pulse events stream over
+  the existing SSE channels; the `CombatPulse` marker renders nothing in the
+  Datastar feed (the exchange lines narrate — no 2s spam) and is the JSON
+  client's trigger to refetch `/state`, which updates the battle modal and
+  HUD without a command. The snapshot additively gains camelCase
+  `queuedAction` (omitted when none) so the modal can show the queued-flee
+  status; the modal gains a Flee button.
+
+Rationale:
+
+- "Layered over the base world tick" (Decision 023) taken literally dissolves
+  the concurrency problem: the proven `Arc<Mutex<Engine>>` + broadcast +
+  single-interval seam is unchanged, commands and pulses serialize through the
+  lock, and events broadcast only after it drops.
+- The queued-action window makes the skill-window *mechanism* real and
+  testable (REQ-002) without inventing skills content, and gives `flee` the
+  pulse-boundary semantics the ticket specifies in one shared mechanism.
+
+Revisit when:
+
+- Authored skills land (new `CombatAction` variants; the Phase-2 consume
+  becomes observable — re-examine the take-vs-peek equivalence noted in the
+  #24 pipeline).
+- Per-actor/region cadence or boss scripted timings are tuned
+  (`pulse_rate` is already per-encounter; wire it from `CombatProfile`).
+- `paused_sequence` (DM/boss time sequences) needs the loop to suspend.

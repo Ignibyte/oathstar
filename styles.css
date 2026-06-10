@@ -1132,6 +1132,17 @@ button.chip {
 .battle-modal-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* The queued between-pulse action line (ticket #24) — quiet, left of the
+   action buttons; empty (and invisible) when nothing is queued. */
+.battle-status {
+  margin-right: auto;
+  font-size: 0.85rem;
+  font-style: italic;
+  color: var(--muted);
 }
 
 .battle-attack-button {
@@ -1146,6 +1157,22 @@ button.chip {
 
 .battle-attack-button:hover {
   background: var(--brass-bright);
+}
+
+/* The Flee action (ticket #24): the quiet sibling of Attack — same shape,
+   muted chrome, so escape reads as secondary to the fight. */
+.battle-flee-button {
+  padding: 0.5rem 1.4rem;
+  font-size: 0.95rem;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--brass);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.battle-flee-button:hover {
+  background: rgba(201, 154, 69, 0.18);
 }
 
 /* ── ticket #14: command-area placement + viewport containment ───────────── */

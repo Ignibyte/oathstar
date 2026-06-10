@@ -223,6 +223,9 @@ pub enum CombatOutcome {
     Victory,
     /// The player reached zero HP.
     Defeat,
+    /// The player fled the encounter (ticket #24): combat ends, the enemy
+    /// survives in place, and the player keeps their current HP.
+    Fled,
 }
 
 /// The player's oath as exposed in a [`GameSnapshot`] (the view of the engine's
@@ -251,6 +254,12 @@ pub struct CombatSnapshot {
     /// The battle play-by-play lines, oldest first. Omitted from JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub log: Vec<String>,
+    /// The player's queued between-pulse action (ticket #24) — `"flee"` in v2 —
+    /// resolved at the next combat pulse's skill window. `None` — and omitted
+    /// from JSON — when nothing is queued, so a queueless snapshot is
+    /// byte-identical to the #22 shape and an old payload still deserializes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_action: Option<String>,
 }
 
 /// One combatant in a [`CombatSnapshot`] (ticket #22).
@@ -334,6 +343,15 @@ pub enum GameEventKind {
     CombatEnded {
         outcome: CombatOutcome,
         text: String,
+    },
+    /// A combat pulse began resolving (ticket #24) — the typed cycle marker for
+    /// the real-time loop, emitted on the `Combat` channel once per due pulse
+    /// before its exchange events. `round` is the cycle the pulse resolves.
+    /// Carries no feed text: the play-by-play `CombatMessage`s narrate the
+    /// exchange, and a JSON client uses this marker to refresh state so the
+    /// battle modal updates live without a command.
+    CombatPulse {
+        round: u32,
     },
 }
 
@@ -630,6 +648,7 @@ mod tests {
                 },
             ],
             log: vec!["You strike Stray for 4 (6/10).".to_string()],
+            queued_action: None,
         };
         let value = serde_json::to_value(&combat).expect("serialize");
         assert_eq!(value["round"], 2);
@@ -647,6 +666,7 @@ mod tests {
             round: 1,
             participants: Vec::new(),
             log: Vec::new(),
+            queued_action: None,
         };
         let json = serde_json::to_string(&combat).expect("serialize");
         assert!(!json.contains("log"), "empty log omitted: {json}");
@@ -697,5 +717,73 @@ mod tests {
         // Victory serializes to the other snake_case variant.
         let victory = serde_json::to_value(CombatOutcome::Victory).expect("serialize");
         assert_eq!(victory, serde_json::json!("victory"));
+    }
+
+    // P1 (ticket #24): the combat-pulse marker serializes with the snake_case
+    // tag, its round, and the camelCase envelope — and round-trips.
+    #[test]
+    fn combat_pulse_serializes_with_snake_case_tag_and_round() {
+        let pulse = GameEvent {
+            event_id: 7,
+            tick: 4,
+            channel: EventChannel::Combat,
+            kind: GameEventKind::CombatPulse { round: 3 },
+        };
+        let value = serde_json::to_value(&pulse).expect("serialize");
+        assert_eq!(value["type"], "combat_pulse");
+        assert_eq!(value["round"], 3);
+        assert_eq!(value["channel"], "combat");
+        assert_eq!(value["eventId"], 7, "camelCase envelope");
+        let back: GameEvent = serde_json::from_value(value).expect("deserialize");
+        assert!(matches!(back.kind, GameEventKind::CombatPulse { round: 3 }));
+    }
+
+    // P2 (ticket #24): the fled outcome is snake_case and rides CombatEnded.
+    #[test]
+    fn fled_outcome_serializes_snake_case_and_round_trips() {
+        let fled = serde_json::to_value(CombatOutcome::Fled).expect("serialize");
+        assert_eq!(fled, serde_json::json!("fled"));
+        let ended = GameEvent {
+            event_id: 9,
+            tick: 6,
+            channel: EventChannel::Combat,
+            kind: GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Fled,
+                text: "You break away from Stray and escape.".to_string(),
+            },
+        };
+        let value = serde_json::to_value(&ended).expect("serialize");
+        assert_eq!(value["outcome"], "fled");
+        let back: GameEvent = serde_json::from_value(value).expect("deserialize");
+        assert!(matches!(
+            back.kind,
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Fled,
+                ..
+            }
+        ));
+    }
+
+    // P3 (ticket #24): `queuedAction` is additive camelCase — omitted when None
+    // (the #22 byte shape is preserved) and round-tripping when queued.
+    #[test]
+    fn combat_snapshot_queued_action_is_additive_camel_case() {
+        let mut combat = CombatSnapshot {
+            round: 1,
+            participants: Vec::new(),
+            log: Vec::new(),
+            queued_action: None,
+        };
+        let json = serde_json::to_string(&combat).expect("serialize");
+        assert!(!json.contains("queuedAction"), "omitted when None: {json}");
+
+        combat.queued_action = Some("flee".to_string());
+        let value = serde_json::to_value(&combat).expect("serialize");
+        assert_eq!(
+            value["queuedAction"], "flee",
+            "camelCase key, raw action value"
+        );
+        let back: CombatSnapshot = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(back, combat, "round-trips by value");
     }
 }

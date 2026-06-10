@@ -17,5 +17,10 @@ oathstar-protocol = { path = "../oathstar-protocol" }
 serde_json.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+# test-util unlocks tokio's paused virtual clock (start_paused), so the real
+# 1s tick loop drives deterministic combat-pulse tests with no real waiting.
+tokio = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

@@ -116,7 +116,10 @@ pub fn opening_patches(
 /// events that are not shown in the feed.
 fn describe(event: &GameEvent) -> Option<(&'static str, &'static str, String)> {
     match &event.kind {
-        GameEventKind::Tick { .. } => None,
+        // Ticks and combat-pulse markers never reach the feed: the pulse's
+        // exchange messages narrate the cycle (ticket #24), so a 2s marker line
+        // would only spam the log (Decision 023's rationale).
+        GameEventKind::Tick { .. } | GameEventKind::CombatPulse { .. } => None,
         GameEventKind::LogMessage { component, text } => {
             let (variant, label) = component_variant_label(component);
             Some((variant, label, text.clone()))
@@ -162,6 +165,7 @@ const fn kind_type(kind: &GameEventKind) -> &'static str {
         GameEventKind::OathFulfilled { .. } => "oath_fulfilled",
         GameEventKind::CombatStarted { .. } => "combat_started",
         GameEventKind::CombatEnded { .. } => "combat_ended",
+        GameEventKind::CombatPulse { .. } => "combat_pulse",
     }
 }
 
@@ -219,10 +223,12 @@ const fn component_variant_label(component: &OutputComponent) -> (&'static str, 
 #[cfg(test)]
 mod tests {
     use super::{
-        escape_html, feed_patch, opening_patches, render_feed_fragment, should_seed_opening,
-        PATCH_ELEMENTS_EVENT,
+        escape_html, feed_patch, kind_type, opening_patches, render_feed_fragment,
+        should_seed_opening, PATCH_ELEMENTS_EVENT,
     };
-    use oathstar_protocol::{EventChannel, GameEvent, GameEventKind, OutputComponent};
+    use oathstar_protocol::{
+        CombatOutcome, EventChannel, GameEvent, GameEventKind, OutputComponent,
+    };
 
     fn log(text: &str) -> GameEvent {
         GameEvent {
@@ -267,6 +273,54 @@ mod tests {
         };
         assert!(render_feed_fragment(&tick).is_none());
         assert!(feed_patch(&tick).is_none());
+    }
+
+    // D1 (ticket #24): combat-pulse markers never reach the feed (the exchange
+    // lines narrate the cycle); the type tag is pinned directly because the
+    // render path short-circuits before kind_type.
+    #[test]
+    fn combat_pulses_have_no_feed_fragment() {
+        let pulse = GameEvent {
+            event_id: 3,
+            tick: 4,
+            channel: EventChannel::Combat,
+            kind: GameEventKind::CombatPulse { round: 2 },
+        };
+        assert!(render_feed_fragment(&pulse).is_none());
+        assert!(feed_patch(&pulse).is_none());
+        assert_eq!(
+            kind_type(&GameEventKind::CombatPulse { round: 2 }),
+            "combat_pulse"
+        );
+    }
+
+    // D2 (ticket #24): a fled CombatEnded renders like the other combat
+    // lifecycle markers — danger variant on the combat channel, body = text.
+    #[test]
+    fn fled_combat_ended_renders_on_the_combat_channel() {
+        let ended = GameEvent {
+            event_id: 5,
+            tick: 8,
+            channel: EventChannel::Combat,
+            kind: GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Fled,
+                text: "You break away from Stray and escape.".to_string(),
+            },
+        };
+        let html = render_feed_fragment(&ended).expect("a fled end renders");
+        assert!(
+            html.contains(r#"class="log-entry danger""#),
+            "variant: {html}"
+        );
+        assert!(
+            html.contains(r#"data-component="combat_ended""#),
+            "type: {html}"
+        );
+        assert!(html.contains(r#"data-channel="combat""#), "channel: {html}");
+        assert!(
+            html.contains("You break away from Stray and escape."),
+            "body: {html}"
+        );
     }
 
     #[test]
