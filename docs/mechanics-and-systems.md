@@ -466,9 +466,16 @@ Possible character progression:
 - Classes emerge from skills, oaths, standing, traits, and transformations
 - Alignment changes based on actions
 
+Shipped (ticket #30, [Decision 048](./decisions.md#decision-048-levels-are-deterministic-xp-milestones-that-ratchet-and-heal)):
+
+Character levels are live as broad milestone growth — a deterministic
+engine-const XP curve (10/30/60/100; max level 5 in v1), +5 max HP and a
+full heal per level, a typed `LevelUp` feed event, and a `Lv N · M xp`
+header display. Levels ratchet (the defeat penalty never de-levels).
+
 Recommendation:
 
-Use levels for broad milestone growth, but use percentage-based skills for mastery. Skill points should mostly unlock skills rather than directly buying raw percentages.
+Use levels for broad milestone growth (shipped), but use percentage-based skills for mastery. Skill points should mostly unlock skills rather than directly buying raw percentages.
 
 ## Save And Persistence
 

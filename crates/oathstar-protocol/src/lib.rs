@@ -363,6 +363,16 @@ pub enum GameEventKind {
         severity: AnnouncementSeverity,
         text: String,
     },
+    /// The player reached a new level (ticket #30), emitted on the `Skill`
+    /// channel — one event per level gained, even when a single XP award
+    /// crosses several thresholds. `max_hp` carries the new maximum after the
+    /// level's growth so a client can show the benefit without refetching.
+    /// The typed render IS the feed line ("You reach level N.") — the engine
+    /// emits no duplicate log message.
+    LevelUp {
+        level: u32,
+        max_hp: i32,
+    },
 }
 
 /// How loudly an announcement presents (ticket #27): the announcements

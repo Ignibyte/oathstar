@@ -802,6 +802,29 @@ pub struct PlayerState {
 /// balance pass.
 const PLAYER_STRIKE_DAMAGE: i32 = 4;
 
+/// The XP milestones that grant levels (ticket #30): level 1 at 0 XP, +1 per
+/// threshold crossed — level 5 when the table is exhausted (v1's cap; XP keeps
+/// accumulating past it). Engine-const like [`PLAYER_STRIKE_DAMAGE`]:
+/// module-authored curves are a future ticket. Beginner pacing: two strays
+/// (5 XP each) reach level 2; adding the boss (25) lands level 3.
+const LEVEL_XP_THRESHOLDS: [u64; 4] = [10, 30, 60, 100];
+
+/// Maximum-HP growth per level gained (ticket #30). Each level also heals to
+/// the new maximum — the milestone moment.
+const LEVEL_UP_MAX_HP_GROWTH: i32 = 5;
+
+/// The level the deterministic curve assigns to `xp` (ticket #30): 1 plus the
+/// number of [`LEVEL_XP_THRESHOLDS`] crossed. Pure, total, RNG-free — identical
+/// sessions level identically, and a save-loaded XP of any magnitude maps
+/// without panicking.
+fn level_for_xp(xp: u64) -> u32 {
+    let crossed = LEVEL_XP_THRESHOLDS
+        .iter()
+        .filter(|&&threshold| xp >= threshold)
+        .count();
+    u32::try_from(crossed).unwrap_or(u32::MAX).saturating_add(1)
+}
+
 /// World ticks between combat pulses (ticket #24, Decision 023): with the 1s
 /// world tick this is the ~2s default combat pulse. Copied onto each encounter
 /// at start, so per-actor variation later is a one-line copy from the profile;
@@ -2270,13 +2293,19 @@ impl Engine {
                 }
             }
             // The fled outcome (ticket #24) leaves the world as it stands: the
-            // enemy survives in place and the player keeps their current HP.
+            // enemy survives in place and the player keeps their current HP
+            // (a stale save's lazy level convergence below is the one
+            // exception — earned milestones surface even on a flee).
             CombatOutcome::Fled => format!("You break away from {enemy_name} and escape."),
         };
         events.push(self.event(
             EventChannel::Combat,
             GameEventKind::CombatEnded { outcome, text },
         ));
+        // Ticket #30: every xp change syncs the level — victory's award can
+        // cross thresholds (the LevelUp burst follows the summary); defeat's
+        // penalty never de-levels (the ratchet makes sync a no-op there).
+        self.sync_level(events);
         if matches!(outcome, CombatOutcome::Defeat) {
             // The wake-up arrival reuses the movement pattern (ticket #26):
             // RoomEntered + the room description keep the feed and the
@@ -2354,7 +2383,9 @@ impl Engine {
 
     /// Apply the deterministic defeat XP penalty (ticket #26, REQ-005/006):
     /// with any XP, lose `max(1, floor(xp / 10))`, saturating at zero; with
-    /// zero XP nothing is lost. Returns the XP lost.
+    /// zero XP nothing is lost. Returns the XP lost. The level RATCHET
+    /// (ticket #30) means the loss never de-levels — `end_combat`'s
+    /// [`Engine::sync_level`] call is a no-op after a penalty.
     fn apply_defeat_penalty(&mut self) -> u64 {
         let xp = self.state.player.xp;
         if xp == 0 {
@@ -2363,6 +2394,33 @@ impl Engine {
         let penalty = (xp / 10).max(1);
         self.state.player.xp = xp.saturating_sub(penalty);
         penalty
+    }
+
+    /// Raise the player's level to match the XP curve (ticket #30): one
+    /// iteration — and one typed [`GameEventKind::LevelUp`] on the `Skill`
+    /// channel — per level gained, each growing max HP by
+    /// [`LEVEL_UP_MAX_HP_GROWTH`] and healing to the new maximum. Levels
+    /// RATCHET: a curve below the stored level (the defeat penalty, a loaded
+    /// save) changes nothing — milestones are kept. A stale save's earned
+    /// levels surface at its next combat end of ANY outcome (lazy
+    /// convergence, Decision 048) — in normal play the victory award syncs
+    /// immediately, so only loaded saves ever converge late.
+    fn sync_level(&mut self, events: &mut Vec<GameEvent>) {
+        let target = level_for_xp(self.state.player.xp);
+        while self.state.player.level < target {
+            self.state.player.level = self.state.player.level.saturating_add(1);
+            self.state.player.max_hp = self
+                .state
+                .player
+                .max_hp
+                .saturating_add(LEVEL_UP_MAX_HP_GROWTH);
+            self.state.player.hp = self.state.player.max_hp;
+            let (level, max_hp) = (self.state.player.level, self.state.player.max_hp);
+            events.push(self.event(
+                EventChannel::Skill,
+                GameEventKind::LevelUp { level, max_hp },
+            ));
+        }
     }
 
     /// Remove an entity's room placement everywhere it appears (ticket #22), so a
@@ -5891,7 +5949,10 @@ mod tests {
     // T8 (REQ-005): a pulse driving the player to exactly zero ends in Defeat
     // with the ticket #26 reset — start room at full HP, an XP penalty when
     // the player has XP, the wake-up arrival events — and stops pulsing.
-    // (The deliberate #26 rewrite of the #24 revive-in-place pin.)
+    // (The deliberate #26 rewrite of the #24 revive-in-place pin.) The
+    // direct-xp fixture doubles as ticket #30's lazy-convergence demo: 90
+    // banked XP at level 1 converges to level 4 mid-defeat (LevelUps ride
+    // the burst) and "full HP" means the NEW maximum.
     #[test]
     fn pulse_defeat_at_exact_zero_resets_and_stops_pulsing() {
         let mut engine = combat_engine(40, 10);
@@ -5915,9 +5976,18 @@ mod tests {
             )),
             "the wake-up arrival follows the summary"
         );
+        assert_eq!(
+            t2.iter()
+                .filter(|e| matches!(e.kind, GameEventKind::LevelUp { .. }))
+                .count(),
+            3,
+            "90 banked XP converges level 1 → 4 in the defeat burst (ticket #30): {t2:?}"
+        );
         let snapshot = engine.snapshot();
         assert!(snapshot.combat.is_none());
-        assert_eq!(snapshot.player.hp, 20, "HP restored to max");
+        assert_eq!(snapshot.player.level, 4, "lazy convergence lands level 4");
+        assert_eq!(snapshot.player.max_hp, 35, "three level-ups grow 20 → 35");
+        assert_eq!(snapshot.player.hp, 35, "HP restored to the NEW max");
         assert_eq!(snapshot.player.xp, 90, "lose max(1, 100/10) = 10 XP");
         assert_eq!(snapshot.current_room_id, "field");
         let t3 = engine.tick();
@@ -6726,7 +6796,14 @@ mod tests {
             "defeat relocates to the start room, away from the clearing"
         );
         assert_eq!(response.snapshot.player.xp, 36, "lose max(1, 40/10) = 4");
-        assert_eq!(response.snapshot.player.hp, 20, "HP restored to max");
+        assert_eq!(
+            response.snapshot.player.level, 3,
+            "the banked-XP fixture lazily converges mid-defeat (ticket #30)"
+        );
+        assert_eq!(
+            response.snapshot.player.hp, 30,
+            "HP restored to the NEW max (20 + 2x5)"
+        );
         assert!(
             engine
                 .world
@@ -7912,5 +7989,190 @@ mod tests {
             response.events
         );
         assert!(response.snapshot.combat.is_none(), "no encounter starts");
+    }
+
+    // ---- ticket #30: levels — the XP curve, the sync loop, the benefit ----
+
+    // L1 (REQ-001): the curve's exact boundary ladder — both arms of every
+    // threshold (the table-value and `>=`-flip killers) plus the base and
+    // the rail.
+    #[test]
+    fn level_for_xp_boundary_ladder() {
+        for (xp, level) in [
+            (0_u64, 1_u32),
+            (9, 1),
+            (10, 2),
+            (29, 2),
+            (30, 3),
+            (59, 3),
+            (60, 4),
+            (99, 4),
+            (100, 5),
+            (u64::MAX, 5),
+        ] {
+            assert_eq!(level_for_xp(xp), level, "xp {xp}");
+        }
+    }
+
+    // L2 (REQ-001/002): a victory award crossing one threshold levels up —
+    // the typed LevelUp follows CombatEnded in the same burst, by value, and
+    // the benefit lands in state (max +5, healed to the new max from below).
+    #[test]
+    fn victory_award_levels_up_with_benefit() {
+        let mut engine = spoils_engine(8, 1, 10, false);
+        engine.handle_command(cmd("attack stray")); // round 1: enemy 4, player 19
+        let _ = engine.tick();
+        let t2 = engine.tick(); // pulse round 2: victory at exactly 0
+        let ended_at = t2
+            .iter()
+            .position(|e| matches!(e.kind, GameEventKind::CombatEnded { .. }))
+            .expect("the victory ends the fight");
+        let level_up_at = t2
+            .iter()
+            .position(|e| {
+                matches!(
+                    (&e.channel, &e.kind),
+                    (
+                        EventChannel::Skill,
+                        GameEventKind::LevelUp {
+                            level: 2,
+                            max_hp: 25,
+                        }
+                    )
+                )
+            })
+            .expect("the 10-xp award crosses the first threshold");
+        assert!(
+            ended_at < level_up_at,
+            "the level-up follows the victory summary: {t2:?}"
+        );
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.player.level, 2, "level by value");
+        assert_eq!(snapshot.player.max_hp, 25, "max grows by exactly 5");
+        assert_eq!(
+            snapshot.player.hp, 25,
+            "the level-up heals to the NEW max (was 19/20 entering)"
+        );
+        assert_eq!(
+            t2.iter()
+                .filter(|e| matches!(e.kind, GameEventKind::LevelUp { .. }))
+                .count(),
+            1,
+            "exactly one level gained, one event"
+        );
+    }
+
+    // L3 (REQ-004): one award crossing TWO thresholds emits one LevelUp per
+    // level, in ascending order, each with its own max — and the loop stops
+    // exactly at the curve (the `<=` overshoot killer).
+    #[test]
+    fn multi_threshold_award_levels_once_per_level() {
+        let mut engine = spoils_engine(8, 1, 35, false);
+        engine.handle_command(cmd("attack stray"));
+        let _ = engine.tick();
+        let t2 = engine.tick(); // victory: 35 xp crosses 10 and 30
+        let levels: Vec<(u32, i32)> = t2
+            .iter()
+            .filter_map(|e| match e.kind {
+                GameEventKind::LevelUp { level, max_hp } => Some((level, max_hp)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            levels,
+            vec![(2, 25), (3, 30)],
+            "one event per level, ascending, each with its own max: {t2:?}"
+        );
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.player.level, 3);
+        assert_eq!(snapshot.player.max_hp, 30);
+        assert_eq!(
+            snapshot.player.hp, 30,
+            "healed at each step, ends at the final max"
+        );
+    }
+
+    // L4 (REQ-003): the ratchet — a defeat penalty dropping xp BELOW a held
+    // threshold de-levels nothing and emits nothing; this is also the
+    // timeout-killer for a `while level < target` → `!=` mutant (which
+    // would spin forever here, since the stored level EXCEEDS the curve).
+    #[test]
+    fn defeat_penalty_never_delevels() {
+        let mut engine = spoils_engine(8, 1, 10, false);
+        engine.handle_command(cmd("attack stray"));
+        let _ = engine.tick();
+        let _ = engine.tick(); // victory: xp 10 → level 2, 25/25
+        assert_eq!(engine.snapshot().player.level, 2);
+
+        // Walk into the brute (99/99) and lose: penalty 10 → 9 xp, curve
+        // says level 1 — the ratchet keeps 2.
+        let response = engine.handle_command(cmd("attack brute"));
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Defeat,
+                    ..
+                }
+            )),
+            "the brute fells the player: {:?}",
+            response.events
+        );
+        assert!(
+            !response
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, GameEventKind::LevelUp { .. })),
+            "a penalty below the threshold emits no level events"
+        );
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.player.xp, 9, "the penalty landed (10 - 1)");
+        assert_eq!(snapshot.player.level, 2, "the milestone is KEPT (ratchet)");
+        assert_eq!(snapshot.player.max_hp, 25, "no benefit clawback");
+    }
+
+    // L5 (REQ-007): levels round-trip through the #28 surface byte-for-byte,
+    // and a STALE pair (level 1 with banked xp — a pre-#30 save) converges
+    // lazily at its next combat end, firing the earned LevelUps then.
+    #[test]
+    fn levels_round_trip_and_stale_saves_converge_lazily() {
+        let mut engine = spoils_engine(8, 1, 10, false);
+        engine.handle_command(cmd("attack stray"));
+        let _ = engine.tick();
+        let _ = engine.tick(); // level 2, 25/25, xp 10
+        let at_save = snapshot_value(&engine);
+        let restored = Engine::from_save(engine.save_data()).expect("a leveled save loads");
+        assert_eq!(
+            snapshot_value(&restored),
+            at_save,
+            "level and max_hp round-trip byte-for-byte"
+        );
+
+        // The stale pair: bank 35 xp at level 1 (a pre-#30 save's shape).
+        let stale = Engine::try_new(combat_world(8, 1)).expect("valid combat world");
+        let mut data = stale.save_data();
+        data.state.player.xp = 35;
+        let mut loaded = Engine::from_save(data).expect("a stale pair is sound, not gated");
+        assert_eq!(
+            loaded.snapshot().player.level,
+            1,
+            "loading converges NOTHING yet (lazy, not on-load)"
+        );
+        loaded.handle_command(cmd("attack stray"));
+        let _ = loaded.tick();
+        let t2 = loaded.tick(); // any combat end syncs: curve(35) = 3
+        let levels: Vec<u32> = t2
+            .iter()
+            .filter_map(|e| match e.kind {
+                GameEventKind::LevelUp { level, .. } => Some(level),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            levels,
+            vec![2, 3],
+            "the banked milestones surface at the next combat end: {t2:?}"
+        );
+        assert_eq!(loaded.snapshot().player.level, 3);
     }
 }

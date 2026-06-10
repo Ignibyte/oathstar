@@ -38,6 +38,10 @@ export function parseEvent(raw) {
       return { ...base, oathId: raw.oath_id ?? null, title: raw.title ?? "" };
     case "oath_fulfilled":
       return { ...base, oathId: raw.oath_id ?? null };
+    case "level_up":
+      // Ticket #30: keep the payload so textFor renders the exact line —
+      // the default arm would silently strip it (the live-fallback trap).
+      return { ...base, level: raw.level ?? null, maxHp: raw.max_hp ?? null };
     case "tick":
       return { ...base, value: raw.value ?? 0 };
     default:

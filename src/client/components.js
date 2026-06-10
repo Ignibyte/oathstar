@@ -71,6 +71,12 @@ function textFor(event) {
       return event.title ? `Oath sworn: ${event.title}.` : "You swear an oath.";
     case "oath_fulfilled":
       return "Your oath is fulfilled.";
+    case "level_up":
+      // Ticket #30: the typed render is the line — byte-identical to the
+      // datastar feed's, labeled by the skill channel.
+      return typeof event.level === "number"
+        ? `You reach level ${event.level}.`
+        : "You reach a new level.";
     default:
       return event.text ?? "";
   }

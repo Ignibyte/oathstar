@@ -437,3 +437,18 @@ test("snapshot.toMenuModel includes the pack panel from the snapshot", () => {
   assert.equal(menu.pack.count, 1);
   assert.equal(menu.pack.items[0].name, "Wax Stub");
 });
+
+// L7 (ticket #30): the HUD view-model exposes the progression pair the
+// header line renders, with sibling-style defaults.
+test("toHud exposes level and xp", () => {
+  const snap = sampleSnapshot();
+  snap.player.level = 3;
+  snap.player.xp = 35;
+  const hud = toHud(snap);
+  assert.equal(hud.level, 3);
+  assert.equal(hud.xp, 35);
+
+  const empty = toHud(null);
+  assert.equal(empty.level, 0, "absent snapshots default like hp/focus");
+  assert.equal(empty.xp, 0);
+});

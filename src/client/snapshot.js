@@ -31,6 +31,9 @@ export function toHud(snapshot) {
     maxFocus: player.maxFocus ?? 0,
     hpPct: pct(player.hp ?? 0, player.maxHp ?? 0),
     focusPct: pct(player.focus ?? 0, player.maxFocus ?? 0),
+    // Ticket #30: the progression pair the header line renders ("Lv N · M xp").
+    level: player.level ?? 0,
+    xp: player.xp ?? 0,
     roomName: room.title ?? snapshot?.worldTitle ?? "",
     roomKicker: room.subregion ?? room.region ?? "",
     tick: snapshot?.tick ?? 0,

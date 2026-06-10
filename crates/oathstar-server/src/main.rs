@@ -477,8 +477,12 @@ mod tests {
     /// The shared journey of the beginner slice (SV-B at ticket #29): look →
     /// talk mara (the offer) → swear → the authored route to the roost →
     /// confront (the REAL pulse-loop fight) → victory. Returns the fight's
-    /// Combat-channel kinds so each caller pins its own act.
-    async fn play_to_boss_victory(app: &AppState) -> Vec<GameEventKind> {
+    /// Combat-channel kinds plus the live subscription (still positioned
+    /// right after `CombatEnded` — the ticket #30 `LevelUp` follows on it) so
+    /// each caller pins its own act.
+    async fn play_to_boss_victory(
+        app: &AppState,
+    ) -> (Vec<GameEventKind>, broadcast::Receiver<GameEvent>) {
         let look = command(State(app.clone()), req("look")).await;
         assert!(look.0.accepted, "look accepted");
         assert_eq!(look.0.snapshot.current_room_id, "hollowmere_square");
@@ -543,7 +547,8 @@ mod tests {
             "the confrontation alone fulfills nothing"
         );
         spawn_tick_loop(app.clone());
-        drain_combat_until_ended(&mut rx).await
+        let kinds = drain_combat_until_ended(&mut rx).await;
+        (kinds, rx)
     }
 
     // REQ-002/007 + ticket #29 act 1: the slice fights the boss to victory
@@ -552,7 +557,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn beginner_slice_fights_the_boss_to_victory() {
         let app = test_app_state();
-        let kinds = play_to_boss_victory(&app).await;
+        let (kinds, mut rx) = play_to_boss_victory(&app).await;
         assert!(
             matches!(
                 kinds.last(),
@@ -573,11 +578,37 @@ mod tests {
             )),
             "the clapper falls with the authored article intact: {kinds:?}"
         );
+        // The LevelUp broadcasts right after the victory summary, on the
+        // Skill channel (outside the Combat-channel drain) — ticket #30.
+        let level_up = loop {
+            let event = tokio::time::timeout(Duration::from_mins(5), rx.recv())
+                .await
+                .expect("the level-up follows the victory")
+                .expect("broadcast stays open");
+            if matches!(event.channel, EventChannel::Skill) {
+                break event;
+            }
+        };
+        assert!(
+            matches!(
+                level_up.kind,
+                GameEventKind::LevelUp {
+                    level: 2,
+                    max_hp: 25
+                }
+            ),
+            "the 25-xp victory crosses the first threshold: {level_up:?}"
+        );
         let after_fight = state_snapshot(State(app.clone())).await;
         assert_eq!(after_fight.0.player.xp, 25, "the boss reward landed");
+        assert_eq!(after_fight.0.player.level, 2, "the victory lands level 2");
         assert_eq!(
-            after_fight.0.player.hp, 12,
-            "two boss returns landed (20 → 12)"
+            after_fight.0.player.max_hp, 25,
+            "the level grows max HP (20 + 5)"
+        );
+        assert_eq!(
+            after_fight.0.player.hp, 25,
+            "the level-up heals to the new max (ticket #30 — was 12/20)"
         );
         assert_eq!(
             after_fight.0.oath.as_ref().expect("oath present").status,
@@ -1186,5 +1217,69 @@ mod tests {
             "the replayed pulses land the saved fight's exact damage"
         );
         std::fs::remove_dir_all(app.saves.root()).ok();
+    }
+
+    // SV-L (ticket #30, REQ-008): the played progression over the live seam —
+    // the stray's 5 xp banks below the first threshold (level 1), then the
+    // boss's 25 lands 30 total, crossing BOTH thresholds in one victory: the
+    // burst carries LevelUp{2,25} then LevelUp{3,30}, and /state settles at
+    // level 3, 30/30.
+    #[tokio::test(start_paused = true)]
+    async fn played_progression_reaches_level_three() {
+        let app = test_app_state();
+        assert!(
+            command(State(app.clone()), req("talk mara"))
+                .await
+                .0
+                .accepted
+        );
+        assert!(command(State(app.clone()), req("swear")).await.0.accepted);
+
+        walk_to_ashen_road(&app).await;
+        let mut rx = app.events.subscribe();
+        assert!(command(State(app.clone()), req("attack")).await.0.accepted);
+        spawn_tick_loop(app.clone());
+        let _ = drain_combat_until_ended(&mut rx).await;
+        let mid = state_snapshot(State(app.clone())).await;
+        assert_eq!(mid.0.player.xp, 5, "the stray pays its 5 xp");
+        assert_eq!(
+            mid.0.player.level, 1,
+            "5 xp stays below the first threshold — no premature level"
+        );
+
+        for step in ["north", "up", "up"] {
+            let moved = command(State(app.clone()), req(step)).await;
+            assert!(moved.0.accepted, "move {step} accepted");
+        }
+        assert!(
+            command(State(app.clone()), req("confront"))
+                .await
+                .0
+                .accepted
+        );
+        let _ = drain_combat_until_ended(&mut rx).await;
+        let mut levels = Vec::new();
+        while levels.len() < 2 {
+            let event = tokio::time::timeout(Duration::from_mins(5), rx.recv())
+                .await
+                .expect("the level burst follows the boss victory")
+                .expect("broadcast stays open");
+            if let GameEventKind::LevelUp { level, max_hp } = event.kind {
+                levels.push((level, max_hp));
+            }
+        }
+        assert_eq!(
+            levels,
+            vec![(2, 25), (3, 30)],
+            "one event per level, ascending, in the boss victory burst"
+        );
+        let state = state_snapshot(State(app.clone())).await;
+        assert_eq!(
+            state.0.player.xp, 30,
+            "5 + 25 lands exactly on the threshold"
+        );
+        assert_eq!(state.0.player.level, 3);
+        assert_eq!(state.0.player.max_hp, 30, "two levels grow 20 -> 30");
+        assert_eq!(state.0.player.hp, 30, "healed to the final max");
     }
 }

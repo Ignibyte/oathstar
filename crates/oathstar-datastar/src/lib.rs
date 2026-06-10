@@ -166,6 +166,12 @@ fn describe(event: &GameEvent) -> Option<(&'static str, &'static str, String)> {
             };
             Some((variant, label, text.clone()))
         }
+        GameEventKind::LevelUp { level, .. } => {
+            // Ticket #30: the typed render IS the feed line — the engine
+            // emits no duplicate log message (the #29 renderer-twin rule).
+            let (variant, label) = channel_variant_label(&event.channel);
+            Some((variant, label, format!("You reach level {level}.")))
+        }
     }
 }
 
@@ -181,6 +187,7 @@ const fn kind_type(kind: &GameEventKind) -> &'static str {
         GameEventKind::CombatEnded { .. } => "combat_ended",
         GameEventKind::CombatPulse { .. } => "combat_pulse",
         GameEventKind::Announcement { .. } => "announcement",
+        GameEventKind::LevelUp { .. } => "level_up",
     }
 }
 
@@ -494,6 +501,12 @@ mod tests {
                 severity: AnnouncementSeverity::Alarm,
                 text: ATTACK.to_owned(),
             },
+            // Ticket #30: no String payload (numeric fields only) — the row
+            // keeps the every-kind invariant honest as the enum grows.
+            GameEventKind::LevelUp {
+                level: 2,
+                max_hp: 25,
+            },
         ];
         for kind in kinds {
             let event = GameEvent {
@@ -515,6 +528,37 @@ mod tests {
             assert!(!body.contains('<'), "raw < in body: {body}");
             assert!(!body.contains('>'), "raw > in body: {body}");
         }
+    }
+
+    // L6 (ticket #30): the sole pins for the LevelUp arms — the exact feed
+    // line, the Skill channel's ("system", "Skill") tuple, and the
+    // level_up component tag. The typed render IS the human line (no
+    // log-message twin exists to carry it).
+    #[test]
+    fn level_up_renders_the_exact_line() {
+        let event = GameEvent {
+            event_id: 30,
+            tick: 7,
+            channel: EventChannel::Skill,
+            kind: GameEventKind::LevelUp {
+                level: 2,
+                max_hp: 25,
+            },
+        };
+        let html = render_feed_fragment(&event).expect("level-up renders");
+        assert!(
+            html.contains("<p>You reach level 2.</p>"),
+            "the exact line: {html}"
+        );
+        assert!(
+            html.contains("data-component=\"level_up\""),
+            "the kind tag: {html}"
+        );
+        assert!(
+            html.contains("log-entry system"),
+            "the Skill channel's system variant: {html}"
+        );
+        assert!(html.contains(">Skill<"), "the Skill label: {html}");
     }
 
     // N7 (ticket #27): the sole pin for the announcement arm — three exact

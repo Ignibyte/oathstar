@@ -74,6 +74,7 @@ const el = {
   focusValue: document.querySelector("#focus-value"),
   focusBar: document.querySelector("#focus-bar"),
   turnCount: document.querySelector("#turn-count"),
+  levelValue: document.querySelector("#level-value"),
   nearby: document.querySelector("#nearby"),
   nearbyCount: document.querySelector("#nearby-count"),
   quests: document.querySelector("#quests"),
@@ -243,6 +244,9 @@ function connectEvents() {
       (parsed.type === "room_entered" ||
         parsed.type === "oath_sworn" ||
         parsed.type === "oath_fulfilled" ||
+        // A pulse-victory level-up arrives with no command response
+        // (ticket #30) — refetch so the header line updates live.
+        parsed.type === "level_up" ||
         parsed.type === "combat_started" ||
         parsed.type === "combat_ended" ||
         // A combat pulse resolved server-side without a command (ticket #24) —
@@ -358,6 +362,7 @@ function renderHud(snapshot) {
   el.hpBar.style.width = `${hud.hpPct}%`;
   el.focusBar.style.width = `${hud.focusPct}%`;
   el.turnCount.textContent = `Turn ${hud.tick}`;
+  el.levelValue.textContent = `Lv ${hud.level} · ${hud.xp} xp`;
 }
 
 function renderRoom(snapshot) {

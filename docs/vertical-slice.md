@@ -95,10 +95,11 @@ The Rust authority-path slice landed in **ticket #7** (`WORK-beginner-vertical-s
   made a real pulse-loop fight at ticket #29 —
   `Engine::begin()` for the opening room scene, and the whole loop exercised over
   the server `/command`→`/events` path. See `docs/decisions.md` Decision 031.
-- **Deferred (placeholders or out of scope):** full combat (HP/pulses), skill
+- **Deferred (placeholders or out of scope):** full combat (HP/pulses),
   progression, region standing, save/load of oath state, and the **Tauri/JS UI**
-  that renders the slice — these are follow-up tickets. (All since landed: combat #22/#24–#26,
-  save/load #28, the real boss fight #29; the UI shell #13+.)
+  that renders the slice — these are follow-up tickets. (All since landed:
+  combat #22/#24–#26, save/load #28, the real boss fight #29, XP levels #30;
+  percentage-skill mastery remains future work; the UI shell #13+.)
 - **Known startup gap:** `Engine::begin()` produces the opening room scene and is
   tested, but the server does **not** yet call it — it neither broadcasts the
   opening scene on a new `/events` subscription nor exposes a `begin` endpoint, so

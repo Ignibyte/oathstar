@@ -2384,3 +2384,58 @@ Revisit when:
 - Multiple bosses or oaths per room need explicit `confront <target>`.
 - Swearing while already holding the objective should fulfill (today only
   a TAKE triggers; unreachable in authored content, ledgered at #29).
+
+## Decision 048: Levels Are Deterministic XP Milestones That Ratchet And Heal
+
+Status: Locked
+
+Date: 2026-06-10
+
+What was decided (ticket #30):
+
+- **The curve is an engine constant.** `LEVEL_XP_THRESHOLDS = [10, 30,
+  60, 100]` — level 1 at 0 XP, +1 per threshold crossed, level 5 when the
+  table is exhausted (v1's cap; XP keeps accumulating past it). Pure,
+  RNG-free `level_for_xp`; module-authored curves are a future ticket
+  (they need validation machinery the way announcements did).
+- **Sync runs at every combat end.** `Engine::sync_level` is called once
+  in `end_combat` after the `CombatEnded` event — covering the victory
+  award and the defeat penalty (and trivially Fled). One iteration — and
+  one typed `LevelUp { level, max_hp }` on the `Skill` channel — per
+  level gained, so a single award crossing several thresholds emits an
+  ascending burst with each benefit applied exactly once. **Any future
+  XP source (oath rewards, quests) must call `sync_level` after its
+  write** — until then the level lags to the next combat end.
+- **Levels ratchet.** The defeat penalty (or any XP loss) never
+  de-levels and never claws back max HP — milestones are kept. The
+  ratchet also makes the defeat-arm sync a guaranteed no-op in normal
+  play, since the victory award already synced.
+- **The benefit is +5 max HP and a full heal per level** — the milestone
+  moment, deterministic and snapshot-visible. Beginner pacing: two
+  strays (5 XP each) reach level 2; the boss's 25 lands 30 total and
+  crosses two thresholds in one victory burst.
+- **The typed render IS the feed line.** Both renderers print "You reach
+  level N." for the typed event; the engine emits no log twin (the #29
+  renderer-collision rule applied at design time). The client header
+  shows `Lv N · M xp` through `toHud`; the SSE refresh list includes
+  `level_up` so pulse-victory level-ups update the header live.
+- **Stale saves converge lazily — no version bump.** A pre-#30 save
+  (level 1 with banked XP) loads as-is and its earned milestones surface
+  at the next combat end; no (level, xp) pair is unsound (the sync loop
+  is bounded by the table, all arithmetic saturates), so Decision 046's
+  loud-refusal posture is not triggered. Recompute-on-load was rejected
+  because load broadcasts nothing — the events would vanish.
+- **Renderer payloads must survive the wire normalizer.** The JS client's
+  `parseEvent` copies fields per event type; `level_up` got its case after
+  inspect proved the default arm silently strips payloads
+  (FAIL-claude-normalizer-strips-payload-live-fallback-001). Renderer
+  tests pin through `parseEvent(rawWireJson)`, never hand-built events.
+
+Revisit when:
+
+- A module needs its own curve or cap (authored thresholds + validation).
+- Percentage-based skills land (Decision 010's other half) — levels stay
+  milestone-only.
+- A non-combat XP source arrives (the must-sync note above becomes a
+  refactor: sync inside an `award_xp` helper).
+- Level-gated content or benefits beyond max HP are wanted.

@@ -174,3 +174,33 @@ test("toBattle labels the direct battle verbs", () => {
   assert.equal(winding.queuedAction, "power_strike");
   assert.equal(winding.queuedActionLabel, "Winding up a power strike…");
 });
+
+// L7 (ticket #30): the cross-renderer pin runs THROUGH the wire normalizer —
+// parseEvent must preserve the LevelUp payload (the inspect-caught
+// live-fallback trap), and toComponent must render the exact datastar line
+// with the Skill channel's label and variant.
+test("level_up renders the exact line through the parse composition", () => {
+  const raw = {
+    eventId: 30,
+    tick: 7,
+    channel: "skill",
+    type: "level_up",
+    level: 2,
+    max_hp: 25,
+  };
+  const parsed = parseEvent(raw);
+  assert.equal(parsed.level, 2, "the normalizer preserves level");
+  assert.equal(parsed.maxHp, 25, "the normalizer preserves max_hp (camelCase)");
+
+  const component = toComponent(parsed);
+  assert.equal(component.text, "You reach level 2.", "byte-identical to the datastar render");
+  assert.equal(component.label, "Skill");
+  assert.equal(component.variant, "system");
+
+  const stripped = toComponent({ id: 1, tick: 0, channel: "skill", type: "level_up" });
+  assert.equal(
+    stripped.text,
+    "You reach a new level.",
+    "the defensive fallback still reads sanely if a field is ever lost"
+  );
+});

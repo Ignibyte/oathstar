@@ -173,12 +173,14 @@ where structured renderer or adapter data is the better contract.
 - Components should be interactive where useful, but not visually overwhelming.
 - The player should still be able to read the game like a MUD.
 
-## Implementation Status (v1)
+## Implementation Status
 
-As of ticket #7 the implemented `GameEventKind` set is `LogMessage` (carrying an
-`OutputComponent`), `Tick`, `RoomEntered`, `OathSworn`, and `OathFulfilled`; the
-rest of the event catalog above is still aspirational. Channels and
-`OutputComponent`s are defined in `oathstar-protocol`.
+As of ticket #30 the implemented `GameEventKind` set is `LogMessage` (carrying
+an `OutputComponent`), `Tick`, `RoomEntered`, `OathSworn`, `OathFulfilled`,
+`CombatStarted`, `CombatEnded`, `CombatPulse` (ticket #24), `Announcement`
+(ticket #27), and `LevelUp` (ticket #30); the rest of the event catalog above
+is still aspirational. Channels and `OutputComponent`s are defined in
+`oathstar-protocol`.
 
 **Wire-format note (clients):** a `GameEvent` serializes camelCase (`eventId`,
 `tick`, `channel`) with its kind `flatten`-ed in under a snake_case `type` tag

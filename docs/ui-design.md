@@ -33,8 +33,8 @@ The first playable screen should open directly into the game.
 
 Primary regions:
 
-- Top HUD: health and focus bars, current room/status, and lightweight turn or
-  action context.
+- Top HUD: health and focus bars, current room/status, the level/XP readout
+  (`Lv N · M xp`, ticket #30), and lightweight turn or action context.
 - Map/stage: the most prominent region, showing the current room/grid state.
 - Output feed: typed narrative, combat, oath, dialogue, loot, and system
   components underneath the map, with its own scrollbar.
