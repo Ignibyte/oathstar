@@ -87,6 +87,15 @@ aliases = ["clapper", "bell clapper"]
 kind = "quest"
 flags = ["oath"]
 
+# The Ashen Stray's drop (ticket #26) — the beginner reward-loop demo: defeat
+# the stray, watch the fang fall, take it. Flavor trophy, no mechanics.
+[[items]]
+id = "stray_fang"
+name = "Cracked Fang"
+description = "A yellowed hound's fang, split down the middle. Proof of a road fight won."
+aliases = ["fang", "cracked fang"]
+kind = "trophy"
+
 # The boss actor, placed in bell_eater_roost (see rooms.toml). The "boss" role is
 # how the engine's `confront` command finds the boss in the current room.
 [[entities]]
@@ -113,10 +122,13 @@ description = "A scrawny, ash-matted hound with too many teeth and a low, wet gr
 aliases = ["stray", "hound", "dog", "ashen stray"]
 kind = "actor"
 roles = ["combatant", "hostile"]
+# Ticket #26: the beginner reward-loop demo — defeating the stray awards 5 XP
+# and drops its fang into the road.
+inventory = ["stray_fang"]
 # Ticket #23: this stray discloses its combat stats to nearby inspection (the
 # visible-stats demo). A combatant without this flag (e.g. the Bell-Eater) renders
-# as "unknown" in the entity detail view.
-combat = { health = 9, attack = 3, disclose_stats = true }
+# as "unknown" in the entity detail view. Ticket #26 adds the authored XP reward.
+combat = { health = 9, attack = 3, disclose_stats = true, xp = 5 }
 
 # The beginner oath, offered by the module (module.toml `oath_id`). Swearing it
 # and resolving the Bell-Eater fulfills it.

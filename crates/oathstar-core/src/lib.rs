@@ -145,6 +145,11 @@ pub struct CombatProfile {
     /// nearby/snapshot disclosure.
     #[serde(default)]
     pub disclose_stats: bool,
+    /// Authored XP awarded to the player when this combatant falls to a combat
+    /// victory (ticket #26). `#[serde(default)]` ⇒ 0, so older profiles stay
+    /// valid and a missing reward is zero — never invented (REQ-002).
+    #[serde(default)]
+    pub xp: u64,
 }
 
 /// A typed interaction capability declared by an entity's role tags (ticket #21).
@@ -1882,9 +1887,12 @@ impl Engine {
 
     /// End the active encounter with `outcome` (ticket #22, REQ-004): emit the
     /// typed [`GameEventKind::CombatEnded`] marker carrying the compact feed
-    /// summary, apply the outcome (remove the defeated enemy on victory; revive the
-    /// player at full HP on defeat — death penalties are out of scope), and clear
-    /// combat state. A no-op when no fight is active.
+    /// summary, apply the outcome, and clear combat state. Victory removes the
+    /// defeated enemy, drops its authored inventory into the room, and awards
+    /// its authored XP (ticket #26); defeat resets the player to the world
+    /// start room at full HP with a deterministic XP penalty (ticket #26 —
+    /// deliberately replacing the #22 revive-in-place semantics); flee leaves
+    /// the world as it stands.
     fn end_combat(&mut self, outcome: CombatOutcome, events: &mut Vec<GameEvent>) {
         let combat = self
             .state
@@ -1895,11 +1903,33 @@ impl Engine {
         let text = match outcome {
             CombatOutcome::Victory => {
                 self.remove_entity_everywhere(&combat.enemy_id);
-                format!("You have defeated {enemy_name}. Victory!")
+                self.drop_enemy_inventory(&combat.enemy_id, &enemy_name, events);
+                let xp = self.enemy_xp_reward(&combat.enemy_id);
+                // Saturating like the defeat penalty: a u64 award can never
+                // overflow-panic, however absurd the authored numbers get.
+                self.state.player.xp = self.state.player.xp.saturating_add(xp);
+                if xp > 0 {
+                    format!("You have defeated {enemy_name}. Victory! You gain {xp} XP.")
+                } else {
+                    // Byte-identical to the pre-#26 victory line, so an
+                    // unrewarded win behaves exactly as before (REQ-002).
+                    format!("You have defeated {enemy_name}. Victory!")
+                }
             }
             CombatOutcome::Defeat => {
                 self.state.player.hp = self.state.player.max_hp;
-                format!("{enemy_name} has bested you. You wake later, battered but whole.")
+                let lost = self.apply_defeat_penalty();
+                self.state.current_room_id = self.world.start_room_id.clone();
+                let start_title = self.current_room().title.clone();
+                if lost > 0 {
+                    format!(
+                        "{enemy_name} has bested you. You wake at {start_title}, battered but whole. You lose {lost} XP."
+                    )
+                } else {
+                    format!(
+                        "{enemy_name} has bested you. You wake at {start_title}, battered but whole."
+                    )
+                }
             }
             // The fled outcome (ticket #24) leaves the world as it stands: the
             // enemy survives in place and the player keeps their current HP.
@@ -1909,6 +1939,84 @@ impl Engine {
             EventChannel::Combat,
             GameEventKind::CombatEnded { outcome, text },
         ));
+        if matches!(outcome, CombatOutcome::Defeat) {
+            // The wake-up arrival reuses the movement pattern (ticket #26):
+            // RoomEntered + the room description keep the feed and the
+            // client's room/map panels coherent with no new surface.
+            let (room_id, title) = {
+                let room = self.current_room();
+                (room.id.clone(), room.title.clone())
+            };
+            events.push(self.event(
+                EventChannel::Room,
+                GameEventKind::RoomEntered { room_id, title },
+            ));
+            events.extend(self.describe_current_room());
+        }
+    }
+
+    /// The authored XP a defeated enemy awards (ticket #26): its combat
+    /// profile's `xp`, or 0 when no profile/reward exists — a total lookup
+    /// that never invents a reward (REQ-002).
+    fn enemy_xp_reward(&self, enemy_id: &str) -> u64 {
+        self.world
+            .entities
+            .get(enemy_id)
+            .and_then(|entity| entity.combat.as_ref())
+            .map_or(0, |profile| profile.xp)
+    }
+
+    /// Drop a defeated enemy's authored inventory into the current room as
+    /// ground items (ticket #26, REQ-003): each id moves into the room's item
+    /// placements in authored order — visible and takeable through the
+    /// existing contents/`take` flow — and the entity's inventory clears, so
+    /// drops cannot duplicate within a session (the take IS the guarantee).
+    /// One feed line narrates each drop.
+    fn drop_enemy_inventory(
+        &mut self,
+        enemy_id: &str,
+        enemy_name: &str,
+        events: &mut Vec<GameEvent>,
+    ) {
+        let entity = self
+            .world
+            .entities
+            .get_mut(enemy_id)
+            .expect("a defeated enemy's registry entry survives placement removal");
+        let dropped = std::mem::take(&mut entity.inventory);
+        if dropped.is_empty() {
+            return;
+        }
+        for item_id in &dropped {
+            let name = &self
+                .world
+                .items
+                .get(item_id)
+                .expect("entity inventory ids resolve in a validated world (EntityItemMissing)")
+                .name;
+            let line = format!("The {enemy_name} drops {name}.");
+            events.push(self.log(EventChannel::Combat, OutputComponent::CombatMessage, line));
+        }
+        let room_id = self.state.current_room_id.clone();
+        self.world
+            .rooms
+            .get_mut(&room_id)
+            .expect("current room is a try_new-validated invariant")
+            .items
+            .extend(dropped);
+    }
+
+    /// Apply the deterministic defeat XP penalty (ticket #26, REQ-005/006):
+    /// with any XP, lose `max(1, floor(xp / 10))`, saturating at zero; with
+    /// zero XP nothing is lost. Returns the XP lost.
+    fn apply_defeat_penalty(&mut self) -> u64 {
+        let xp = self.state.player.xp;
+        if xp == 0 {
+            return 0;
+        }
+        let penalty = (xp / 10).max(1);
+        self.state.player.xp = xp.saturating_sub(penalty);
+        penalty
     }
 
     /// Remove an entity's room placement everywhere it appears (ticket #22), so a
@@ -4374,6 +4482,7 @@ mod tests {
             health: stray_health,
             attack: stray_attack,
             disclose_stats: false,
+            xp: 0,
         });
         world.entities.insert("stray".to_string(), stray);
 
@@ -4383,6 +4492,7 @@ mod tests {
             health: 99,
             attack: 99,
             disclose_stats: false,
+            xp: 0,
         });
         world.entities.insert("brute".to_string(), brute);
 
@@ -4400,6 +4510,7 @@ mod tests {
             health: 5,
             attack: 1,
             disclose_stats: false,
+            xp: 0,
         });
         world.entities.insert("wolf".to_string(), wolf);
 
@@ -4561,9 +4672,11 @@ mod tests {
     }
 
     // C6/REQ-004 defeat (player HP lands EXACTLY on 0 → kills the player-side
-    // `<= 0` → `>`) → revive to max_hp, combat cleared.
+    // `<= 0` → `>`) → ticket #26 semantics: reset to the start room at full
+    // HP, combat cleared; at zero XP there is no penalty and no penalty
+    // clause (the deliberate #26 rewrite of the #22 revive-in-place pin).
     #[test]
-    fn defeat_at_zero_hp_revives_player_and_clears_combat() {
+    fn defeat_at_zero_hp_resets_to_start_at_full_hp() {
         // health 99 survives the 4-damage strike; attack 20 drops the player 20→0.
         let mut engine = combat_engine(99, 20);
         let response = engine.handle_command(cmd("attack stray"));
@@ -4579,16 +4692,26 @@ mod tests {
                     EventChannel::Combat,
                     GameEventKind::CombatEnded {
                         outcome: CombatOutcome::Defeat,
-                        ..
+                        text,
                     }
-                )
+                ) if text == "Stray has bested you. You wake at field, battered but whole."
             )),
-            "emits CombatEnded{{Defeat}}"
+            "the zero-XP defeat summary has no penalty clause: {:?}",
+            response.events
         );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::RoomEntered { room_id, .. } if room_id == "field"
+            )),
+            "the wake-up arrival narrates the start room"
+        );
+        assert_eq!(response.snapshot.player.hp, 20, "HP restored to max");
         assert_eq!(
-            response.snapshot.player.hp, 20,
-            "the player revives to max_hp (no death penalty in v1)"
+            response.snapshot.current_room_id, "field",
+            "the player wakes at the world start room"
         );
+        assert_eq!(response.snapshot.player.xp, 0, "no penalty at zero XP");
     }
 
     // C7/REQ-005: `attack` in a non-combat-enabled room is refused with no state
@@ -4743,6 +4866,7 @@ mod tests {
             health: u32::MAX,
             attack: 1,
             disclose_stats: false,
+            xp: 0,
         });
         world.entities.insert("titan".to_string(), titan);
         let mut engine = Engine::try_new(world).expect("valid titan world");
@@ -4824,6 +4948,7 @@ mod tests {
             health: 3,
             attack: 1,
             disclose_stats: false,
+            xp: 0,
         });
         ok_world.entities.insert("ghoul".to_string(), ghoul);
         assert_eq!(ok_world.validate(), Ok(()));
@@ -4892,6 +5017,7 @@ mod tests {
             health: 9,
             attack: 3,
             disclose_stats: true,
+            xp: 0,
         });
         world.entities.insert("stray".to_string(), stray);
 
@@ -4905,6 +5031,7 @@ mod tests {
             health: 7,
             attack: 2,
             disclose_stats: false,
+            xp: 0,
         });
         world.entities.insert("sage".to_string(), sage);
 
@@ -4914,6 +5041,7 @@ mod tests {
             health: 5,
             attack: 1,
             disclose_stats: false,
+            xp: 0,
         });
         world.entities.insert("wolf".to_string(), wolf);
 
@@ -4923,6 +5051,7 @@ mod tests {
             health: 6,
             attack: 2,
             disclose_stats: false,
+            xp: 0,
         });
         world.entities.insert("brute".to_string(), brute);
 
@@ -5322,32 +5451,38 @@ mod tests {
         assert_eq!(t3.len(), 1, "a won encounter stops pulsing");
     }
 
-    // T8 (REQ-005): a pulse driving the player to exactly zero ends in Defeat,
-    // revives at full HP (the v1 loss semantics), and stops pulsing.
+    // T8 (REQ-005): a pulse driving the player to exactly zero ends in Defeat
+    // with the ticket #26 reset — start room at full HP, an XP penalty when
+    // the player has XP, the wake-up arrival events — and stops pulsing.
+    // (The deliberate #26 rewrite of the #24 revive-in-place pin.)
     #[test]
-    fn pulse_defeat_at_exact_zero_revives_and_stops_pulsing() {
+    fn pulse_defeat_at_exact_zero_resets_and_stops_pulsing() {
         let mut engine = combat_engine(40, 10);
+        engine.state.player.xp = 100; // earned XP to expose the penalty
         engine.handle_command(cmd("attack stray")); // round 1: enemy 36, player 10
         let _ = engine.tick();
         let t2 = engine.tick();
-        assert_eq!(
-            t2.len(),
-            5,
-            "Tick + CombatPulse + strike + fatal return + CombatEnded: {t2:?}"
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded { outcome: CombatOutcome::Defeat, text }
+                    if text
+                        == "Stray has bested you. You wake at field, battered but whole. You lose 10 XP."
+            )),
+            "the defeat summary names the wake room and the exact penalty: {t2:?}"
         );
-        assert!(matches!(
-            &t2[4].kind,
-            GameEventKind::CombatEnded {
-                outcome: CombatOutcome::Defeat,
-                ..
-            }
-        ));
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::RoomEntered { room_id, .. } if room_id == "field"
+            )),
+            "the wake-up arrival follows the summary"
+        );
         let snapshot = engine.snapshot();
         assert!(snapshot.combat.is_none());
-        assert_eq!(
-            snapshot.player.hp, 20,
-            "defeat revives the player at max HP"
-        );
+        assert_eq!(snapshot.player.hp, 20, "HP restored to max");
+        assert_eq!(snapshot.player.xp, 90, "lose max(1, 100/10) = 10 XP");
+        assert_eq!(snapshot.current_room_id, "field");
         let t3 = engine.tick();
         assert_eq!(t3.len(), 1, "a lost encounter stops pulsing");
     }
@@ -5930,6 +6065,283 @@ mod tests {
         assert!(
             text.contains("power strike"),
             "help lists power strike: {text}"
+        );
+    }
+
+    // ---- ticket #26: combat rewards + defeat consequences ----
+
+    /// A combat engine whose stray carries authored spoils (ticket #26): an
+    /// XP reward and, when `fang` is set, a droppable item registered in the
+    /// world's item registry.
+    fn spoils_engine(health: u32, attack: u32, xp: u64, fang: bool) -> Engine {
+        let mut world = combat_world(health, attack);
+        if fang {
+            world.items.insert("fang".to_string(), item("fang"));
+            world
+                .entities
+                .get_mut("stray")
+                .expect("stray exists")
+                .inventory = vec!["fang".to_string()];
+        }
+        world
+            .entities
+            .get_mut("stray")
+            .expect("stray exists")
+            .combat
+            .as_mut()
+            .expect("stray has a combat profile")
+            .xp = xp;
+        Engine::try_new(world).expect("valid spoils world")
+    }
+
+    // X1 (REQ-001): a pulse victory awards the authored XP exactly — by value
+    // (the sole killer for the award's add mutants) — and the summary names
+    // the gain.
+    #[test]
+    fn pulse_victory_awards_authored_xp() {
+        let mut engine = spoils_engine(8, 1, 7, false);
+        engine.handle_command(cmd("attack stray")); // round 1: enemy 4, player 19
+        let _ = engine.tick();
+        let t2 = engine.tick(); // pulse round 2 kills at exactly 0
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded { outcome: CombatOutcome::Victory, text }
+                    if text == "You have defeated Stray. Victory! You gain 7 XP."
+            )),
+            "the victory summary names the gain: {t2:?}"
+        );
+        assert_eq!(engine.snapshot().player.xp, 7, "the award lands by value");
+    }
+
+    // X2 (REQ-001): the #25 Phase-2 victory path awards through the same
+    // end_combat funnel — exactly once, never doubled.
+    #[test]
+    fn window_victory_awards_xp_exactly_once() {
+        let mut engine = spoils_engine(14, 1, 7, false);
+        engine.handle_command(cmd("attack stray")); // round 1: enemy 10
+        engine.handle_command(cmd("power strike"));
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1: enemy 6; P2 slam lands exactly 0 → Victory
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded { outcome: CombatOutcome::Victory, text }
+                    if text == "You have defeated Stray. Victory! You gain 7 XP."
+            )),
+            "{t2:?}"
+        );
+        assert_eq!(engine.snapshot().player.xp, 7, "awarded once, not doubled");
+    }
+
+    // X3 (REQ-002): an unrewarded victory keeps the pre-#26 summary
+    // byte-identical and awards nothing — the in-core killer for the
+    // `xp > 0` text-guard mutants.
+    #[test]
+    fn zero_xp_victory_keeps_the_original_summary() {
+        let mut engine = combat_engine(8, 1);
+        engine.handle_command(cmd("attack stray"));
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded { outcome: CombatOutcome::Victory, text }
+                    if text == "You have defeated Stray. Victory!"
+            )),
+            "no invented reward, no gain clause: {t2:?}"
+        );
+        assert_eq!(engine.snapshot().player.xp, 0);
+    }
+
+    // X4 (REQ-003): a victory drops the authored inventory into the room —
+    // exact line, visible in contents, takeable into the pack, inventory
+    // cleared for the session.
+    #[test]
+    fn victory_drops_inventory_into_the_room() {
+        let mut engine = spoils_engine(8, 1, 0, true);
+        engine.handle_command(cmd("attack stray"));
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert_eq!(count_lines(&t2, "The Stray drops fang."), 1, "{t2:?}");
+        let snapshot = engine.snapshot();
+        assert!(
+            snapshot.room.contents.iter().any(|t| t.id == "fang"),
+            "the drop is visible in the room contents"
+        );
+        assert!(
+            engine
+                .world
+                .entities
+                .get("stray")
+                .expect("the registry survives removal")
+                .inventory
+                .is_empty(),
+            "the inventory cleared on drop"
+        );
+        let take = engine.handle_command(cmd("take fang"));
+        assert!(take.accepted, "the drop is takeable");
+        assert!(
+            take.snapshot.pack.iter().any(|p| p.id == "fang"),
+            "the fang lands in the pack"
+        );
+    }
+
+    // X5 (REQ-004): a victory over an inventory-less hostile drops nothing —
+    // no lines, no phantom items.
+    #[test]
+    fn victory_without_inventory_drops_nothing() {
+        let mut engine = combat_engine(8, 1);
+        engine.handle_command(cmd("attack stray"));
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert_eq!(count_lines(&t2, " drops "), 0, "{t2:?}");
+        assert!(
+            !engine
+                .snapshot()
+                .room
+                .contents
+                .iter()
+                .any(|t| t.kind == "item"),
+            "no phantom drops"
+        );
+    }
+
+    // X6 (REQ-003): fleeing leaves the spoils intact; the eventual victory
+    // drops them exactly once — one line, one placement.
+    #[test]
+    fn drops_happen_exactly_once_after_a_flee() {
+        let mut engine = spoils_engine(40, 1, 0, true);
+        engine.handle_command(cmd("attack stray"));
+        engine.handle_command(cmd("flee"));
+        let _ = engine.tick();
+        let _ = engine.tick(); // fled at the boundary; nothing dropped
+        assert!(
+            engine
+                .snapshot()
+                .room
+                .contents
+                .iter()
+                .all(|t| t.id != "fang"),
+            "fleeing drops nothing"
+        );
+        engine.handle_command(cmd("attack stray")); // re-engage at authored 40 hp
+        let mut drop_lines = 0;
+        for _ in 0..30 {
+            let burst = engine.tick();
+            drop_lines += count_lines(&burst, "The Stray drops fang.");
+            if engine.snapshot().combat.is_none() {
+                break;
+            }
+        }
+        assert!(engine.snapshot().combat.is_none(), "the refight resolved");
+        assert_eq!(drop_lines, 1, "the drop narrates exactly once");
+        let fangs = engine
+            .snapshot()
+            .room
+            .contents
+            .iter()
+            .filter(|t| t.id == "fang")
+            .count();
+        assert_eq!(fangs, 1, "exactly one fang placement");
+    }
+
+    /// The relocation fixture (inspect I1): the stray fights in the clearing,
+    /// one move south of the start room, so the defeat reset is observable.
+    fn relocated_stray_engine(health: u32, attack: u32) -> Engine {
+        let mut world = combat_world(health, attack);
+        world
+            .rooms
+            .get_mut("field")
+            .expect("field exists")
+            .entities
+            .retain(|id| id != "stray");
+        world
+            .rooms
+            .get_mut("clearing")
+            .expect("clearing exists")
+            .entities
+            .push("stray".to_string());
+        Engine::try_new(world).expect("valid relocated world")
+    }
+
+    // Inspect I1 (REQ-005, BINDING): a defeat away from the start room
+    // relocates the player — wake room ≠ encounter room by value, the enemy
+    // stays placed where it fought, and the penalty lands exactly.
+    #[test]
+    fn defeat_away_from_start_relocates_to_the_start_room() {
+        let mut engine = relocated_stray_engine(99, 20);
+        engine.state.player.xp = 40;
+        let moved = engine.handle_command(cmd("south"));
+        assert_eq!(moved.snapshot.current_room_id, "clearing");
+        let response = engine.handle_command(cmd("attack stray")); // 20 dmg → defeat
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded { outcome: CombatOutcome::Defeat, text }
+                    if text == "Stray has bested you. You wake at field, battered but whole. You lose 4 XP."
+            )),
+            "{:?}",
+            response.events
+        );
+        assert_eq!(
+            response.snapshot.current_room_id, "field",
+            "defeat relocates to the start room, away from the clearing"
+        );
+        assert_eq!(response.snapshot.player.xp, 36, "lose max(1, 40/10) = 4");
+        assert_eq!(response.snapshot.player.hp, 20, "HP restored to max");
+        assert!(
+            engine
+                .world
+                .rooms
+                .get("clearing")
+                .expect("clearing")
+                .entities
+                .iter()
+                .any(|id| id == "stray"),
+            "the enemy is left in place where it fought"
+        );
+    }
+
+    // X8 (REQ-005/006): the penalty floor and the one-point edge — 5 → lose
+    // 1 → 4; 1 → lose 1 → 0 (never below zero).
+    #[test]
+    fn defeat_penalty_floors_at_one_and_zero() {
+        for (start_xp, after) in [(5_u64, 4_u64), (1, 0)] {
+            let mut engine = combat_engine(99, 20);
+            engine.state.player.xp = start_xp;
+            let response = engine.handle_command(cmd("attack stray"));
+            assert!(
+                response.events.iter().any(|e| matches!(
+                    &e.kind,
+                    GameEventKind::CombatEnded { outcome: CombatOutcome::Defeat, text }
+                        if text.ends_with("You lose 1 XP.")
+                )),
+                "xp {start_xp}: {:?}",
+                response.events
+            );
+            assert_eq!(response.snapshot.player.xp, after, "from xp {start_xp}");
+        }
+    }
+
+    // X11 (REQ-005/009): after the defeat reset the player can walk back and
+    // re-engage the surviving enemy — the encounter genuinely restarts.
+    #[test]
+    fn player_can_reengage_after_a_defeat_reset() {
+        let mut engine = relocated_stray_engine(99, 20);
+        engine.handle_command(cmd("south"));
+        engine.handle_command(cmd("attack stray")); // defeated; reset to field
+        assert_eq!(engine.snapshot().current_room_id, "field");
+        engine.handle_command(cmd("south"));
+        let again = engine.handle_command(cmd("attack stray"));
+        assert!(again.accepted, "the surviving enemy can be fought again");
+        assert!(
+            again.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatStarted { enemy_id, .. } if enemy_id == "stray"
+            )),
+            "a fresh encounter starts: {:?}",
+            again.events
         );
     }
 }

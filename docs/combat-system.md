@@ -48,6 +48,22 @@ This document captures the current combat direction for Oathstar.
 > shows the queued action while it waits for the boundary. Skills content,
 > cooldowns, and any focus economy remain out of scope below.
 
+> **Rewards + defeat consequences v1 implemented** (ticket #26): winning and
+> losing now matter — see `decisions.md` Decision 044. **Victory** awards the
+> defeated hostile's authored `CombatProfile.xp` (default 0 — an unrewarded
+> win is byte-identical to before) and drops its authored `inventory` into
+> the room as takeable ground items ("The Ashen Stray drops Cracked Fang."),
+> clearing it for the session — no corpses, no duplicate drops, and a fled
+> enemy keeps its spoils for the eventual win. **Defeat** resets the player
+> to the world start room at full HP, clears combat, leaves the enemy in
+> place, and applies the deterministic XP penalty `max(1, floor(xp/10))`
+> (never below zero; nothing at zero XP) — the summary names the wake room
+> and the loss, and the feed narrates the arrival with the normal room
+> entry. Everything rides the existing combat/feed surfaces (no new event
+> kinds); all of it deterministic, exactly once, through the single
+> `end_combat` funnel. Levels, currency, loot tables, respawn, and richer
+> death penalties remain the long-horizon direction below.
+
 ## Core Direction
 
 Combat is a core system, not a rare edge case.

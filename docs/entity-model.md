@@ -108,7 +108,7 @@ v1 vocabulary and contracts — the minimum each role needs *where applicable* t
 | `talkable` (synonym `conversable`) | must be an `Actor` |
 | `oath_giver` | must be an `Actor` **and** be named as some oath's `issuer_id` |
 | `shopkeeper` | must be an `Actor` (shop stock/economy deferred) |
-| `combatant` | must be an `Actor`; the optional `combat = { health, attack }` is the combat profile (read by combat v1, ticket #22) |
+| `combatant` | must be an `Actor`; the optional `combat = { health, attack, disclose_stats, xp }` is the combat profile (read by combat v1, ticket #22; `xp` is the #26 victory reward, default 0) |
 | `boss` | must be an `Actor` (a `confront` endpoint) |
 | `hostile` (ticket #22) | must be an `Actor` **and** carry a `combat` profile so it can be fought; `attack` engages a hostile in a `combat_enabled` room |
 | `fixture` | the `EntityKind::Fixture` classification — carries no interaction role |
@@ -130,6 +130,13 @@ disclosure — a present stat is disclosed, an absent stat is the explicit
 "unknown"), gated by a new `CombatProfile.disclose_stats` flag. A generic entity
 detail dialog renders them (disclosed values, else "unknown") and sends no command.
 The client infers none of it locally. See `decisions.md` Decision 041.
+
+Ticket #26 made the entity `inventory` mechanically live: when a hostile falls
+to a combat victory, its authored inventory drops into the room as ground items
+(takeable through the normal flow) and clears for the session — no corpse
+entities, no duplicate drops. The same ticket added `CombatProfile.xp`, the
+authored victory reward. Both are validated as before (`EntityItemMissing`
+guards inventory ids at construction). See `decisions.md` Decision 044.
 
 ## Code-Behind Behavior
 

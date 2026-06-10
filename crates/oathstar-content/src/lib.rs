@@ -448,6 +448,7 @@ mod tests {
                 health: 12,
                 attack: 0,
                 disclose_stats: false,
+                xp: 0,
             }),
             "future-combat-ready stats load by value (attack defaults to 0; stats hidden)"
         );
@@ -473,8 +474,9 @@ mod tests {
                 health: 9,
                 attack: 3,
                 disclose_stats: true,
+                xp: 5,
             }),
-            "authored combat stats load by value (ashen_stray discloses its stats)"
+            "authored combat stats load by value (ashen_stray discloses its stats; #26 adds the XP reward)"
         );
     }
 
@@ -497,5 +499,30 @@ mod tests {
             !roost.combat_enabled,
             "the boss roost is not combat-enabled (Bell-Eater stays confront-only)"
         );
+    }
+
+    // X13 (ticket #26, REQ-008): the beginner reward loop is authored — the
+    // stray carries the fang, the fang is a real registered item, and the
+    // world still validates with the new authoring.
+    #[test]
+    fn beginner_stray_authors_the_reward_loop() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let stray = world.entities.get("ashen_stray").expect("ashen_stray");
+        assert_eq!(
+            stray.inventory,
+            vec!["stray_fang".to_string()],
+            "the stray carries its drop"
+        );
+        let fang = world
+            .items
+            .get("stray_fang")
+            .expect("stray_fang registered");
+        assert_eq!(fang.name, "Cracked Fang");
+        assert_eq!(fang.kind.as_deref(), Some("trophy"));
+        assert!(
+            fang.aliases.iter().any(|a| a == "fang"),
+            "takeable by its short alias"
+        );
+        assert_eq!(world.validate(), Ok(()));
     }
 }

@@ -612,24 +612,47 @@ mod tests {
         let kinds = drain_combat_until_ended(&mut rx).await;
         // Ashen Stray (9 hp / attack 3) vs strike 4: round 1 from the command
         // (5/9, 17/20), pulse round 2 (1/9, 14/20), pulse round 3 (0/9 — no
-        // return after the kill).
-        assert_eq!(kinds.len(), 9, "the exact combat sequence: {kinds:?}");
+        // return after the kill), then the #26 reward loop: the fang drop line
+        // and the XP-bearing victory summary.
+        assert_eq!(kinds.len(), 10, "the exact combat sequence: {kinds:?}");
         assert!(
             matches!(&kinds[0], GameEventKind::CombatStarted { enemy_id, .. } if enemy_id == "ashen_stray")
         );
         assert!(matches!(kinds[3], GameEventKind::CombatPulse { round: 2 }));
         assert!(matches!(kinds[6], GameEventKind::CombatPulse { round: 3 }));
+        assert!(
+            matches!(
+                &kinds[8],
+                GameEventKind::LogMessage { component: OutputComponent::CombatMessage, text }
+                    if text == "The Ashen Stray drops Cracked Fang."
+            ),
+            "the drop narrates before the summary: {kinds:?}"
+        );
         assert!(matches!(
-            &kinds[8],
+            &kinds[9],
             GameEventKind::CombatEnded {
                 outcome: CombatOutcome::Victory,
-                ..
-            }
+                text,
+            } if text == "You have defeated Ashen Stray. Victory! You gain 5 XP."
         ));
 
-        let state = state_snapshot(State(app)).await;
+        let state = state_snapshot(State(app.clone())).await;
         assert!(state.0.combat.is_none(), "combat cleared after the victory");
         assert_eq!(state.0.player.hp, 14, "two enemy returns landed (20 → 14)");
+        assert_eq!(state.0.player.xp, 5, "the authored reward landed");
+
+        // X14 (ticket #26): the played reward loop closes — the dropped fang
+        // is takeable through the existing flow and lands in the pack.
+        let take = command(State(app), req("take fang")).await;
+        assert!(take.0.accepted, "the dropped fang is takeable");
+        assert!(
+            take.0
+                .snapshot
+                .pack
+                .iter()
+                .any(|item| item.name == "Cracked Fang"),
+            "the fang lands in the pack"
+        );
     }
 
     // S2 (REQ-003/004): a flee submitted between pulses queues, and the next

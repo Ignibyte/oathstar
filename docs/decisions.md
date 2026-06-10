@@ -2132,3 +2132,59 @@ Revisit when:
   server-driven availability, not always-on buttons).
 - An "armed guard" indicator is wanted client-side (the charge is currently
   invisible once the queue clears — noted at #25 inspect).
+
+## Decision 044: Combat Rewards And Defeat Consequences Flow Through The End-Combat Funnel
+
+Status: Locked
+
+Date: 2026-06-09
+
+Ticket #26 closes the grind loop on the #22/#24/#25 combat foundation:
+winning grants, losing costs, and both resolve deterministically in
+`end_combat` — the single funnel every victory path (Phase-1 round, manual
+round, Phase-2 power strike) and every defeat already passes through, which
+makes "exactly once" structural rather than policed.
+
+- **Victory** awards the defeated hostile's authored `CombatProfile.xp`
+  (`#[serde(default)]` ⇒ 0; a missing reward is zero, never invented —
+  REQ-002) with a saturating add, and drops the hostile's authored entity
+  `inventory` into the room the fight ended in: ids append to the room's
+  item placements in authored order, one feed line per item, and the
+  inventory clears via `mem::take` — the clear IS the no-duplicate
+  guarantee. No corpse entities; the placement removal stays #22's. A fled
+  enemy keeps its spoils for the eventual win. The zero-XP victory summary
+  is byte-identical to the pre-#26 line; a rewarded one appends
+  "You gain {xp} XP."
+- **Defeat** restores HP to max, applies the deterministic penalty
+  `max(1, floor(xp / 10))` only when the player has XP (saturating; never
+  below zero; no penalty clause at zero), relocates the player to
+  `world.start_room_id`, and narrates the wake-up with the movement
+  pattern's `RoomEntered` + room description — no new event kinds, and the
+  client's existing `combat_ended`/`room_entered` refreshes keep the modal,
+  map, and HUD coherent. This deliberately replaces the #22
+  revive-in-place semantics; the two pinned tests were rewritten with the
+  change. Defeat can only happen in the encounter room (movement
+  disengages as fled — Decision 042), so the reset has no mid-walk edge.
+- **The wire is untouched**: `PlayerSnapshot.xp` already existed;
+  reward/penalty/drop narration rides `CombatMessage`/`CombatEnded`.
+  `Entity.inventory` already existed (with `EntityItemMissing` validation);
+  the only new schema is `CombatProfile.xp`.
+
+Rationale:
+
+- One funnel, one award point: no path can double-pay or skip the
+  consequence, and future reward sources (boss scripting, alternate
+  resolutions) have one place to land.
+- Byte-preserving the unrewarded paths kept every existing exact-string
+  test green and made REQ-002 a structural property instead of a promise.
+
+Revisit when:
+
+- Levels/currency/loot tables arrive (the award point is ready; the
+  penalty formula is one expression to retune).
+- Save/load lands (drops, placements, and XP mutate the in-memory world —
+  the #22-noted persistence gap now covers spoils too).
+- The duplicate-item-placement interaction is addressed (a #26-noted
+  pre-existing edge: `take` removes all same-id placements in a room;
+  drops are the first mechanism that could legally create such duplicates
+  from authored content).
