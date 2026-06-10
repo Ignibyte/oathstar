@@ -1527,7 +1527,9 @@ Rationale:
 
 Revisit when:
 
-- Full combat replaces the boss placeholder (Decision 007 / 023).
+- ~~Full combat replaces the boss placeholder (Decision 007 / 023).~~
+  Closed at ticket #29 (Decision 047): `confront` starts the real
+  pulse-loop encounter and fulfillment rides objective recovery.
 - A break path requires `OathStatus::Broken`.
 - A second oath or boss per room needs explicit targeting.
 
@@ -2214,7 +2216,9 @@ channel, with delivery decided by the engine at emission.
   decisions), not the decision function.
 - **Mechanism is engine, content is authored.** `AuthoredAnnouncement
   { scope, severity, text }` lives on content carriers — v1:
-  `OathDefinition.fulfillment_announcements`, emitted by `confront` after
+  `OathDefinition.fulfillment_announcements`, emitted on fulfillment
+  (by `confront` at #27; by objective recovery since ticket #29 /
+  Decision 047) after
   `OathFulfilled` — never hardcoded module fiction in engine code (the
   `CombatProfile.xp` pattern). Authored scope ids are validated at
   construction (`AnnouncementScopeMissing`), fail-fast like the entity/item
@@ -2317,3 +2321,66 @@ Revisit when:
   #27 announcement machinery is the candidate).
 - The Tauri shell picks its app-data save root (`OATHSTAR_SAVE_DIR` is the
   seam).
+
+## Decision 047: The Boss Encounter Is Real — Oath-Gated Combat Entry, Fulfillment On Recovery
+
+Status: Locked
+
+Date: 2026-06-10
+
+What was decided (ticket #29):
+
+- **`confront` is a combat entry, not a resolution.** With the oath sworn
+  and a boss placed in the room, `confront` starts the SAME pulse-loop
+  encounter ambient hostiles use, through the shared `engage_enemy` entry
+  (which both `attack`'s hostile resolution and the boss path feed with a
+  `ResolvedHostile`). Mid-fight, `confront` presses the attack exactly like
+  `attack` — re-entry can never rebuild (and so never reset) the encounter.
+- **Two gates, two meanings.** `combat_enabled` + the `hostile` role gate
+  ambient `attack`; the SWORN OATH gates the boss. The boss is deliberately
+  not `hostile` (so `attack <boss>` refuses and no path skirts the oath),
+  and `confront` bypasses the room's `combat_enabled` flag — the authored
+  encounter carries its own gate. The `boss` role contract now requires a
+  combat profile (validated like `hostile`'s), so the entry can never meet
+  a stat-less boss.
+- **Victory does not fulfill; recovery fulfills.** The boss falls through
+  the #26 `end_combat` funnel — placement removed, authored inventory
+  dropped, authored xp awarded (Bell-Eater: 12 hp / attack 4 / 25 xp) —
+  and the oath STAYS sworn. Fulfillment fires when the player TAKES the
+  oath's authored objective (`OathDefinition.objective_item_id`, a new
+  optional field validated by `WorldValidationError::OathObjectiveMissing`)
+  while sworn: `OathFulfilled` + the #27 announcements ride the take, in
+  pickup → fulfilled → announcements order. The hollow-bell oath names
+  `bell_clapper`; its text ("recover the bell's stolen clapper") is now
+  mechanically honest. An oath with no objective is valid but nothing
+  fulfills it; the clapper's `flags = ["oath"]` stays display-only.
+- **Defeat is the #26 path, and retrying is the loop.** Reset to start at
+  full HP with the xp penalty; the boss, its inventory, and the sworn oath
+  all survive — re-climb, re-confront, fight a FRESH full-hp boss. Fleeing
+  keeps the #24 semantics (encounter cleared, enemy intact).
+- **No log twin for the fulfillment beat.** Both renderers already print
+  "Your oath is fulfilled." for the typed `OathFulfilled`, so the engine
+  emits ONLY the typed event — the standing rule: before pairing a human
+  log line with a typed event, check the renderer arms; where the typed
+  render IS prose, the typed event is the human line
+  (FAIL-claude-generic-log-twin-duplicates-typed-render-001).
+- **`SAVE_FORMAT_VERSION` bumped to 2.** A version-1 save embeds a world
+  without `objective_item_id`, which would leave a sworn oath silently
+  unfulfillable under the new engine — Decision 046's posture is loud
+  refusal, so old saves are refused, not stranded.
+- **Drop lines are article-aware.** `drop_enemy_inventory` no longer
+  prefixes "The " onto an authored name that already carries one ("The
+  Bell-Eater drops Bell Clapper.", still "The Ashen Stray drops Cracked
+  Fang.").
+
+Revisit when:
+
+- Boss phases, special moves, or per-boss pulse tuning land (Decision 042's
+  `pulse_rate` is the seam).
+- Alternate resolutions (persuade / spare / bind — Decision 007) arrive;
+  the oath gate and the objective link are the hooks.
+- A second objective KIND (kill-the-boss, speak-to, deliver) is needed —
+  `objective_item_id` becomes an enum then, not before.
+- Multiple bosses or oaths per room need explicit `confront <target>`.
+- Swearing while already holding the objective should fulfill (today only
+  a TAKE triggers; unreachable in authored content, ledgered at #29).

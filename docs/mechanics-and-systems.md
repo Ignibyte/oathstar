@@ -383,13 +383,15 @@ Combat is locked as a core system in [Decision 007](./decisions.md#decision-007-
 
 Combat should be robust, fast, and useful for grinding in the right regions. It should not mean every actor in the world can be killed.
 
-Current prototype:
+Shipped (the prototype loop, realized in the engine across #22–#29):
 
-- Attack enemy
-- Enemy retaliates
-- Health changes
-- Defeat drops key item
-- Player cannot permanently die
+- Attack enemy; enemy retaliates; health changes (real-time pulse loop,
+  direct battle verbs)
+- Victory awards authored XP and **drops the key item** — the Bell-Eater
+  drops the clapper, and recovering it fulfills the oath (ticket #29,
+  [Decision 047](./decisions.md#decision-047-the-boss-encounter-is-real--oath-gated-combat-entry-fulfillment-on-recovery))
+- Player cannot permanently die: defeat resets to the start room with an
+  XP penalty, and the boss waits intact for the retry
 
 Possible improvements:
 

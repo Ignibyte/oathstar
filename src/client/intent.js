@@ -24,7 +24,7 @@ function contextualCommands(snapshot) {
   if (!oath) {
     commands.push({ id: "ctx-swear", label: "swear", command: "swear", hint: "An oath is available." });
   } else if (oath.status === "sworn") {
-    commands.push({ id: "ctx-confront", label: "confront", command: "confront", hint: "Fulfill your sworn oath." });
+    commands.push({ id: "ctx-confront", label: "confront", command: "confront", hint: "Face your oath's foe." });
   }
   return commands;
 }

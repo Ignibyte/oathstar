@@ -109,7 +109,7 @@ v1 vocabulary and contracts — the minimum each role needs *where applicable* t
 | `oath_giver` | must be an `Actor` **and** be named as some oath's `issuer_id` |
 | `shopkeeper` | must be an `Actor` (shop stock/economy deferred) |
 | `combatant` | must be an `Actor`; the optional `combat = { health, attack, disclose_stats, xp }` is the combat profile (read by combat v1, ticket #22; `xp` is the #26 victory reward, default 0) |
-| `boss` | must be an `Actor` (a `confront` endpoint) |
+| `boss` | must be an `Actor` **and** carry a `combat` profile (ticket #29) — `confront` starts a real encounter against it when the oath is sworn |
 | `hostile` (ticket #22) | must be an `Actor` **and** carry a `combat` profile so it can be fought; `attack` engages a hostile in a `combat_enabled` room |
 | `fixture` | the `EntityKind::Fixture` classification — carries no interaction role |
 

@@ -474,20 +474,11 @@ mod tests {
         );
     }
 
-    // REQ-002/007 (smoke): the whole slice runs through the /command path on the
-    // real beginner world: look → talk mara (offer, ticket #19) → swear → route →
-    // confront, with the typed oath events and final state.
-    #[tokio::test]
-    async fn beginner_slice_runs_through_command_path() {
-        let app = test_app_state();
-
-        let req = |input: &str| {
-            Json(CommandRequest {
-                input: input.to_string(),
-                actor_id: None,
-            })
-        };
-
+    /// The shared journey of the beginner slice (SV-B at ticket #29): look →
+    /// talk mara (the offer) → swear → the authored route to the roost →
+    /// confront (the REAL pulse-loop fight) → victory. Returns the fight's
+    /// Combat-channel kinds so each caller pins its own act.
+    async fn play_to_boss_victory(app: &AppState) -> Vec<GameEventKind> {
         let look = command(State(app.clone()), req("look")).await;
         assert!(look.0.accepted, "look accepted");
         assert_eq!(look.0.snapshot.current_room_id, "hollowmere_square");
@@ -530,33 +521,95 @@ mod tests {
             "the authored route reaches the boss room"
         );
 
+        // Ticket #29: confront STARTS the real boss fight — the pulse loop
+        // drives it to victory (12 hp vs strike 4 = three rounds; two
+        // 4-damage returns land).
+        let mut rx = app.events.subscribe();
         let confront = command(State(app.clone()), req("confront")).await;
-        assert!(confront.0.accepted, "confront accepted");
+        assert!(confront.0.accepted, "confront engages the Bell-Eater");
         assert!(
-            confront
+            confront.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatStarted { enemy_id, .. } if enemy_id == "bell_eater"
+            )),
+            "confront starts the boss encounter"
+        );
+        assert!(
+            !confront
                 .0
                 .events
                 .iter()
                 .any(|e| matches!(&e.kind, GameEventKind::OathFulfilled { .. })),
-            "confront emits OathFulfilled"
+            "the confrontation alone fulfills nothing"
+        );
+        spawn_tick_loop(app.clone());
+        drain_combat_until_ended(&mut rx).await
+    }
+
+    // REQ-002/007 + ticket #29 act 1: the slice fights the boss to victory
+    // through the real pulse loop — authored reward, article-correct drop
+    // line, and the oath provably STILL Sworn after the fight.
+    #[tokio::test(start_paused = true)]
+    async fn beginner_slice_fights_the_boss_to_victory() {
+        let app = test_app_state();
+        let kinds = play_to_boss_victory(&app).await;
+        assert!(
+            matches!(
+                kinds.last(),
+                Some(GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    text,
+                }) if text == "You have defeated The Bell-Eater. Victory! You gain 25 XP."
+            ),
+            "the pulse loop fells the boss with the authored reward: {kinds:?}"
+        );
+        assert!(
+            kinds.iter().any(|kind| matches!(
+                kind,
+                GameEventKind::LogMessage {
+                    component: OutputComponent::CombatMessage,
+                    text,
+                } if text == "The Bell-Eater drops Bell Clapper."
+            )),
+            "the clapper falls with the authored article intact: {kinds:?}"
+        );
+        let after_fight = state_snapshot(State(app.clone())).await;
+        assert_eq!(after_fight.0.player.xp, 25, "the boss reward landed");
+        assert_eq!(
+            after_fight.0.player.hp, 12,
+            "two boss returns landed (20 → 12)"
         );
         assert_eq!(
-            confront
-                .0
-                .snapshot
-                .oath
-                .as_ref()
-                .expect("oath present")
-                .status,
+            after_fight.0.oath.as_ref().expect("oath present").status,
+            OathStatus::Sworn,
+            "victory alone does not fulfill — recovery does"
+        );
+    }
+
+    // Ticket #29 act 2: recovering the clapper fulfills the oath and rings
+    // the bell (ticket #27) — the world-scoped alarm delivered at the roost
+    // with its exact authored text, the hollowmere-region notice provably
+    // NOT delivered in old_bell_tower (the in-play both-arms demo, now on
+    // the take) — then Mara speaks her fulfilled line back in the square.
+    #[tokio::test(start_paused = true)]
+    async fn beginner_recovery_fulfills_and_rings_the_bell() {
+        let app = test_app_state();
+        let _ = play_to_boss_victory(&app).await;
+        let take = command(State(app.clone()), req("take clapper")).await;
+        assert!(take.0.accepted, "the dropped clapper is takeable");
+        assert!(
+            take.0
+                .events
+                .iter()
+                .any(|e| matches!(&e.kind, GameEventKind::OathFulfilled { .. })),
+            "recovering the clapper emits OathFulfilled"
+        );
+        assert_eq!(
+            take.0.snapshot.oath.as_ref().expect("oath present").status,
             OathStatus::Fulfilled
         );
-
-        // N11 (ticket #27): the world-scoped bell alarm is delivered at the
-        // roost with its exact authored text, while the hollowmere-region
-        // notice is provably NOT delivered in the old_bell_tower region —
-        // the in-play both-arms scoped-announcement demo.
         assert!(
-            confront.0.events.iter().any(|e| matches!(
+            take.0.events.iter().any(|e| matches!(
                 &e.kind,
                 GameEventKind::Announcement { text, .. }
                     if text == "The bell of Hollowmere rings again. Its voice rolls out over every road and roof."
@@ -564,12 +617,29 @@ mod tests {
             "the world-scoped bell alarm is delivered at the roost"
         );
         assert!(
-            !confront.0.events.iter().any(|e| matches!(
+            !take.0.events.iter().any(|e| matches!(
                 &e.kind,
                 GameEventKind::Announcement { text, .. }
                     if text.contains("Hollowmere's streets")
             )),
             "the hollowmere-region notice is not delivered in old_bell_tower"
+        );
+
+        // The loop closes at the oath-giver: walk back and hear Mara's
+        // fulfilled line (ticket #19's dialogue selection, post-recovery).
+        for step in ["down", "down", "south", "south", "south"] {
+            let moved = command(State(app.clone()), req(step)).await;
+            assert!(moved.0.accepted, "move {step} accepted");
+        }
+        let mara = command(State(app.clone()), req("talk mara")).await;
+        assert!(mara.0.accepted, "mara is reachable from the square");
+        assert!(
+            mara.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. } if text.contains("kept your word")
+            )),
+            "Mara speaks her fulfilled line: {:?}",
+            mara.0.events
         );
     }
 
@@ -1011,14 +1081,14 @@ mod tests {
             &std::fs::read_to_string(&slot_path).expect("the slot file reads"),
         )
         .expect("the slot file parses");
-        on_disk["version"] = serde_json::json!(2);
+        on_disk["version"] = serde_json::json!(99);
         std::fs::write(&slot_path, on_disk.to_string()).expect("rewrite the slot");
 
         let response = load(State(app.clone()), slot_request(None)).await;
         assert!(!response.0.ok, "a future-version save refuses the load");
         assert_eq!(
             response.0.error.as_deref(),
-            Some("save format version 2 is not supported (this build reads version 1)"),
+            Some("save format version 99 is not supported (this build reads version 2)"),
             "the typed LoadError display is forwarded verbatim"
         );
         std::fs::remove_dir_all(app.saves.root()).ok();

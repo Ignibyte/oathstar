@@ -68,7 +68,8 @@ pub enum Command {
     Move(Direction),
     /// `swear` / `vow` — swear the module's offered oath.
     Swear,
-    /// `confront` / `challenge` — resolve the boss at the current room's endpoint.
+    /// `confront` / `challenge` — engage the boss at the current room's
+    /// endpoint (sworn oath required); mid-fight, presses the attack.
     Confront,
     /// `attack` / `strike` / `fight`, optionally with a target (ticket #22). A bare
     /// verb engages the active foe (or the only hostile present); `attack <name>`

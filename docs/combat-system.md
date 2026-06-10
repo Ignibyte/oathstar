@@ -64,6 +64,24 @@ This document captures the current combat direction for Oathstar.
 > `end_combat` funnel. Levels, currency, loot tables, respawn, and richer
 > death penalties remain the long-horizon direction below.
 
+> **The boss encounter is real** (ticket #29) — see `decisions.md`
+> Decision 047. `confront` (sworn oath + boss present) now STARTS the same
+> pulse-loop encounter the ambient hostiles use, through the shared
+> `engage_enemy` entry — one combat model behind two gates. The gates carry
+> distinct semantics: `combat_enabled` + the `hostile` role gate ambient
+> `attack`; the **sworn oath** gates the boss (`confront` bypasses the room
+> flag, the boss is deliberately NOT `hostile`, and `attack <boss>` stays
+> refused — no ungated path around the oath). The `boss` role contract now
+> requires a combat profile (like `hostile`); mid-fight `confront` presses
+> the attack like `attack` does. **Victory does not fulfill** — the boss
+> falls through the #26 funnel (removal, drop, authored xp 25) and the oath
+> stays sworn until the player RECOVERS the oath's authored objective
+> (`OathDefinition.objective_item_id`, validated): taking it while sworn
+> emits `OathFulfilled` + the #27 announcements. Defeat is the #26 path
+> (reset, penalty) with the boss, its inventory, and the sworn oath intact
+> — climb back up and try again. Boss phases, special moves, and alternate
+> resolutions (persuade/spare/bind) remain the direction below.
+
 ## Core Direction
 
 Combat is a core system, not a rare edge case.

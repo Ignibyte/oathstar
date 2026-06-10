@@ -116,12 +116,15 @@ passable = true
 down = "tower_foot"
 up = "bell_eater_roost"
 
+# Ticket #29: the description stays state-neutral — it describes the place,
+# not the occupant, because room text is static and the Bell-Eater is REMOVED
+# once defeated (the Nearby panel shows it while it lives).
 [[rooms]]
 id = "bell_eater_roost"
 title = "Bell-Eater Roost"
 region = "old_bell_tower"
 subregion = "boss"
-description = "The roofless chamber smells of copper and wet feathers. The Bell-Eater crouches beside the stolen clapper."
+description = "The roofless chamber smells of copper and wet feathers. Broken bell-metal is heaped in a nest against the far wall."
 x = 0
 y = -3
 z = 2

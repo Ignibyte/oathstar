@@ -434,8 +434,9 @@ mod tests {
         assert_eq!(world.validate(), Ok(()));
     }
 
-    // T9 (REQ-005): the Bell-Eater loads as combatant + boss with future-combat-ready
-    // stats (by value); the world validates and boss progression is unchanged.
+    // T9 (REQ-005, re-pinned at ticket #29): the Bell-Eater loads as
+    // combatant + boss with the AUTHORED FIGHT stats by value — confront now
+    // starts a real encounter against them — and the world validates.
     #[test]
     fn beginner_bell_eater_is_combatant_boss_with_combat() {
         let world = load_beginner_world().expect("beginner module should load");
@@ -446,13 +447,26 @@ mod tests {
             boss.combat,
             Some(oathstar_core::CombatProfile {
                 health: 12,
-                attack: 0,
+                attack: 4,
                 disclose_stats: false,
-                xp: 0,
+                xp: 25,
             }),
-            "future-combat-ready stats load by value (attack defaults to 0; stats hidden)"
+            "the boss fight stats load by value (ticket #29; stats stay hidden)"
         );
         assert_eq!(world.validate(), Ok(()));
+    }
+
+    // B11 (ticket #29): the beginner oath names the clapper as its authored
+    // recoverable objective — taking it while sworn is what fulfills.
+    #[test]
+    fn beginner_oath_names_the_clapper_objective() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let oath = world.oaths.get("hollow_bell").expect("hollow_bell oath");
+        assert_eq!(
+            oath.objective_item_id.as_deref(),
+            Some("bell_clapper"),
+            "the oath's objective is the stolen clapper"
+        );
     }
 
     // C23 (ticket #22): the Ashen Stray is the beginner combat encounter — an Actor

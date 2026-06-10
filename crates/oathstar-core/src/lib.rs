@@ -125,9 +125,9 @@ pub struct Entity {
     /// `talk` returns these lines, selected by oath state for an oath-giver.
     #[serde(default)]
     pub dialogue: Option<EntityDialogue>,
-    /// Future-combat-ready stats for a `combatant` (ticket #21). Optional and
-    /// authored; no combat system reads it yet (combat AI is out of scope), so the
-    /// `combatant` contract does not require it — it is the forward hook for combat.
+    /// Authored combat stats (ticket #21). Optional for a bare `combatant`;
+    /// REQUIRED by the `hostile` (ticket #22) and `boss` (ticket #29) role
+    /// contracts, whose encounters copy these stats into [`CombatState`].
     #[serde(default)]
     pub combat: Option<CombatProfile>,
 }
@@ -172,7 +172,8 @@ pub enum Role {
     Shopkeeper,
     /// Can fight (tag `"combatant"`); the optional [`CombatProfile`] is the future hook.
     Combatant,
-    /// A `confront` endpoint (tag `"boss"`).
+    /// A `confront` endpoint (tag `"boss"`). Its contract requires a
+    /// [`CombatProfile`] so the encounter can start (ticket #29).
     Boss,
     /// A hostile that `attack` engages to start combat (tag `"hostile"`, ticket
     /// #22). Its contract requires a [`CombatProfile`] so it can be fought.
@@ -274,6 +275,12 @@ pub struct OathDefinition {
     /// and absent from TOML — for oaths that announce nothing.
     #[serde(default)]
     pub fulfillment_announcements: Vec<AuthoredAnnouncement>,
+    /// The item whose recovery fulfills this oath (ticket #29): taking it
+    /// while the oath is sworn flips the oath to fulfilled. `None` for an
+    /// oath with no recoverable objective (valid, but nothing fulfills it).
+    /// Validated at construction to name a real item.
+    #[serde(default)]
+    pub objective_item_id: Option<String>,
 }
 
 /// Where an announcement is heard (ticket #27): the delivery scopes from the
@@ -396,6 +403,9 @@ pub enum WorldValidationError {
         scope_kind: String,
         id: String,
     },
+    /// An oath's `objective_item_id` names an item that is not in the item
+    /// registry (ticket #29).
+    OathObjectiveMissing { oath_id: String, item_id: String },
     /// An entity declares a role whose v1 contract is unmet (ticket #21): names the
     /// entity, the role, and the missing requirement.
     RoleContractUnmet {
@@ -482,6 +492,9 @@ impl std::fmt::Display for WorldValidationError {
                 f,
                 "oath '{oath_id}' announces to missing {scope_kind} '{id}'"
             ),
+            Self::OathObjectiveMissing { oath_id, item_id } => {
+                write!(f, "oath '{oath_id}' names missing objective item '{item_id}'")
+            }
             Self::RoleContractUnmet {
                 entity_id,
                 role,
@@ -666,6 +679,17 @@ impl WorldDefinition {
                     });
                 }
             }
+
+            // Ticket #29: a recoverable objective must name a real item, so
+            // the fulfillment-on-take hook can never dangle.
+            if let Some(item_id) = &oath.objective_item_id {
+                if !self.items.contains_key(item_id) {
+                    return Err(WorldValidationError::OathObjectiveMissing {
+                        oath_id: oath_id.clone(),
+                        item_id: item_id.clone(),
+                    });
+                }
+            }
         }
 
         Ok(())
@@ -706,6 +730,14 @@ impl WorldDefinition {
                         entity_id: entity_id.clone(),
                         role: role.as_str().to_string(),
                         missing: "a combat profile (health) so the hostile can be fought"
+                            .to_string(),
+                    });
+                }
+                if role == Role::Boss && entity.combat.is_none() {
+                    return Err(WorldValidationError::RoleContractUnmet {
+                        entity_id: entity_id.clone(),
+                        role: role.as_str().to_string(),
+                        missing: "a combat profile (health) so the boss can be confronted"
                             .to_string(),
                     });
                 }
@@ -887,8 +919,10 @@ impl CombatAction {
     }
 }
 
-/// A hostile resolved as the target of `attack`, with its authored stats copied
-/// out so [`Engine::start_combat`] can build a self-contained [`CombatState`].
+/// An enemy resolved for a combat entry, with its authored stats copied out
+/// so [`Engine::engage_enemy`] can build a self-contained [`CombatState`].
+/// Built by `attack`'s hostile resolution (ticket #22) and `confront`'s boss
+/// path (ticket #29) — the struct keeps the health/attack pair unswappable.
 struct ResolvedHostile {
     id: String,
     name: String,
@@ -899,8 +933,11 @@ struct ResolvedHostile {
 /// The on-disk save format version (ticket #28).
 ///
 /// [`Engine::from_save`] rejects any other value loudly; there is no migration
-/// tooling in v1, only the version field and the refusal.
-pub const SAVE_FORMAT_VERSION: u32 = 1;
+/// tooling, only the version field and the refusal. Bumped to 2 at ticket #29:
+/// oath fulfillment moved to the authored `objective_item_id`, so a version-1
+/// save's embedded world (which lacks the field) would leave a sworn oath
+/// silently unfulfillable — loud refusal is the honest posture.
+pub const SAVE_FORMAT_VERSION: u32 = 2;
 
 /// A complete saved session (ticket #28): the mutated world, the game state,
 /// and the event counter, under a format version.
@@ -1493,44 +1530,94 @@ impl Engine {
     fn take_at(&mut self, target: &str) -> (bool, Vec<GameEvent>) {
         let origin = self.current_room().clone();
         let radii = RadiusConfig::default();
-        let (accepted, channel, component, text) =
-            match awareness::resolve_target(&self.world, &origin, &radii, target) {
-                None => (
-                    false,
+        match awareness::resolve_target(&self.world, &origin, &radii, target) {
+            None => (
+                false,
+                vec![self.log(
                     EventChannel::Narrative,
                     OutputComponent::NarrativeMessage,
                     format!("You see nothing like '{target}' here to take."),
-                ),
-                Some(found) if found.kind != AwarenessKind::Item => (
-                    false,
+                )],
+            ),
+            Some(found) if found.kind != AwarenessKind::Item => (
+                false,
+                vec![self.log(
                     EventChannel::Narrative,
                     OutputComponent::NarrativeMessage,
                     format!("You cannot carry {}.", found.name),
-                ),
-                Some(found) if !found.proximity.is_interactable() => (
-                    false,
+                )],
+            ),
+            Some(found) if !found.proximity.is_interactable() => (
+                false,
+                vec![self.log(
                     EventChannel::Narrative,
                     OutputComponent::NarrativeMessage,
                     format!("{} is too far away to reach.", found.name),
-                ),
-                Some(found) => {
-                    // Reachable world item: drop it from the exact placing room
-                    // (defensive `get_mut` — `room_id` came from the resolver, so
-                    // the room exists) and carry it. perceive() then excludes it.
-                    if let Some(room) = self.world.rooms.get_mut(&found.room_id) {
-                        room.items.retain(|item_id| item_id != &found.id);
-                    }
-                    let name = found.name.clone();
-                    self.state.pack.push(found.id);
-                    (
-                        true,
-                        EventChannel::Inventory,
-                        OutputComponent::ItemCard,
-                        format!("You take the {name}."),
-                    )
+                )],
+            ),
+            Some(found) => {
+                // Reachable world item: drop it from the exact placing room
+                // (defensive `get_mut` — `room_id` came from the resolver, so
+                // the room exists) and carry it. perceive() then excludes it.
+                if let Some(room) = self.world.rooms.get_mut(&found.room_id) {
+                    room.items.retain(|item_id| item_id != &found.id);
                 }
-            };
-        (accepted, vec![self.log(channel, component, text)])
+                let name = found.name.clone();
+                let item_id = found.id.clone();
+                self.state.pack.push(found.id);
+                let mut events = vec![self.log(
+                    EventChannel::Inventory,
+                    OutputComponent::ItemCard,
+                    format!("You take the {name}."),
+                )];
+                // Ticket #29: recovering the sworn oath's authored objective
+                // fulfills the oath — the pickup line lands first.
+                events.extend(self.fulfill_oath_on_recovery(&item_id));
+                (true, events)
+            }
+        }
+    }
+
+    /// Fulfill the sworn oath when its authored objective is recovered
+    /// (ticket #29): taking the oath's `objective_item_id` while the oath is
+    /// sworn flips it to fulfilled and emits the typed
+    /// [`GameEventKind::OathFulfilled`] followed by the oath's authored
+    /// announcements (ticket #27 — each delivered only where its scope
+    /// matches).
+    ///
+    /// Returns no events when the take is not the sworn objective: no oath
+    /// sworn, an already-fulfilled oath, a different item, or an oath with no
+    /// objective at all.
+    fn fulfill_oath_on_recovery(&mut self, item_id: &str) -> Vec<GameEvent> {
+        let oath_id = match self.state.oath.as_ref() {
+            Some(progress) if progress.status == OathStatus::Sworn => progress.oath_id.clone(),
+            _ => return Vec::new(),
+        };
+        // The sworn oath id always resolves: `swear` only records the
+        // try_new-validated designated oath.
+        let definition = self
+            .world
+            .oaths
+            .get(&oath_id)
+            .expect("sworn oath is a try_new-validated invariant");
+        if definition.objective_item_id.as_deref() != Some(item_id) {
+            return Vec::new();
+        }
+        let announcements = definition.fulfillment_announcements.clone();
+        if let Some(progress) = self.state.oath.as_mut() {
+            progress.status = OathStatus::Fulfilled;
+        }
+
+        // No separate human line here: both renderers already print "Your
+        // oath is fulfilled." for the typed event, so a log twin would show
+        // the climactic beat twice. The pickup line + this + the authored
+        // announcements are the feed narrative.
+        let mut events =
+            vec![self.event(EventChannel::Oath, GameEventKind::OathFulfilled { oath_id })];
+        for announcement in &announcements {
+            events.extend(self.announce(announcement));
+        }
+        events
     }
 
     /// Find a carried item whose name or an alias matches `query` (ticket #20).
@@ -1773,23 +1860,35 @@ impl Engine {
         (true, vec![narrative, sworn])
     }
 
-    /// Resolve the boss at the current room's endpoint.
+    /// Engage the boss at the current room's endpoint (ticket #29).
     ///
-    /// Returns `(accepted, events)`. The boss is the placed entity carrying the
-    /// `"boss"` role. Refused (no state change) when there is no boss here, when
-    /// no oath is active, or when the oath is already fulfilled. On success, emits
-    /// the authored combat outcome plus a typed [`GameEventKind::OathFulfilled`]
-    /// and marks the oath fulfilled. Deterministic — no RNG.
+    /// Returns `(accepted, events)`. The boss is the placed entity carrying
+    /// the `"boss"` role. With the oath sworn and the boss present, confront
+    /// STARTS the real pulse-loop encounter via [`Engine::engage_enemy`] —
+    /// fulfillment now rides recovering the oath's objective
+    /// ([`Engine::fulfill_oath_on_recovery`]), not the confrontation. While a
+    /// fight is already underway, confront presses the attack (resolves the
+    /// next round) exactly like `attack`. Refused (no state change) when
+    /// there is no boss here, when no oath is sworn, or when the oath is
+    /// already kept. Deterministic — no RNG.
     fn confront(&mut self) -> (bool, Vec<GameEvent>) {
+        // Mid-fight, confront presses the attack exactly like `attack` does
+        // (ticket #29): re-entry resolves the next round instead of rebuilding
+        // the encounter, which would reset the enemy's hp.
+        if self.state.combat.is_some() {
+            let mut events = Vec::new();
+            self.resolve_combat_round(&mut events);
+            return (true, events);
+        }
+
         let room = self.current_room().clone();
-        let boss_name = room
+        let boss = room
             .entities
             .iter()
             .filter_map(|entity_id| self.world.entities.get(entity_id))
-            .find(|entity| entity.has_role(Role::Boss))
-            .map(|boss| boss.name.clone());
+            .find(|entity| entity.has_role(Role::Boss));
 
-        let Some(boss_name) = boss_name else {
+        let Some(boss) = boss else {
             return (
                 false,
                 vec![self.log(
@@ -1800,66 +1899,54 @@ impl Engine {
             );
         };
 
-        // Flip the oath to fulfilled only when it is active, holding the mutable
-        // borrow just long enough to copy the id out so the event helpers below
-        // can re-borrow `self`.
-        let resolved_oath_id = match self.state.oath.as_mut() {
-            Some(progress) if progress.status == OathStatus::Sworn => {
-                progress.status = OathStatus::Fulfilled;
-                Some(progress.oath_id.clone())
+        match self.state.oath.as_ref().map(|progress| progress.status) {
+            // The authored encounter (ticket #29): the sworn oath is the
+            // gate, and the fight is the same pulse-loop combat the ambient
+            // hostiles use. Fulfillment now rides recovering the oath's
+            // objective, not the confrontation itself.
+            Some(OathStatus::Sworn) => {
+                let profile = boss.combat.as_ref().expect(
+                    "the boss role contract guarantees a combat profile (validated in try_new)",
+                );
+                let resolved = ResolvedHostile {
+                    id: boss.id.clone(),
+                    name: boss.name.clone(),
+                    health: profile.health,
+                    attack: profile.attack,
+                };
+                (true, self.engage_enemy(resolved))
             }
-            _ => None,
-        };
-
-        if let Some(oath_id) = resolved_oath_id {
-            let outcome = self.log(
-                EventChannel::Combat,
-                OutputComponent::CombatMessage,
-                format!("You overcome {boss_name}, and your oath is fulfilled."),
-            );
-            let fulfilled = self.event(
-                EventChannel::Oath,
-                GameEventKind::OathFulfilled {
-                    oath_id: oath_id.clone(),
-                },
-            );
-            let mut events = vec![outcome, fulfilled];
-            // Ticket #27: the oath's authored announcements ride fulfillment —
-            // each is delivered only when the player's location matches its
-            // scope, so an undelivered announcement emits nothing at all.
-            // The sworn oath id always resolves: `swear` only records the
-            // try_new-validated designated oath (the same invariant `swear`
-            // itself expects on).
-            let announcements = self
-                .world
-                .oaths
-                .get(&oath_id)
-                .expect("sworn oath is a try_new-validated invariant")
-                .fulfillment_announcements
-                .clone();
-            for announcement in &announcements {
-                events.extend(self.announce(announcement));
-            }
-            return (true, events);
-        }
-
-        // Boss present, but the oath is not swearable-to-fulfilled here: either it
-        // was never sworn, or it is already fulfilled (a `Sworn` oath would have
-        // resolved above). Distinguish for the refusal message.
-        let message = match self.state.oath.as_ref().map(|progress| progress.status) {
             Some(OathStatus::Fulfilled) => {
-                format!("{boss_name} is already broken; your oath is kept.")
+                // Reachable only with a LIVING boss (victory removes the
+                // placement), so the line must not claim it is broken.
+                let message = format!(
+                    "Your oath is already kept; there is no cause to confront {}.",
+                    boss.name
+                );
+                (
+                    false,
+                    vec![self.log(
+                        EventChannel::System,
+                        OutputComponent::SystemMessage,
+                        message,
+                    )],
+                )
             }
-            _ => format!("You face {boss_name}, but you have sworn no oath to see this through."),
-        };
-        (
-            false,
-            vec![self.log(
-                EventChannel::System,
-                OutputComponent::SystemMessage,
-                message,
-            )],
-        )
+            None => {
+                let message = format!(
+                    "You face {}, but you have sworn no oath to see this through.",
+                    boss.name
+                );
+                (
+                    false,
+                    vec![self.log(
+                        EventChannel::System,
+                        OutputComponent::SystemMessage,
+                        message,
+                    )],
+                )
+            }
+        }
     }
 
     /// Resolve and perform an `attack`/`strike`/`fight` (ticket #22).
@@ -1946,11 +2033,28 @@ impl Engine {
             }
         };
 
-        let enemy_max_hp = i32::try_from(hostile.health).unwrap_or(i32::MAX);
-        let enemy_attack = i32::try_from(hostile.attack).unwrap_or(i32::MAX);
+        (true, self.engage_enemy(hostile))
+    }
+
+    /// Begin an encounter against a resolved enemy (ticket #29): build the
+    /// self-contained [`CombatState`] from the authored stats, emit
+    /// [`GameEventKind::CombatStarted`], and resolve the opening round.
+    ///
+    /// The shared tail of both combat entries — the ambient hostile path
+    /// (`attack`, ticket #22) and the oath-gated boss path (`confront`,
+    /// ticket #29) — so there is exactly one combat model behind two gates.
+    fn engage_enemy(&mut self, enemy: ResolvedHostile) -> Vec<GameEvent> {
+        let ResolvedHostile {
+            id: enemy_id,
+            name: enemy_name,
+            health,
+            attack,
+        } = enemy;
+        let enemy_max_hp = i32::try_from(health).unwrap_or(i32::MAX);
+        let enemy_attack = i32::try_from(attack).unwrap_or(i32::MAX);
         self.state.combat = Some(CombatState {
-            enemy_id: hostile.id.clone(),
-            enemy_name: hostile.name.clone(),
+            enemy_id: enemy_id.clone(),
+            enemy_name: enemy_name.clone(),
             enemy_hp: enemy_max_hp,
             enemy_max_hp,
             enemy_attack,
@@ -1965,13 +2069,13 @@ impl Engine {
         let mut events = vec![self.event(
             EventChannel::Combat,
             GameEventKind::CombatStarted {
-                enemy_id: hostile.id,
-                enemy_name: hostile.name.clone(),
-                text: format!("{} turns on you. Steel yourself.", hostile.name),
+                enemy_id,
+                enemy_name: enemy_name.clone(),
+                text: format!("{enemy_name} turns on you. Steel yourself."),
             },
         )];
         self.resolve_combat_round(&mut events);
-        (true, events)
+        events
     }
 
     /// Find the hostile `attack` should engage (ticket #22). `attack <name>`
@@ -2221,6 +2325,14 @@ impl Engine {
         if dropped.is_empty() {
             return;
         }
+        // An authored name may carry its own article ("The Bell-Eater"); only
+        // prefix one when it doesn't, so the line never reads "The The …"
+        // (ticket #29 — the boss put this line on the played route).
+        let subject = if enemy_name.starts_with("The ") || enemy_name.starts_with("the ") {
+            enemy_name.to_string()
+        } else {
+            format!("The {enemy_name}")
+        };
         for item_id in &dropped {
             let name = &self
                 .world
@@ -2228,7 +2340,7 @@ impl Engine {
                 .get(item_id)
                 .expect("entity inventory ids resolve in a validated world (EntityItemMissing)")
                 .name;
-            let line = format!("The {enemy_name} drops {name}.");
+            let line = format!("{subject} drops {name}.");
             events.push(self.log(EventChannel::Combat, OutputComponent::CombatMessage, line));
         }
         let room_id = self.state.current_room_id.clone();
@@ -3272,6 +3384,15 @@ mod tests {
 
         let mut warden = entity("warden", EntityKind::Actor, &["boss"], &[]);
         warden.name = "The Warden".to_string();
+        // Ticket #29: the boss role contract requires a combat profile. One
+        // opening strike (4) fells the warden, so confront-based test flows
+        // stay one round long; attack 0 keeps the player untouched.
+        warden.combat = Some(CombatProfile {
+            health: 4,
+            attack: 0,
+            disclose_stats: false,
+            xp: 0,
+        });
         let mut entities = BTreeMap::new();
         entities.insert("warden".to_string(), warden);
         entities.insert(
@@ -3289,6 +3410,7 @@ mod tests {
                 issuer_id: None,
                 source: None,
                 fulfillment_announcements: Vec::new(),
+                objective_item_id: None,
             },
         );
 
@@ -3378,11 +3500,14 @@ mod tests {
         assert!(response.snapshot.oath.is_none(), "no oath recorded");
     }
 
-    // REQ-004: confronting the boss with an active oath resolves it — Combat
-    // outcome naming the boss + typed OathFulfilled, oath becomes Fulfilled.
+    // B1 (REQ-001, ticket #29): confront with the oath sworn + boss present
+    // STARTS the real encounter — CombatStarted for the boss, the authored
+    // stats land in CombatState BY VALUE (the asymmetric 12/4 pair kills
+    // engage-arg-transposition mutants), the opening round resolves, and the
+    // oath STAYS Sworn: fulfillment now rides recovery, not confrontation.
     #[test]
-    fn confront_fulfills_active_oath_and_emits_oath_fulfilled() {
-        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+    fn confront_with_sworn_oath_starts_the_boss_encounter() {
+        let mut engine = Engine::try_new(boss_world(12, 4)).expect("valid boss world");
         assert!(engine.handle_command(cmd("swear")).accepted);
         assert!(
             engine.handle_command(cmd("east")).accepted,
@@ -3390,35 +3515,43 @@ mod tests {
         );
 
         let response = engine.handle_command(cmd("confront"));
-        assert!(
-            response.accepted,
-            "confront is accepted with boss + active oath"
-        );
-
+        assert!(response.accepted, "confront engages with boss + sworn oath");
         assert!(
             response.events.iter().any(|e| matches!(
-                (&e.channel, &e.kind),
-                (
-                    EventChannel::Combat,
-                    GameEventKind::LogMessage {
-                        component: OutputComponent::CombatMessage,
-                        text,
-                    }
-                ) if text.contains("The Warden")
+                &e.kind,
+                GameEventKind::CombatStarted { enemy_id, enemy_name, .. }
+                    if enemy_id == "warden" && enemy_name == "The Warden"
             )),
-            "emits a Combat outcome naming the boss"
+            "confront emits CombatStarted for the boss: {:?}",
+            response.events
         );
         assert!(
-            response.events.iter().any(|e| matches!(
-                (&e.channel, &e.kind),
-                (EventChannel::Oath, GameEventKind::OathFulfilled { oath_id })
-                    if oath_id.as_str() == "o1"
-            )),
-            "emits OathFulfilled{{o1}} on the Oath channel"
+            response.snapshot.combat.is_some(),
+            "the encounter renders in the snapshot"
+        );
+        let combat = engine
+            .state
+            .combat
+            .as_ref()
+            .expect("the encounter is active");
+        assert_eq!(combat.enemy_max_hp, 12, "authored boss health by value");
+        assert_eq!(combat.enemy_attack, 4, "authored boss attack by value");
+        assert_eq!(combat.enemy_hp, 8, "the opening strike landed (12 - 4)");
+        assert_eq!(
+            response.snapshot.player.hp, 16,
+            "the boss's return landed (20 - 4)"
+        );
+        assert!(
+            !response
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, GameEventKind::OathFulfilled { .. })),
+            "a victoryless confrontation fulfills nothing"
         );
         assert_eq!(
             response.snapshot.oath.expect("oath present").status,
-            OathStatus::Fulfilled
+            OathStatus::Sworn,
+            "the oath stays sworn at the start of the fight"
         );
     }
 
@@ -3462,27 +3595,35 @@ mod tests {
         );
     }
 
-    // REQ-004 branch: confronting after the oath is already fulfilled is refused.
+    // REQ-004 branch (premise inverted at #29): with the oath already kept
+    // and the boss still ALIVE — the objective recovered loose, no fight —
+    // confront refuses with the reworded line and starts nothing.
     #[test]
     fn confront_when_oath_already_fulfilled_is_refused() {
-        let mut engine = Engine::try_new(oath_world()).expect("valid oath world");
+        let mut engine = Engine::try_new(loose_objective_world()).expect("valid world");
         assert!(engine.handle_command(cmd("swear")).accepted);
-        assert!(engine.handle_command(cmd("east")).accepted);
         assert!(
-            engine.handle_command(cmd("confront")).accepted,
-            "first confront fulfills the oath"
+            engine.handle_command(cmd("take sigil")).accepted,
+            "the loose objective fulfills without a fight"
         );
+        assert!(engine.handle_command(cmd("east")).accepted);
         let response = engine.handle_command(cmd("confront"));
         assert!(
             !response.accepted,
-            "confronting an already-broken boss is refused"
+            "confronting with the oath already kept is refused"
         );
         assert!(
             response.events.iter().any(|e| matches!(
                 &e.kind,
-                GameEventKind::LogMessage { text, .. } if text.contains("already broken")
+                GameEventKind::LogMessage { text, .. }
+                    if text == "Your oath is already kept; there is no cause to confront The Warden."
             )),
-            "refusal says the boss is already broken"
+            "the refusal is premise-neutral about the living boss: {:?}",
+            response.events
+        );
+        assert!(
+            response.snapshot.combat.is_none(),
+            "no encounter starts against a kept oath"
         );
         assert_eq!(
             response.snapshot.oath.expect("oath present").status,
@@ -4165,10 +4306,19 @@ mod tests {
             "statue".to_string(),
             entity("statue", EntityKind::Actor, &[], &[]),
         );
-        world.entities.insert(
-            "warden".to_string(),
-            entity("warden", EntityKind::Actor, &["boss"], &[]),
-        );
+        let mut dialogue_warden = entity("warden", EntityKind::Actor, &["boss"], &[]);
+        // Ticket #29: the boss role contract requires a combat profile; one
+        // opening strike fells it so dialogue flows stay short, and it
+        // carries the oath's objective for the fulfilled-state line.
+        dialogue_warden.combat = Some(CombatProfile {
+            health: 4,
+            attack: 0,
+            disclose_stats: false,
+            xp: 0,
+        });
+        dialogue_warden.inventory = vec!["relic".to_string()];
+        world.entities.insert("warden".to_string(), dialogue_warden);
+        world.items.insert("relic".to_string(), item("relic"));
 
         let mut oaths = BTreeMap::new();
         oaths.insert(
@@ -4180,6 +4330,7 @@ mod tests {
                 issuer_id: Some("mara".to_string()),
                 source: Some("hollowmere".to_string()),
                 fulfillment_announcements: Vec::new(),
+                objective_item_id: Some("relic".to_string()),
             },
         );
         world.oaths = oaths;
@@ -4318,9 +4469,15 @@ mod tests {
         let mut engine = dialogue_engine();
         assert!(engine.handle_command(cmd("talk mara")).accepted);
         assert!(engine.handle_command(cmd("swear")).accepted);
+        // Ticket #29: confront now FIGHTS the boss (one strike fells the
+        // fixture warden, dropping the relic) and recovery fulfills.
         assert!(
             engine.handle_command(cmd("confront")).accepted,
             "the boss is present and the oath is sworn"
+        );
+        assert!(
+            engine.handle_command(cmd("take relic")).accepted,
+            "the dropped objective is takeable"
         );
         let text = narrative_text(&engine.handle_command(cmd("talk mara")));
         assert!(text.contains("rings again"), "fulfilled-state line: {text}");
@@ -4627,6 +4784,7 @@ mod tests {
                     issuer_id: issuer.map(str::to_owned),
                     source: None,
                     fulfillment_announcements: Vec::new(),
+                    objective_item_id: None,
                 },
             );
         }
@@ -6788,11 +6946,12 @@ mod tests {
         );
     }
 
-    /// `oath_world` with authored fulfillment announcements: one scoped to the
-    /// confrontation room (delivered in play) and one to the start room
-    /// (provably not delivered at the lair).
+    /// `boss_objective_world` with authored fulfillment announcements: one
+    /// scoped to the recovery room (delivered in play) and one to the start
+    /// room (provably not delivered at the lair). Ticket #29: announcements
+    /// now ride the objective's recovery, not the confrontation.
     fn announcing_oath_engine() -> Engine {
-        let mut world = oath_world();
+        let mut world = boss_objective_world(4, 0, 0);
         world
             .oaths
             .get_mut("o1")
@@ -6812,21 +6971,45 @@ mod tests {
         Engine::try_new(world).expect("valid announcing world")
     }
 
-    // N9 (REQ-002/005/006): fulfillment delivers the in-scope announcement —
-    // after OathFulfilled, exact severity/text, on the Region channel — and
-    // emits nothing at all for the out-of-scope one.
+    // N9/B4 (REQ-003, order amended at inspect): recovering the objective
+    // emits pickup → OathFulfilled → the in-scope announcement IN ORDER —
+    // with no OathCard log twin (the typed event is the human line) — and
+    // the out-of-scope announcement emits nothing at all.
     #[test]
     fn fulfillment_delivers_only_in_scope_announcements() {
         let mut engine = announcing_oath_engine();
         engine.handle_command(cmd("swear"));
         engine.handle_command(cmd("east"));
-        let response = engine.handle_command(cmd("confront"));
-        assert!(response.accepted);
+        assert!(
+            engine.handle_command(cmd("confront")).accepted,
+            "the opening strike fells the warden and drops the objective"
+        );
+        let response = engine.handle_command(cmd("take sigil"));
+        assert!(response.accepted, "the dropped objective is takeable");
+        let pickup_at = response
+            .events
+            .iter()
+            .position(|e| {
+                matches!(
+                    &e.kind,
+                    GameEventKind::LogMessage {
+                        component: OutputComponent::ItemCard,
+                        text,
+                    } if text == "You take the sigil."
+                )
+            })
+            .expect("the pickup line lands");
         let fulfilled_at = response
             .events
             .iter()
-            .position(|e| matches!(e.kind, GameEventKind::OathFulfilled { .. }))
-            .expect("the oath fulfills");
+            .position(|e| {
+                matches!(
+                    (&e.channel, &e.kind),
+                    (EventChannel::Oath, GameEventKind::OathFulfilled { oath_id })
+                        if oath_id.as_str() == "o1"
+                )
+            })
+            .expect("the recovery fulfills");
         let announcement_at = response
             .events
             .iter()
@@ -6844,9 +7027,19 @@ mod tests {
             })
             .expect("the in-scope announcement is delivered");
         assert!(
-            announcement_at > fulfilled_at,
-            "announcements follow the fulfillment: {:?}",
+            pickup_at < fulfilled_at && fulfilled_at < announcement_at,
+            "order is pickup → fulfilled → announcement: {:?}",
             response.events
+        );
+        assert!(
+            !response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage {
+                    component: OutputComponent::OathCard,
+                    ..
+                }
+            )),
+            "no OathCard log twin duplicates the typed render"
         );
         assert!(
             !response.events.iter().any(|e| matches!(
@@ -6855,17 +7048,22 @@ mod tests {
             )),
             "the out-of-scope announcement emits nothing at all"
         );
+        assert_eq!(
+            response.snapshot.oath.expect("oath present").status,
+            OathStatus::Fulfilled
+        );
     }
 
     // N8 (REQ-005): identical command sequences produce identical event
-    // streams — announcement delivery is deterministic.
+    // streams — fulfillment + announcement delivery is deterministic.
     #[test]
     fn announcement_delivery_is_deterministic() {
         let run = || {
             let mut engine = announcing_oath_engine();
             engine.handle_command(cmd("swear"));
             engine.handle_command(cmd("east"));
-            format!("{:?}", engine.handle_command(cmd("confront")).events)
+            engine.handle_command(cmd("confront"));
+            format!("{:?}", engine.handle_command(cmd("take sigil")).events)
         };
         assert_eq!(run(), run());
     }
@@ -7087,11 +7285,11 @@ mod tests {
     fn from_save_rejects_a_version_mismatch_by_value() {
         let engine = played_spoils_engine();
         let mut data = engine.save_data();
-        data.version = 2;
+        data.version = SAVE_FORMAT_VERSION + 1;
         assert_eq!(
             Engine::from_save(data.clone()).err(),
             Some(LoadError::VersionMismatch {
-                found: 2,
+                found: SAVE_FORMAT_VERSION + 1,
                 supported: SAVE_FORMAT_VERSION,
             }),
             "an unknown version is refused loudly, naming both sides"
@@ -7206,10 +7404,10 @@ mod tests {
         assert_eq!(
             LoadError::VersionMismatch {
                 found: 9,
-                supported: 1
+                supported: 2
             }
             .to_string(),
-            "save format version 9 is not supported (this build reads version 1)"
+            "save format version 9 is not supported (this build reads version 2)"
         );
         assert_eq!(
             LoadError::InvalidWorld(WorldValidationError::StartRoomMissing {
@@ -7281,5 +7479,438 @@ mod tests {
             "the tick clock saturates at the rail"
         );
         let _ = restored.tick();
+    }
+
+    // ---- ticket #29: the boss fight + fulfillment-on-recovery ----
+
+    /// `oath_world` with the warden's combat profile overridden — the knobs
+    /// for fight length and danger in the confront tests.
+    fn boss_world(health: u32, attack: u32) -> WorldDefinition {
+        let mut world = oath_world();
+        world
+            .entities
+            .get_mut("warden")
+            .expect("warden exists")
+            .combat = Some(CombatProfile {
+            health,
+            attack,
+            disclose_stats: false,
+            xp: 0,
+        });
+        world
+    }
+
+    /// `boss_world` where the warden carries the oath's authored objective —
+    /// the played shape: fight, drop, recover, fulfill.
+    fn boss_objective_world(health: u32, attack: u32, xp: u64) -> WorldDefinition {
+        let mut world = boss_world(health, attack);
+        let warden = world.entities.get_mut("warden").expect("warden exists");
+        warden.combat.as_mut().expect("profile present").xp = xp;
+        warden.inventory = vec!["sigil".to_string()];
+        world.items.insert("sigil".to_string(), item("sigil"));
+        world
+            .oaths
+            .get_mut("o1")
+            .expect("o1 exists")
+            .objective_item_id = Some("sigil".to_string());
+        world
+    }
+
+    /// The objective placed LOOSE in the start room (no fight needed): the
+    /// synthetic shape for the fulfilled-with-a-living-boss arms, plus a
+    /// non-objective `pebble` for the no-fulfill arm.
+    fn loose_objective_world() -> WorldDefinition {
+        let mut world = boss_world(4, 0);
+        world.items.insert("sigil".to_string(), item("sigil"));
+        world.items.insert("pebble".to_string(), item("pebble"));
+        world.rooms.get_mut("town").expect("town exists").items =
+            vec!["sigil".to_string(), "pebble".to_string()];
+        world
+            .oaths
+            .get_mut("o1")
+            .expect("o1 exists")
+            .objective_item_id = Some("sigil".to_string());
+        world
+    }
+
+    // B2 (REQ-001, inspect): confront mid-fight presses the attack — the
+    // next round resolves against the SAME encounter (hp NOT reset to max,
+    // the re-entry guard's killer) and no second CombatStarted is emitted.
+    #[test]
+    fn confront_mid_fight_resolves_a_round_without_resetting() {
+        let mut engine = Engine::try_new(boss_world(12, 1)).expect("valid boss world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(engine.handle_command(cmd("east")).accepted);
+        assert!(engine.handle_command(cmd("confront")).accepted);
+
+        let response = engine.handle_command(cmd("confront"));
+        assert!(response.accepted, "mid-fight confront presses the attack");
+        let combat = engine.state.combat.as_ref().expect("the same encounter");
+        assert_eq!(
+            combat.enemy_hp, 4,
+            "round 2 landed on the same fight (8 - 4), not a rebuilt 8"
+        );
+        assert_eq!(combat.round, 2, "the round counter advanced");
+        assert!(
+            !response
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatStarted { .. })),
+            "no second CombatStarted: {:?}",
+            response.events
+        );
+    }
+
+    // B2b (inspect): the confront entry anchors the pulse exactly
+    // DEFAULT_COMBAT_PULSE_TICKS out — tick 1 is silent, tick 2 pulses
+    // round 2 (the moved engage_enemy pulse-anchor pin via the boss entry).
+    #[test]
+    fn confront_entry_anchors_the_pulse_two_ticks_out() {
+        let mut engine = Engine::try_new(boss_world(12, 1)).expect("valid boss world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(engine.handle_command(cmd("east")).accepted);
+        assert!(engine.handle_command(cmd("confront")).accepted);
+
+        let first = engine.tick();
+        assert!(
+            !first
+                .iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatPulse { .. })),
+            "one tick after confront no pulse is due: {first:?}"
+        );
+        let second = engine.tick();
+        assert!(
+            second
+                .iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatPulse { round: 2 })),
+            "the pulse fires two ticks after the confront entry: {second:?}"
+        );
+    }
+
+    // B3 (REQ-002): the boss falls through the existing victory funnel —
+    // article-aware drop line (no "The The"), authored xp by value, the
+    // placement removed, the objective on the floor — and the oath STAYS
+    // Sworn (the no-fulfill-on-victory pin).
+    #[test]
+    fn boss_victory_drops_objective_and_awards_xp_without_fulfilling() {
+        let mut engine =
+            Engine::try_new(boss_objective_world(4, 0, 25)).expect("valid objective world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(engine.handle_command(cmd("east")).accepted);
+
+        let response = engine.handle_command(cmd("confront"));
+        assert!(response.accepted, "one strike fells the fixture warden");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage {
+                    component: OutputComponent::CombatMessage,
+                    text,
+                } if text == "The Warden drops sigil."
+            )),
+            "the drop line keeps the authored article (no 'The The'): {:?}",
+            response.events
+        );
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded { outcome: CombatOutcome::Victory, text }
+                    if text == "You have defeated The Warden. Victory! You gain 25 XP."
+            )),
+            "{:?}",
+            response.events
+        );
+        assert_eq!(response.snapshot.player.xp, 25, "authored boss xp by value");
+        assert_eq!(
+            response.snapshot.oath.expect("oath present").status,
+            OathStatus::Sworn,
+            "victory does NOT fulfill — recovery does"
+        );
+        assert!(response.snapshot.combat.is_none(), "the encounter is over");
+        let lair = engine.world.rooms.get("lair").expect("lair exists");
+        assert!(
+            lair.items.iter().any(|id| id == "sigil"),
+            "the objective lies on the lair floor"
+        );
+        assert!(
+            !lair.entities.iter().any(|id| id == "warden"),
+            "the boss placement is removed"
+        );
+    }
+
+    // B5a (REQ-003 arm): a NON-objective take while sworn fulfills nothing.
+    #[test]
+    fn taking_a_non_objective_item_does_not_fulfill() {
+        let mut engine = Engine::try_new(loose_objective_world()).expect("valid world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        let response = engine.handle_command(cmd("take pebble"));
+        assert!(response.accepted, "the pebble is takeable");
+        assert!(
+            !response
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, GameEventKind::OathFulfilled { .. })),
+            "a non-objective take emits no oath events"
+        );
+        assert_eq!(
+            response.snapshot.oath.expect("oath present").status,
+            OathStatus::Sworn,
+            "the oath stays sworn"
+        );
+    }
+
+    // B5b (REQ-003 arm): taking the objective with NO oath sworn is a plain
+    // pickup — the Sworn gate's other arm.
+    #[test]
+    fn taking_the_objective_unsworn_is_a_plain_pickup() {
+        let mut engine = Engine::try_new(loose_objective_world()).expect("valid world");
+        let response = engine.handle_command(cmd("take sigil"));
+        assert!(response.accepted, "the loose objective is takeable");
+        assert!(
+            !response
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, GameEventKind::OathFulfilled { .. })),
+            "no oath, no fulfillment"
+        );
+        assert!(response.snapshot.oath.is_none(), "no oath is created");
+    }
+
+    // B5c (REQ-003 arm): once fulfilled, the objective is inert — a
+    // drop-and-retake emits no second OathFulfilled and no announcements.
+    #[test]
+    fn refulfillment_is_inert() {
+        let mut engine = Engine::try_new(loose_objective_world()).expect("valid world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(
+            engine.handle_command(cmd("take sigil")).accepted,
+            "fulfills"
+        );
+        assert!(engine.handle_command(cmd("drop sigil")).accepted);
+        let response = engine.handle_command(cmd("take sigil"));
+        assert!(response.accepted, "the re-take itself succeeds");
+        assert!(
+            !response.events.iter().any(|e| matches!(
+                e.kind,
+                GameEventKind::OathFulfilled { .. } | GameEventKind::Announcement { .. }
+            )),
+            "a kept oath cannot re-fire: {:?}",
+            response.events
+        );
+        assert_eq!(
+            response.snapshot.oath.expect("oath present").status,
+            OathStatus::Fulfilled
+        );
+    }
+
+    // B6b (REQ-004): after victory the boss placement is gone — re-confront
+    // finds nothing to confront (the honest post-victory line).
+    #[test]
+    fn confront_after_victory_finds_nothing() {
+        let mut engine =
+            Engine::try_new(boss_objective_world(4, 0, 0)).expect("valid objective world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(engine.handle_command(cmd("east")).accepted);
+        assert!(engine.handle_command(cmd("confront")).accepted, "victory");
+        let response = engine.handle_command(cmd("confront"));
+        assert!(!response.accepted, "there is no boss left to confront");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. }
+                    if text == "There is nothing here to confront."
+            )),
+            "{:?}",
+            response.events
+        );
+        assert!(response.snapshot.combat.is_none());
+    }
+
+    // B7 (REQ-005): boss defeat runs the existing consequences — reset to
+    // start with HP restored and the penalty applied — while the boss, its
+    // inventory, and the SWORN oath all survive; the retry starts a FRESH
+    // full-hp fight from the authored profile.
+    #[test]
+    fn boss_defeat_resets_player_and_leaves_the_world_intact_for_retry() {
+        let mut engine =
+            Engine::try_new(boss_objective_world(99, 10, 0)).expect("valid objective world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(engine.handle_command(cmd("east")).accepted);
+
+        assert!(
+            engine.handle_command(cmd("confront")).accepted,
+            "round 1: the fight starts (player 10/20)"
+        );
+        let defeat = engine.handle_command(cmd("confront"));
+        assert!(defeat.accepted, "round 2 is pressed");
+        assert!(
+            defeat.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Defeat,
+                    ..
+                }
+            )),
+            "the second 10-damage return fells the player: {:?}",
+            defeat.events
+        );
+        assert_eq!(
+            defeat.snapshot.current_room_id, "town",
+            "defeat relocates to the start room"
+        );
+        assert_eq!(defeat.snapshot.player.hp, 20, "HP restored to max");
+        assert_eq!(
+            defeat.snapshot.player.xp, 0,
+            "the penalty saturates at zero xp"
+        );
+        assert_eq!(
+            defeat.snapshot.oath.expect("oath present").status,
+            OathStatus::Sworn,
+            "defeat does not break the oath"
+        );
+        let lair = engine.world.rooms.get("lair").expect("lair exists");
+        assert!(
+            lair.entities.iter().any(|id| id == "warden"),
+            "the boss placement survives the defeat"
+        );
+        assert_eq!(
+            engine
+                .world
+                .entities
+                .get("warden")
+                .expect("warden exists")
+                .inventory,
+            vec!["sigil".to_string()],
+            "the boss keeps its objective for the retry"
+        );
+
+        assert!(engine.handle_command(cmd("east")).accepted, "re-climb");
+        let retry = engine.handle_command(cmd("confront"));
+        assert!(retry.accepted, "the retry engages a fresh encounter");
+        let combat = engine.state.combat.as_ref().expect("a fresh encounter");
+        assert_eq!(
+            combat.enemy_hp, 95,
+            "the retry fights a FRESH boss from the authored profile (99 - 4), not a stale resume"
+        );
+    }
+
+    // B8 (REQ-007): a mid-boss-fight save round-trips through the #28
+    // surface — byte-identical snapshot, and the restored engine's next
+    // pulses replay the unsaved twin's exactly.
+    #[test]
+    fn mid_boss_fight_save_round_trips() {
+        let mut engine = Engine::try_new(boss_world(12, 1)).expect("valid boss world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        assert!(engine.handle_command(cmd("east")).accepted);
+        assert!(engine.handle_command(cmd("confront")).accepted);
+
+        let at_save = snapshot_value(&engine);
+        let mut restored = Engine::from_save(engine.save_data()).expect("mid-boss save loads");
+        assert_eq!(
+            snapshot_value(&restored),
+            at_save,
+            "the restored mid-fight snapshot is byte-identical"
+        );
+        let twin_events: Vec<GameEvent> = (0..2).flat_map(|_| engine.tick()).collect();
+        let restored_events: Vec<GameEvent> = (0..2).flat_map(|_| restored.tick()).collect();
+        assert_eq!(
+            serde_json::to_value(&restored_events).expect("events serialize"),
+            serde_json::to_value(&twin_events).expect("events serialize"),
+            "the restored boss fight replays the twin's pulses exactly"
+        );
+    }
+
+    // B9a (REQ-008 contract, both arms): a boss without a combat profile
+    // fails construction with the exact missing text; the profiled fixture
+    // passes. The boss-only (non-hostile) warden also kills a
+    // `Role::Boss → Role::Hostile` arm-swap mutant.
+    #[test]
+    fn boss_without_combat_profile_fails_the_contract() {
+        let mut world = oath_world();
+        world
+            .entities
+            .get_mut("warden")
+            .expect("warden exists")
+            .combat = None;
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::RoleContractUnmet {
+                entity_id: "warden".to_string(),
+                role: "boss".to_string(),
+                missing: "a combat profile (health) so the boss can be confronted".to_string(),
+            }),
+            "a profile-less boss is rejected at construction"
+        );
+        assert_eq!(
+            oath_world().validate(),
+            Ok(()),
+            "the profiled boss fixture validates"
+        );
+    }
+
+    // B9b (REQ-008 contract, both arms): an oath objective must name a real
+    // item — dangling rejected by value (+ Display), Some(real) and None
+    // both validate.
+    #[test]
+    fn oath_objective_must_name_a_real_item() {
+        let mut world = oath_world();
+        world
+            .oaths
+            .get_mut("o1")
+            .expect("o1 exists")
+            .objective_item_id = Some("ghost".to_string());
+        assert_eq!(
+            world.validate(),
+            Err(WorldValidationError::OathObjectiveMissing {
+                oath_id: "o1".to_string(),
+                item_id: "ghost".to_string(),
+            }),
+            "a dangling objective is rejected at construction"
+        );
+        assert_eq!(
+            WorldValidationError::OathObjectiveMissing {
+                oath_id: "o1".to_string(),
+                item_id: "ghost".to_string(),
+            }
+            .to_string(),
+            "oath 'o1' names missing objective item 'ghost'"
+        );
+        assert_eq!(
+            boss_objective_world(4, 0, 0).validate(),
+            Ok(()),
+            "a real objective validates"
+        );
+        assert_eq!(
+            oath_world().validate(),
+            Ok(()),
+            "an oath with no objective validates"
+        );
+    }
+
+    // B10 (REQ-001/004): the boss is not ambushable around the oath gate —
+    // `attack <boss>` refuses through the existing non-hostile path even in
+    // a combat-enabled room.
+    #[test]
+    fn attacking_the_boss_directly_is_refused() {
+        let mut world = boss_world(12, 4);
+        world
+            .rooms
+            .get_mut("lair")
+            .expect("lair exists")
+            .combat_enabled = true;
+        let mut engine = Engine::try_new(world).expect("valid boss world");
+        assert!(engine.handle_command(cmd("east")).accepted);
+        let response = engine.handle_command(cmd("attack the warden"));
+        assert!(!response.accepted, "the boss is not hostile-attackable");
+        assert!(
+            response.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. }
+                    if text == "The Warden is not something you can attack."
+            )),
+            "{:?}",
+            response.events
+        );
+        assert!(response.snapshot.combat.is_none(), "no encounter starts");
     }
 }

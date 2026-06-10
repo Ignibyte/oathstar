@@ -91,13 +91,14 @@ The Rust authority-path slice landed in **ticket #7** (`WORK-beginner-vertical-s
   command parser, rooms/regions/entities/items, the **oath lifecycle**
   (swear → active → fulfilled) with typed `OathSworn`/`OathFulfilled` events, an
   authored **town → road → tower** route, a **boss endpoint** (the Bell-Eater,
-  identified by the `"boss"` role) resolved deterministically via `confront`,
+  identified by the `"boss"` role) — scripted via `confront` in this slice,
+  made a real pulse-loop fight at ticket #29 —
   `Engine::begin()` for the opening room scene, and the whole loop exercised over
   the server `/command`→`/events` path. See `docs/decisions.md` Decision 031.
 - **Deferred (placeholders or out of scope):** full combat (HP/pulses), skill
   progression, region standing, save/load of oath state, and the **Tauri/JS UI**
-  that renders the slice — these are follow-up tickets. The boss is a scripted
-  placeholder, not a combat encounter.
+  that renders the slice — these are follow-up tickets. (All since landed: combat #22/#24–#26,
+  save/load #28, the real boss fight #29; the UI shell #13+.)
 - **Known startup gap:** `Engine::begin()` produces the opening room scene and is
   tested, but the server does **not** yet call it — it neither broadcasts the
   opening scene on a new `/events` subscription nor exposes a `begin` endpoint, so
