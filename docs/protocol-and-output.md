@@ -46,7 +46,8 @@ refresh trigger that keeps the battle modal live without a command (state still
 travels via `/state`, the Decision 034 carve-out). `CombatOutcome` gains
 `fled`, and `CombatSnapshot` gains the additive camelCase `queuedAction`
 (omitted when nothing is queued) surfacing the player's queued between-pulse
-action (`"flee"` in v2).
+action — `"flee"` (#24), `"guard"` and `"power_strike"` (#25); the field is an
+open string, so future verbs ride it without protocol changes.
 
 ## Representations
 

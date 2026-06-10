@@ -2078,3 +2078,57 @@ Revisit when:
 - Per-actor/region cadence or boss scripted timings are tuned
   (`pulse_rate` is already per-encounter; wire it from `CombatProfile`).
 - `paused_sequence` (DM/boss time sequences) needs the loop to suspend.
+
+## Decision 043: Battle Actions Are Direct Verbs
+
+Status: Locked
+
+Date: 2026-06-09
+
+Owner product decision, realized by ticket #25: during battle the player types
+the action they intend — `guard`, `power strike` — and the engine decides
+whether it is valid in the current combat phase. **`skill <name>` is not, and
+must not become, the player-facing battle command path.** Prefer one or two
+verbs done correctly over a large list.
+
+The v1 verb set and semantics (built on Decision 042's Phase-2 window):
+
+- Verbs are additive `CombatAction` variants resolved by the queued-action
+  window; the pulse model is untouched. `guard` is a bare strict-arity verb;
+  `power strike` is a two-token verb parsed like `pick up` (partial, fused,
+  and trailing forms stay unknown — the grammar is precise, aliases come
+  later if wanted).
+- **`guard`** arms a one-shot `guard_charge` at the window that turns the
+  next enemy return strike — from a pulse Phase 1 or a manual-attack round —
+  aside entirely (full prevent; a fixed-reduction tune is a later two-line
+  change). The charge lives on `CombatState`, so it dies with every
+  encounter end and cannot leak across fights.
+- **`power strike`** deals a fixed `POWER_STRIKE_DAMAGE = 6` in the window;
+  landing on exactly zero ends the fight in Victory from Phase 2 (the enemy
+  never acts inside the window, so a window defeat is impossible).
+- **Second-queue rule (uniform, deterministic):** re-queueing the SAME action
+  is a no-op with its own "already" line; queueing a DIFFERENT action —
+  including over or under `flee` — replaces the queued one with
+  "You change tack. " + the new confirmation. Changing your mind between
+  pulses is the intended feel; every line also lands on the battle log.
+- Outside combat every battle verb refuses cleanly ("There is nothing to
+  guard against." / "…to strike at.") with zero state mutation.
+- The wire is unchanged: the existing `queuedAction` string carries
+  `"guard"`/`"power_strike"`; no new event kinds (queue/resolve/block lines
+  ride `CombatMessage`); the modal's verb buttons send the exact typed verbs.
+
+Rationale:
+
+- Direct verbs preserve the MUD feel and keep the parser readable; the
+  engine, not the client, owns validity.
+- One shared queue mechanism (refusal/already/replace/confirm) keeps the
+  action matrix learnable and gives every future verb its semantics for free.
+
+Revisit when:
+
+- A third strike-like verb lands (factor the shared player-blow shape; the
+  take-vs-peek consume is now observable and pinned).
+- Availability/cooldowns/focus costs arrive (the modal then needs
+  server-driven availability, not always-on buttons).
+- An "armed guard" indicator is wanted client-side (the charge is currently
+  invisible once the queue clears — noted at #25 inspect).

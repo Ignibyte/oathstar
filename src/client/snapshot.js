@@ -223,6 +223,8 @@ export function toMenuModel(snapshot) {
  */
 const QUEUED_ACTION_LABELS = {
   flee: "Looking for an opening to flee…",
+  guard: "Guarding against the next blow…",
+  power_strike: "Winding up a power strike…",
 };
 
 export function toBattle(snapshot) {

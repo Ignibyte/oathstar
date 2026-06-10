@@ -59,6 +59,8 @@ const el = {
   battleParticipants: document.querySelector("#battle-participants"),
   battleStatus: document.querySelector("#battle-status"),
   battleAttackButton: document.querySelector("#battle-attack-button"),
+  battlePowerStrikeButton: document.querySelector("#battle-power-strike-button"),
+  battleGuardButton: document.querySelector("#battle-guard-button"),
   battleFleeButton: document.querySelector("#battle-flee-button"),
   entityModal: document.querySelector("#entity-modal"),
   entityModalTitle: document.querySelector("#entity-modal-title"),
@@ -160,6 +162,10 @@ function bindEvents() {
   // The Flee button queues the between-pulse flee action (ticket #24); the next
   // combat pulse's skill window resolves it into a fled outcome.
   el.battleFleeButton.addEventListener("click", () => runCommand("flee"));
+  // Direct battle verbs (ticket #25): the buttons send the exact verbs the
+  // parser accepts; the next pulse's skill window resolves them.
+  el.battlePowerStrikeButton.addEventListener("click", () => runCommand("power strike"));
+  el.battleGuardButton.addEventListener("click", () => runCommand("guard"));
 
   // Clicking the entity-detail dialog backdrop closes it (ticket #23). The detail
   // dialog is a pure overlay — opening or closing it changes no game state.

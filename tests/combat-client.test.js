@@ -162,3 +162,15 @@ test("parseEvent passes combat_pulse through with type intact", () => {
   assert.equal(parsed.channel, "combat");
   assert.equal(parsed.id, 12);
 });
+
+// VJ1/VJ2 (ticket #25, REQ-006): the direct battle verbs map to their exact
+// queued-status labels; raw values pass through untouched.
+test("toBattle labels the direct battle verbs", () => {
+  const guarding = toBattle(combatSnapshot({ queuedAction: "guard" }));
+  assert.equal(guarding.queuedAction, "guard");
+  assert.equal(guarding.queuedActionLabel, "Guarding against the next blow…");
+
+  const winding = toBattle(combatSnapshot({ queuedAction: "power_strike" }));
+  assert.equal(winding.queuedAction, "power_strike");
+  assert.equal(winding.queuedActionLabel, "Winding up a power strike…");
+});

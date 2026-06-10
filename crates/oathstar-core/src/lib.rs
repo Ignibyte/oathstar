@@ -681,6 +681,10 @@ const PLAYER_STRIKE_DAMAGE: i32 = 4;
 /// v2 ships the single default.
 const DEFAULT_COMBAT_PULSE_TICKS: u64 = 2;
 
+/// Damage a queued power strike deals in the Phase-2 skill window (ticket
+/// #25). Heavier than the baseline strike, and just as fixed/deterministic.
+const POWER_STRIKE_DAMAGE: i32 = 6;
+
 /// An in-progress combat encounter (ticket #22), held on [`GameState::combat`].
 ///
 /// Server-authoritative and deterministic. Enemy stats are copied from the
@@ -719,12 +723,19 @@ pub struct CombatState {
     /// and a defaulted `pulse_rate` of 0 would mean "pulse every tick" — a
     /// wrong-by-default worse than rejecting a payload shape that never exists.
     pub queued_action: Option<CombatAction>,
+    /// A one-shot guard charge (ticket #25): set when a queued guard resolves
+    /// in the Phase-2 window, consumed by the next enemy return strike from
+    /// any source (pulse Phase 1 or a manual round), which it turns aside
+    /// entirely. Plain like its siblings above — never persisted, and it dies
+    /// with the encounter state on every combat end.
+    pub guard_charge: bool,
 }
 
 /// A player action queued between combat pulses (ticket #24).
 ///
-/// Resolved in the pulse's Phase 2 (the skill window). `Flee` is the sole v2
-/// action; authored skills become further variants when the skills/classes
+/// Resolved in the pulse's Phase 2 (the skill window). Ticket #25 adds the
+/// first direct battle verbs (`guard`, `power strike`) alongside `flee`;
+/// richer authored skills become further variants when the skills/classes
 /// system lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CombatAction {
@@ -732,6 +743,14 @@ pub enum CombatAction {
     /// fled outcome — the enemy survives in place and the player keeps their
     /// current HP.
     Flee,
+    /// Brace against the enemy (ticket #25): the resolving pulse arms a
+    /// one-shot [`CombatState::guard_charge`] that turns the next enemy
+    /// return strike — pulse or manual round — aside entirely.
+    Guard,
+    /// A heavier deterministic blow (ticket #25): the resolving pulse strikes
+    /// the enemy for [`POWER_STRIKE_DAMAGE`], ending the fight in victory on
+    /// a kill.
+    PowerStrike,
 }
 
 impl CombatAction {
@@ -740,6 +759,35 @@ impl CombatAction {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Flee => "flee",
+            Self::Guard => "guard",
+            Self::PowerStrike => "power_strike",
+        }
+    }
+
+    /// The refusal line when the verb is used with no battle to use it in.
+    const fn queue_refusal(self) -> &'static str {
+        match self {
+            Self::Flee => "There is nothing to flee from.",
+            Self::Guard => "There is nothing to guard against.",
+            Self::PowerStrike => "There is nothing to strike at.",
+        }
+    }
+
+    /// The confirmation line when the action is queued for the next window.
+    const fn queue_confirmation(self) -> &'static str {
+        match self {
+            Self::Flee => "You watch for an opening to flee.",
+            Self::Guard => "You ready your guard for the next blow.",
+            Self::PowerStrike => "You wind up a power strike.",
+        }
+    }
+
+    /// The no-op line when the same action is queued again (REQ-005).
+    const fn queue_already(self) -> &'static str {
+        match self {
+            Self::Flee => "You are already watching for an opening to flee.",
+            Self::Guard => "You are already set to guard.",
+            Self::PowerStrike => "You are already winding up a power strike.",
         }
     }
 }
@@ -877,17 +925,61 @@ impl Engine {
         }
     }
 
-    /// Phase 2 — the skill window (ticket #24): resolve the queued between-pulse
-    /// action, or skip the phase cleanly when none is queued (REQ-002). Runs
-    /// only while the encounter survived Phase 1 — a fallen side ends the fight
-    /// first, and an unreached queued flee is dropped with the cleared state
-    /// ("you didn't find the opening in time").
+    /// Phase 2 — the skill window (ticket #24/#25): resolve the queued
+    /// between-pulse action, or skip the phase cleanly when none is queued
+    /// (REQ-002/003). Runs only while the encounter survived Phase 1 — a
+    /// fallen side ends the fight first, and an unreached queued action is
+    /// dropped with the cleared state. The queue is consumed (`take`), so an
+    /// action fires exactly once (the AD-claude-combat-pulse-rides-tick-001
+    /// take-vs-peek pin).
     fn resolve_queued_action(&mut self, events: &mut Vec<GameEvent>) {
         let Some(combat) = self.state.combat.as_mut() else {
             return;
         };
-        if combat.queued_action.take() == Some(CombatAction::Flee) {
-            self.end_combat(CombatOutcome::Fled, events);
+        match combat.queued_action.take() {
+            None => {}
+            Some(CombatAction::Flee) => self.end_combat(CombatOutcome::Fled, events),
+            Some(CombatAction::Guard) => self.resolve_guard(events),
+            Some(CombatAction::PowerStrike) => self.resolve_power_strike(events),
+        }
+    }
+
+    /// Phase-2 guard resolution (ticket #25): arm the one-shot charge that
+    /// turns the next enemy return strike aside.
+    fn resolve_guard(&mut self, events: &mut Vec<GameEvent>) {
+        let combat = self
+            .state
+            .combat
+            .as_mut()
+            .expect("resolve_guard is only called with an active encounter");
+        combat.guard_charge = true;
+        let line = "You raise your guard.";
+        combat.log.push(line.to_string());
+        events.push(self.log(EventChannel::Combat, OutputComponent::CombatMessage, line));
+    }
+
+    /// Phase-2 power-strike resolution (ticket #25): a heavier deterministic
+    /// blow; landing on exactly zero ends the fight in victory from the
+    /// window (the enemy never acts inside it, so a window defeat is
+    /// impossible).
+    fn resolve_power_strike(&mut self, events: &mut Vec<GameEvent>) {
+        let (line, enemy_dead) = {
+            let combat = self
+                .state
+                .combat
+                .as_mut()
+                .expect("resolve_power_strike is only called with an active encounter");
+            combat.enemy_hp = combat.enemy_hp.saturating_sub(POWER_STRIKE_DAMAGE).max(0);
+            let line = format!(
+                "Your power strike slams into {} for {POWER_STRIKE_DAMAGE} ({}/{}).",
+                combat.enemy_name, combat.enemy_hp, combat.enemy_max_hp
+            );
+            combat.log.push(line.clone());
+            (line, combat.enemy_hp <= 0)
+        };
+        events.push(self.log(EventChannel::Combat, OutputComponent::CombatMessage, line));
+        if enemy_dead {
+            self.end_combat(CombatOutcome::Victory, events);
         }
     }
 
@@ -926,7 +1018,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, talk, take, drop, inventory.",
+                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory.",
                 ));
             }
             Command::Look { target: None } => {
@@ -956,8 +1048,18 @@ impl Engine {
                 return self.response(accepted, events);
             }
             Command::Flee => {
-                let (accepted, flee_events) = self.flee();
+                let (accepted, flee_events) = self.queue_combat_action(CombatAction::Flee);
                 events.extend(flee_events);
+                return self.response(accepted, events);
+            }
+            Command::Guard => {
+                let (accepted, guard_events) = self.queue_combat_action(CombatAction::Guard);
+                events.extend(guard_events);
+                return self.response(accepted, events);
+            }
+            Command::PowerStrike => {
+                let (accepted, strike_events) = self.queue_combat_action(CombatAction::PowerStrike);
+                events.extend(strike_events);
                 return self.response(accepted, events);
             }
             Command::Talk { target } => {
@@ -1535,30 +1637,36 @@ impl Engine {
         self.start_combat(target)
     }
 
-    /// Queue the flee action for the active encounter, or refuse cleanly when
-    /// there is nothing to flee from (ticket #24, REQ-004). Fleeing is a
-    /// between-pulse command: it queues [`CombatAction::Flee`], and the next
-    /// pulse's Phase 2 skill window ends the encounter with a fled outcome —
-    /// the queue *is* the pulse boundary, so the cadence is never disturbed.
-    /// Re-queueing is a no-op with its own line.
-    fn flee(&mut self) -> (bool, Vec<GameEvent>) {
+    /// Queue a between-pulse combat action, or refuse cleanly when there is no
+    /// battle to use it in (ticket #24 `flee`; ticket #25 direct battle
+    /// verbs). The queue *is* the pulse boundary: the next pulse's Phase-2
+    /// skill window resolves the action, and the cadence is never disturbed.
+    /// Deterministic second-queue rule (REQ-005): re-queueing the SAME action
+    /// is a no-op with its own line; queueing a DIFFERENT action replaces the
+    /// queued one with a clear "change tack" line.
+    fn queue_combat_action(&mut self, action: CombatAction) -> (bool, Vec<GameEvent>) {
         let Some(combat) = self.state.combat.as_mut() else {
             return (
                 false,
                 vec![self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "There is nothing to flee from.",
+                    action.queue_refusal(),
                 )],
             );
         };
-        let line = if combat.queued_action == Some(CombatAction::Flee) {
-            "You are already watching for an opening to flee."
-        } else {
-            combat.queued_action = Some(CombatAction::Flee);
-            "You watch for an opening to flee."
+        let line = match combat.queued_action {
+            Some(queued) if queued == action => action.queue_already().to_string(),
+            Some(_) => {
+                combat.queued_action = Some(action);
+                format!("You change tack. {}", action.queue_confirmation())
+            }
+            None => {
+                combat.queued_action = Some(action);
+                action.queue_confirmation().to_string()
+            }
         };
-        combat.log.push(line.to_string());
+        combat.log.push(line.clone());
         (
             true,
             vec![self.log(EventChannel::Combat, OutputComponent::CombatMessage, line)],
@@ -1612,6 +1720,7 @@ impl Engine {
             pulse_rate: DEFAULT_COMBAT_PULSE_TICKS,
             next_pulse_at: self.state.tick + DEFAULT_COMBAT_PULSE_TICKS,
             queued_action: None,
+            guard_charge: false,
         });
 
         let mut events = vec![self.event(
@@ -1726,6 +1835,27 @@ impl Engine {
         ));
         if enemy_dead {
             self.end_combat(CombatOutcome::Victory, events);
+            return;
+        }
+
+        // A one-shot guard charge (ticket #25) turns the return aside entirely:
+        // consume it, narrate, and skip the damage — a blocked hit can never
+        // defeat the player. Consumed by the next return from ANY source
+        // (pulse Phase 1 or a manual round).
+        let combat = self
+            .state
+            .combat
+            .as_mut()
+            .expect("combat remains active until a combatant falls");
+        if combat.guard_charge {
+            combat.guard_charge = false;
+            let blocked = format!("{enemy_name} strikes, but your guard turns the blow aside.");
+            combat.log.push(blocked.clone());
+            events.push(self.log(
+                EventChannel::Combat,
+                OutputComponent::CombatMessage,
+                blocked,
+            ));
             return;
         }
 
@@ -5330,6 +5460,476 @@ mod tests {
             t2.iter()
                 .any(|e| matches!(e.kind, GameEventKind::CombatPulse { round: 2 })),
             "the cadence is intact after the refused move: {t2:?}"
+        );
+    }
+
+    // ---- ticket #25: direct battle verbs ----
+
+    /// The single Combat/CombatMessage line of a command response, by value.
+    fn combat_line(response: &CommandResponse) -> String {
+        match &response.events[0].kind {
+            GameEventKind::LogMessage {
+                component: OutputComponent::CombatMessage,
+                text,
+            } => text.clone(),
+            other => panic!("expected a combat line, got {other:?}"),
+        }
+    }
+
+    /// Count `CombatMessage` lines containing `needle` across an event burst.
+    fn count_lines(events: &[GameEvent], needle: &str) -> usize {
+        events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.kind,
+                    GameEventKind::LogMessage { component: OutputComponent::CombatMessage, text }
+                        if text.contains(needle)
+                )
+            })
+            .count()
+    }
+
+    // V1 (REQ-001): `guard` queues with its exact line, surfaces on the wire,
+    // mirrors to the battle log, and never moves the pulse schedule.
+    #[test]
+    fn guard_queues_between_pulses_without_moving_the_schedule() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray")); // tick 0 → next pulse at 2
+        let response = engine.handle_command(cmd("guard"));
+        assert!(response.accepted);
+        assert_eq!(
+            combat_line(&response),
+            "You ready your guard for the next blow."
+        );
+        let combat = active_combat(&response);
+        assert_eq!(combat.queued_action.as_deref(), Some("guard"));
+        assert_eq!(
+            combat.log.last().map(String::as_str),
+            Some("You ready your guard for the next blow.")
+        );
+        assert_eq!(
+            engine.state.combat.as_ref().expect("active").next_pulse_at,
+            2,
+            "queueing a verb never re-anchors the pulse"
+        );
+        let t1 = engine.tick();
+        assert_eq!(t1.len(), 1, "the queued verb waits for the boundary");
+    }
+
+    // V2 (REQ-001): `power strike` queues with its exact line and wire value.
+    #[test]
+    fn power_strike_queues_with_its_wire_value() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        let response = engine.handle_command(cmd("power strike"));
+        assert!(response.accepted);
+        assert_eq!(combat_line(&response), "You wind up a power strike.");
+        assert_eq!(
+            active_combat(&response).queued_action.as_deref(),
+            Some("power_strike")
+        );
+    }
+
+    // V8 (REQ-004): outside combat both verbs refuse with their exact lines and
+    // mutate nothing.
+    #[test]
+    fn battle_verbs_refuse_cleanly_outside_combat() {
+        let mut engine = combat_engine(10, 3);
+        for (input, refusal) in [
+            ("guard", "There is nothing to guard against."),
+            ("power strike", "There is nothing to strike at."),
+        ] {
+            let response = engine.handle_command(cmd(input));
+            assert!(!response.accepted, "{input} refused outside combat");
+            assert!(
+                matches!(
+                    &response.events[0].kind,
+                    GameEventKind::LogMessage { component: OutputComponent::SystemMessage, text }
+                        if text == refusal
+                ),
+                "exact refusal for {input}: {:?}",
+                response.events
+            );
+            assert!(response.snapshot.combat.is_none());
+            assert_eq!(response.snapshot.player.hp, 20, "no state mutation");
+        }
+    }
+
+    // V9 + inspect I1 (REQ-005): same-action re-queue is a no-op with the exact
+    // already-line — the exact string is the only killer for the match-guard
+    // mutants, so assert it for BOTH new actions.
+    #[test]
+    fn same_action_requeue_is_a_noop_with_exact_lines() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.handle_command(cmd("guard"));
+        let again = engine.handle_command(cmd("guard"));
+        assert!(again.accepted);
+        assert_eq!(combat_line(&again), "You are already set to guard.");
+        assert_eq!(
+            active_combat(&again).queued_action.as_deref(),
+            Some("guard")
+        );
+
+        engine.handle_command(cmd("power strike")); // replace, then re-queue same
+        let again = engine.handle_command(cmd("power strike"));
+        assert_eq!(
+            combat_line(&again),
+            "You are already winding up a power strike."
+        );
+        assert_eq!(
+            active_combat(&again).queued_action.as_deref(),
+            Some("power_strike")
+        );
+    }
+
+    // V10 (REQ-005): queueing a different action replaces with the change-tack
+    // line — and crucially the replaced guard never arms its charge.
+    #[test]
+    fn different_action_replaces_with_change_tack() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray")); // round 1: enemy 36, player 19
+        engine.handle_command(cmd("guard"));
+        let switched = engine.handle_command(cmd("power strike"));
+        assert!(switched.accepted);
+        assert_eq!(
+            combat_line(&switched),
+            "You change tack. You wind up a power strike."
+        );
+        assert_eq!(
+            active_combat(&switched).queued_action.as_deref(),
+            Some("power_strike")
+        );
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert_eq!(
+            count_lines(&t2, "You raise your guard."),
+            0,
+            "guard never resolved"
+        );
+        assert_eq!(
+            count_lines(&t2, "power strike slams"),
+            1,
+            "the replacement resolved"
+        );
+        assert!(
+            !engine.state.combat.as_ref().expect("active").guard_charge,
+            "the replaced guard never armed its charge"
+        );
+    }
+
+    // V11 (REQ-005/007): the replace rule is uniform across flee in both
+    // directions; flee's own #24 idempotent re-queue is untouched elsewhere.
+    #[test]
+    fn replace_rule_covers_flee_in_both_directions() {
+        // flee → guard: the encounter does NOT end at the pulse.
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.handle_command(cmd("flee"));
+        let switched = engine.handle_command(cmd("guard"));
+        assert_eq!(
+            combat_line(&switched),
+            "You change tack. You ready your guard for the next blow."
+        );
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert!(
+            !t2.iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatEnded { .. })),
+            "the abandoned flee never resolves: {t2:?}"
+        );
+        assert!(engine.snapshot().combat.is_some());
+
+        // guard → flee: the encounter ends fled at the pulse.
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.handle_command(cmd("guard"));
+        let switched = engine.handle_command(cmd("flee"));
+        assert_eq!(
+            combat_line(&switched),
+            "You change tack. You watch for an opening to flee."
+        );
+        let _ = engine.tick();
+        let t2 = engine.tick();
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Fled,
+                    ..
+                }
+            )),
+            "the replacement flee resolves: {t2:?}"
+        );
+        assert!(
+            !engine.state.combat.as_ref().is_some_and(|c| c.guard_charge),
+            "no charge from the abandoned guard"
+        );
+    }
+
+    // V13 (REQ-001/007): a manual attack round neither consumes nor disturbs
+    // the queued verb — the window belongs to the pulse.
+    #[test]
+    fn manual_attack_leaves_the_queued_verb_alone() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.handle_command(cmd("power strike"));
+        let manual = engine.handle_command(cmd("attack"));
+        assert_eq!(active_combat(&manual).round, 2, "the manual round resolved");
+        assert_eq!(
+            active_combat(&manual).queued_action.as_deref(),
+            Some("power_strike"),
+            "the queue survives manual rounds"
+        );
+    }
+
+    // V3 (REQ-002): the guard cycle — pulse 1's return lands (no charge yet),
+    // Phase 2 arms; pulse 2's return is turned aside with the player's HP
+    // numerically unchanged while the player's own strike still landed.
+    #[test]
+    fn guard_protects_forward_through_the_next_return() {
+        let mut engine = combat_engine(40, 3);
+        engine.handle_command(cmd("attack stray")); // r1: enemy 36, player 17
+        engine.handle_command(cmd("guard"));
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1 r2: enemy 32, player 14; P2 arms the guard
+        assert_eq!(count_lines(&t2, "You raise your guard."), 1);
+        let combat = engine.snapshot().combat.expect("active");
+        assert_eq!(
+            player_of(&combat).hp,
+            14,
+            "pulse-2's return landed before the arm"
+        );
+        assert_eq!(
+            combat.queued_action, None,
+            "the resolved guard cleared the queue"
+        );
+        assert!(engine.state.combat.as_ref().expect("active").guard_charge);
+
+        let _ = engine.tick();
+        let t4 = engine.tick(); // P1 r3: strike lands, return blocked
+        assert_eq!(
+            count_lines(&t4, "your guard turns the blow aside"),
+            1,
+            "the block narrates: {t4:?}"
+        );
+        let combat = engine.snapshot().combat.expect("active");
+        assert_eq!(player_of(&combat).hp, 14, "the blocked return cost nothing");
+        assert_eq!(
+            enemy_of(&combat).hp,
+            40 - 3 * PLAYER_STRIKE_DAMAGE,
+            "the player still struck"
+        );
+        assert!(
+            !engine.state.combat.as_ref().expect("active").guard_charge,
+            "one-shot: consumed"
+        );
+    }
+
+    // V4 (REQ-002/003): single-fire across the whole fight — exactly one arm
+    // line, exactly one block, and the post-guard pulse hits normally again.
+    #[test]
+    fn guard_fires_exactly_once_take_not_peek() {
+        let mut engine = combat_engine(40, 3);
+        engine.handle_command(cmd("attack stray")); // player 17
+        engine.handle_command(cmd("guard"));
+        let mut all_events = Vec::new();
+        for _ in 0..6 {
+            all_events.extend(engine.tick()); // pulses at t2 (arm), t4 (block), t6 (normal)
+        }
+        assert_eq!(
+            count_lines(&all_events, "You raise your guard."),
+            1,
+            "one arm"
+        );
+        assert_eq!(
+            count_lines(&all_events, "your guard turns the blow aside"),
+            1,
+            "one block"
+        );
+        let combat = engine.snapshot().combat.expect("active");
+        assert_eq!(
+            player_of(&combat).hp,
+            17 - 3 - 3,
+            "returns: r2 hit (14), r3 blocked, r4 hit (11)"
+        );
+    }
+
+    // V14 (REQ-002): the armed charge guards a MANUAL round's return too — the
+    // next return from any source consumes it.
+    #[test]
+    fn guard_charge_blocks_a_manual_round_return() {
+        let mut engine = combat_engine(40, 3);
+        engine.handle_command(cmd("attack stray")); // player 17
+        engine.handle_command(cmd("guard"));
+        let _ = engine.tick();
+        let _ = engine.tick(); // r2 (player 14) + arm
+        let manual = engine.handle_command(cmd("attack")); // r3: return blocked
+        assert_eq!(
+            count_lines(&manual.events, "your guard turns the blow aside"),
+            1
+        );
+        assert_eq!(active_combat(&manual).round, 3);
+        assert_eq!(
+            player_of(&active_combat(&manual)).hp,
+            14,
+            "blocked manual return"
+        );
+        let _ = engine.tick();
+        let t4 = engine.tick(); // r4: return hits normally — the charge is gone
+        assert_eq!(count_lines(&t4, "your guard turns the blow aside"), 0);
+        assert_eq!(
+            player_of(&engine.snapshot().combat.expect("active")).hp,
+            11,
+            "post-consumption returns land again"
+        );
+    }
+
+    // V5 (REQ-002): power strike resolves in the window by value and the
+    // encounter continues.
+    #[test]
+    fn power_strike_resolves_in_the_window_by_value() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray")); // r1: enemy 36
+        engine.handle_command(cmd("power strike"));
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1 r2: enemy 32; P2 slam: 26
+        assert_eq!(
+            count_lines(&t2, "Your power strike slams into Stray for 6 (26/40)."),
+            1,
+            "exact slam line: {t2:?}"
+        );
+        let combat = engine.snapshot().combat.expect("the fight continues");
+        assert_eq!(enemy_of(&combat).hp, 26);
+        assert_eq!(
+            combat.queued_action, None,
+            "the resolved strike cleared the queue"
+        );
+        assert!(
+            !t2.iter()
+                .any(|e| matches!(e.kind, GameEventKind::CombatEnded { .. })),
+            "non-lethal window strike does not end the fight"
+        );
+    }
+
+    // V6 (REQ-002/007): a window kill at exactly zero ends in Victory from
+    // Phase 2 — enemy removed, pulses stop.
+    #[test]
+    fn power_strike_victory_at_exact_zero_from_the_window() {
+        let mut engine = combat_engine(14, 1);
+        engine.handle_command(cmd("attack stray")); // r1: enemy 10
+        engine.handle_command(cmd("power strike"));
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1 r2: enemy 6; P2 slam: exactly 0
+        assert_eq!(
+            count_lines(&t2, "for 6 (0/14)."),
+            1,
+            "exact zero on the line: {t2:?}"
+        );
+        assert!(t2.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Victory,
+                ..
+            }
+        )));
+        let snapshot = engine.snapshot();
+        assert!(snapshot.combat.is_none());
+        assert!(!snapshot.room.contents.iter().any(|t| t.name == "Stray"));
+        let t3 = engine.tick();
+        assert_eq!(t3.len(), 1, "a window victory stops pulsing");
+    }
+
+    // Inspect I3 (REQ-002): an overkill window strike clamps the display at
+    // zero — never a negative HP.
+    #[test]
+    fn power_strike_overkill_clamps_at_zero() {
+        let mut engine = combat_engine(12, 1);
+        engine.handle_command(cmd("attack stray")); // r1: enemy 8
+        engine.handle_command(cmd("power strike"));
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1 r2: enemy 4; P2 slam: 4 − 6 → clamped 0
+        assert_eq!(
+            count_lines(&t2, "for 6 (0/12)."),
+            1,
+            "clamped at zero: {t2:?}"
+        );
+        assert!(t2.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Victory,
+                ..
+            }
+        )));
+    }
+
+    // V12 (REQ-002/007): Phase 1 outranks the queued verb — a P1 kill drops it
+    // silently with the cleared state.
+    #[test]
+    fn pulse_victory_preempts_a_queued_verb() {
+        let mut engine = combat_engine(8, 1);
+        engine.handle_command(cmd("attack stray")); // enemy 4
+        engine.handle_command(cmd("guard"));
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1 kills at exactly 0
+        assert!(t2.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Victory,
+                ..
+            }
+        )));
+        assert_eq!(
+            count_lines(&t2, "You raise your guard."),
+            0,
+            "the verb never fires"
+        );
+        assert!(engine.snapshot().combat.is_none());
+    }
+
+    // V16 (REQ-007): a fled encounter leaves no verb residue — re-engaging
+    // starts with a clean queue and no charge.
+    #[test]
+    fn fled_encounter_leaves_no_verb_residue() {
+        let mut engine = combat_engine(40, 3);
+        engine.handle_command(cmd("attack stray")); // player 17
+        engine.handle_command(cmd("guard"));
+        let _ = engine.tick();
+        let _ = engine.tick(); // r2 (player 14) + arm
+        engine.handle_command(cmd("flee"));
+        let _ = engine.tick();
+        let t4 = engine.tick(); // r3: return blocked (charge), then P2 → Fled
+        assert!(t4.iter().any(|e| matches!(
+            &e.kind,
+            GameEventKind::CombatEnded {
+                outcome: CombatOutcome::Fled,
+                ..
+            }
+        )));
+        let response = engine.handle_command(cmd("attack stray"));
+        let fresh = engine.state.combat.as_ref().expect("re-engaged");
+        assert!(!fresh.guard_charge, "no charge leaks across encounters");
+        assert_eq!(
+            fresh.queued_action, None,
+            "no queue leaks across encounters"
+        );
+        assert_eq!(active_combat(&response).queued_action, None);
+    }
+
+    // Inspect I2 (REQ-007): help teaches the new verbs.
+    #[test]
+    fn help_lists_the_battle_verbs() {
+        let mut engine = combat_engine(10, 3);
+        let response = engine.handle_command(cmd("help"));
+        let text = match &response.events[0].kind {
+            GameEventKind::LogMessage { text, .. } => text.clone(),
+            other => panic!("help is a log line, got {other:?}"),
+        };
+        assert!(text.contains("guard"), "help lists guard: {text}");
+        assert!(
+            text.contains("power strike"),
+            "help lists power strike: {text}"
         );
     }
 }

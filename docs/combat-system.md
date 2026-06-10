@@ -34,6 +34,20 @@ This document captures the current combat direction for Oathstar.
 > machine, authored skills content, per-actor/boss pulse tuning, and alternate
 > resolutions below remain the long-horizon direction.
 
+> **Direct battle verbs v1 implemented** (ticket #25): the Phase-2 window's
+> first real actions — see `decisions.md` Decision 043. During battle the
+> player types **direct verbs**, never `skill <name>`: `guard` (a one-shot
+> charge armed at the window that turns the next enemy return — pulse or
+> manual round — aside entirely) and `power strike` (a fixed heavier blow of
+> 6 in the window; a kill there ends the fight in victory). Verbs queue
+> between pulses through the same mechanism as `flee`: re-queueing the same
+> action is a no-op with its own line, and queueing a different action
+> **replaces** the queued one ("You change tack. …") — one deterministic rule
+> across all actions. Outside combat every battle verb refuses cleanly. The
+> battle modal exposes Power Strike / Guard / Flee buttons beside Attack and
+> shows the queued action while it waits for the boundary. Skills content,
+> cooldowns, and any focus economy remain out of scope below.
+
 ## Core Direction
 
 Combat is a core system, not a rare edge case.

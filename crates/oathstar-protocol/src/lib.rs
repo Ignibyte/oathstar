@@ -254,10 +254,11 @@ pub struct CombatSnapshot {
     /// The battle play-by-play lines, oldest first. Omitted from JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub log: Vec<String>,
-    /// The player's queued between-pulse action (ticket #24) — `"flee"` in v2 —
-    /// resolved at the next combat pulse's skill window. `None` — and omitted
-    /// from JSON — when nothing is queued, so a queueless snapshot is
-    /// byte-identical to the #22 shape and an old payload still deserializes.
+    /// The player's queued between-pulse action — `"flee"` (ticket #24),
+    /// `"guard"` or `"power_strike"` (ticket #25) — resolved at the next
+    /// combat pulse's skill window. `None` — and omitted from JSON — when
+    /// nothing is queued, so a queueless snapshot is byte-identical to the
+    /// #22 shape and an old payload still deserializes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_action: Option<String>,
 }

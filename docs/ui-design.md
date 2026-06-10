@@ -324,3 +324,9 @@ server-authoritative hypermedia shell (see `docs/decisions.md` Decision 032):
   quiet `#battle-status` line driven by the view-model's `queuedActionLabel`
   ("Looking for an opening to flee…") while a queued flee waits for the next
   pulse's skill window.
+- Ticket #25 added the **direct battle verbs** (Decision 043): the footer
+  gains **Power Strike** and **Guard** buttons (quiet `battle-verb-button`
+  siblings of Flee) that send the exact typed verbs — never `skill <name>` —
+  and the `#battle-status` line now labels whichever action is queued
+  ("Guarding against the next blow…", "Winding up a power strike…") via the
+  same `QUEUED_ACTION_LABELS` view-model map.

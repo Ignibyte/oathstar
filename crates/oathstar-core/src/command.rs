@@ -79,6 +79,15 @@ pub enum Command {
     /// strict-arity verb like `swear`: it queues the between-pulse flee action,
     /// which the next combat pulse's skill window resolves into a fled outcome.
     Flee,
+    /// `guard` — brace for the next enemy blow (ticket #25). A bare,
+    /// strict-arity battle verb queued for the next pulse's skill window;
+    /// outside combat it refuses cleanly.
+    Guard,
+    /// `power strike` — the two-token heavy blow (ticket #25), queued for the
+    /// next pulse's skill window like `guard`. Strict arity: exactly the two
+    /// tokens — `power` alone, trailing tokens, and the fused `powerstrike`
+    /// are unknown commands.
+    PowerStrike,
     /// `talk` / `speak` with a target — address a nearby actor. The target text is
     /// preserved (case kept, surrounding/repeated whitespace collapsed) exactly as
     /// a `Look` target; a bare `talk` with no target is [`Unknown`](Self::Unknown).
@@ -200,6 +209,21 @@ pub fn parse(input: &str) -> Command {
         };
     }
 
+    // The two-token battle verb `power strike` (ticket #25): only the exact
+    // pair queues the heavy blow. `power` alone, `power <other>`, trailing
+    // tokens, and the fused `powerstrike` are all unknown — the grammar stays
+    // precise rather than guessing (the `pick up` pattern).
+    if verb == "power" {
+        if let [strike] = rest.as_slice() {
+            if strike.eq_ignore_ascii_case("strike") {
+                return Command::PowerStrike;
+            }
+        }
+        return Command::Unknown {
+            input: collapse(input),
+        };
+    }
+
     // The two-token verb `pick up <target>`: only `pick up` is a take. `pick`
     // alone, `pick <non-up>`, `pick up` with no target, and the one-word `pickup`
     // are all unknown — the grammar stays precise rather than guessing.
@@ -222,7 +246,7 @@ pub fn parse(input: &str) -> Command {
 }
 
 /// Parse the bare, strict-arity verbs (`swear`/`vow`, `confront`/`challenge`,
-/// `flee`, `inventory`/`pack`/`i`) — each takes no trailing tokens. Returns
+/// `flee`, `guard`, `inventory`/`pack`/`i`) — each takes no trailing tokens. Returns
 /// `Some(command)` when `verb` is one of them (a trailing token yields
 /// `Some(Unknown)`); `None` when `verb` is not a bare verb so `parse` keeps
 /// trying. Grouping these keeps `parse` under the clippy line ceiling (#20).
@@ -231,6 +255,7 @@ fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
         "swear" | "vow" => Command::Swear,
         "confront" | "challenge" => Command::Confront,
         "flee" => Command::Flee,
+        "guard" => Command::Guard,
         "inventory" | "pack" | "i" => Command::Inventory,
         _ => return None,
     };
@@ -680,6 +705,45 @@ mod tests {
                 input: "flee now".to_string()
             },
             "trailing tokens refuse — strict arity"
+        );
+    }
+
+    // V15 (ticket #25, REQ-001/004): `guard` is a bare strict-arity battle verb.
+    #[test]
+    fn guard_parses_as_bare_strict_arity_verb() {
+        assert_eq!(parse("guard"), Command::Guard);
+        assert_eq!(parse("GUARD"), Command::Guard, "the verb is case-folded");
+        assert_eq!(
+            parse("guard now"),
+            Command::Unknown {
+                input: "guard now".to_string()
+            },
+            "trailing tokens refuse — strict arity"
+        );
+    }
+
+    // V15 (ticket #25): `power strike` is exactly the two tokens — partial,
+    // fused, and trailing forms stay unknown, and bare `strike` is still the
+    // #22 attack verb.
+    #[test]
+    fn power_strike_parses_as_exactly_two_tokens() {
+        assert_eq!(parse("power strike"), Command::PowerStrike);
+        assert_eq!(parse("POWER Strike"), Command::PowerStrike, "case-folded");
+        assert_eq!(
+            parse("power   strike"),
+            Command::PowerStrike,
+            "whitespace runs collapse"
+        );
+        for bad in ["power", "powerstrike", "power slam", "power strike now"] {
+            assert!(
+                matches!(parse(bad), Command::Unknown { .. }),
+                "{bad} stays unknown"
+            );
+        }
+        assert_eq!(
+            parse("strike"),
+            Command::Attack { target: None },
+            "bare strike is still the #22 attack verb"
         );
     }
 }

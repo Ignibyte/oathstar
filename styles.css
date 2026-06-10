@@ -1159,9 +1159,10 @@ button.chip {
   background: var(--brass-bright);
 }
 
-/* The Flee action (ticket #24): the quiet sibling of Attack — same shape,
-   muted chrome, so escape reads as secondary to the fight. */
-.battle-flee-button {
+/* The quiet siblings of Attack — same shape, muted chrome: Flee (ticket #24)
+   and the direct battle verbs (ticket #25) read as secondary to the fight. */
+.battle-flee-button,
+.battle-verb-button {
   padding: 0.5rem 1.4rem;
   font-size: 0.95rem;
   color: var(--ink);
@@ -1171,7 +1172,8 @@ button.chip {
   cursor: pointer;
 }
 
-.battle-flee-button:hover {
+.battle-flee-button:hover,
+.battle-verb-button:hover {
   background: rgba(201, 154, 69, 0.18);
 }
 
