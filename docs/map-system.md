@@ -122,7 +122,21 @@ Implemented (ticket #32 — sprite tiles v1, Decision 050):
   are the reserved next step (intake:
   `INTAKE-tileset-region-authoring-per-tile-metadata`).
 
-## Passability And Collision
+Implemented (ticket #33 — entity/item presence markers, Decision 051):
+
+- `MapRoomSnapshot` carries two additive, server-computed flags —
+  `hasHostiles` (a live, non-hidden `Role::Hostile` placement) and
+  `hasItems` (live, non-hidden ground items) — gated on `discovered`, so
+  fogged rooms emit neither key and the payload never leaks concealed
+  state. Both follow the omit-when-false pattern (marker-less payloads
+  stay byte-identical).
+- The client draws presence dots over the cell (ember `#ec682b` hostile,
+  top-right; gold `#e6c85a` items, bottom-right; dark outline, drawn over
+  tile/stroke/glyph). Geometry is pure (`toDrawPlan` op `markers`), the
+  seam just executes arcs; `mapAriaLabel` voices nonzero counts
+  ("hostiles in N rooms, loot in M rooms").
+- The `hidden` reveal rule (#17) applies to the map exactly as to
+  `look`/nearby: hidden things never flag a room.
 
 Rooms or map cells should declare whether they are passable.
 

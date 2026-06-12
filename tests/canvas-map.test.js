@@ -275,3 +275,104 @@ test("tileset rendering leaves glyph, text, and aria behavior unchanged (REQ-006
   }
   assert.equal(mapAriaLabel(model), mapAriaLabel(model), "aria is model-only");
 });
+
+// ---- ticket #33: presence markers in the draw plan ----
+
+import { MAP_MARKER_COLORS } from "../src/client/canvas-map.js";
+
+// M-T7 (REQ-003): the model cell carries both flags, defaulting false when
+// the wire omits them; the input snapshot is never mutated.
+test("toMapModel cells carry marker flags with omit-false defaults (REQ-003)", () => {
+  const snap = {
+    region: "test",
+    currentRoomId: "a",
+    rooms: [
+      { id: "a", title: "Sq", x: 0, y: 0, z: 0, glyph: "+", passable: true, discovered: true, current: true, exits: {}, hasHostiles: true, hasItems: true },
+      { id: "b", title: "Rd", x: 1, y: 0, z: 0, glyph: ".", passable: true, discovered: true, current: false, exits: {} },
+    ],
+  };
+  const model = toMapModel(snap);
+  const a = model.cells.find((c) => c.id === "a");
+  const b = model.cells.find((c) => c.id === "b");
+  assert.equal(a.hasHostiles, true);
+  assert.equal(a.hasItems, true);
+  assert.equal(b.hasHostiles, false, "absent wire key coerces false");
+  assert.equal(b.hasItems, false);
+  assert.ok(!("hasHostiles" in snap.rooms[1]), "input snapshot untouched");
+});
+
+// M-T8 (REQ-003): exact marker geometry — the fields the seam's arc() draws.
+test("toDrawPlan resolves exact marker geometry per flag (REQ-003)", () => {
+  const both = cell({ x: 0, y: 0, discovered: true, hasHostiles: true, hasItems: true });
+  const hostileOnly = cell({ x: 1, y: 0, discovered: true, hasHostiles: true, hasItems: false });
+  const none = cell({ x: 2, y: 0, discovered: true });
+  const model = {
+    mode: "glyph", tilePixels: 32, columns: 3, rows: 1, minX: 0, minY: 0,
+    cells: [both, hostileOnly, none],
+  };
+  const plan = toDrawPlan(model);
+  // 32px: r = round(32*0.14) = 4, inset = min(6, max(4, 16-4)) = 6.
+  assert.deepEqual(plan.ops[0].markers, [
+    { cx: 26, cy: 6, r: 4, fill: MAP_MARKER_COLORS.hostile },
+    { cx: 26, cy: 26, r: 4, fill: MAP_MARKER_COLORS.item },
+  ]);
+  assert.deepEqual(plan.ops[1].markers, [
+    { cx: 32 + 26, cy: 6, r: 4, fill: MAP_MARKER_COLORS.hostile },
+  ]);
+  assert.deepEqual(plan.ops[2].markers, [], "no flags, no markers");
+
+  // The radius floor + collision clamp (inspect amendment): 10px tile ->
+  // r = max(2, round(1.4)) = 2, inset = min(4, max(2, 5-2)) = 3.
+  const tiny = toDrawPlan({
+    mode: "glyph", tilePixels: 10, columns: 1, rows: 1, minX: 0, minY: 0,
+    cells: [cell({ x: 0, y: 0, discovered: true, hasHostiles: true, hasItems: true })],
+  });
+  assert.deepEqual(tiny.ops[0].markers, [
+    { cx: 7, cy: 3, r: 2, fill: MAP_MARKER_COLORS.hostile },
+    { cx: 7, cy: 7, r: 2, fill: MAP_MARKER_COLORS.item },
+  ]);
+});
+
+// M-T9 (REQ-004): markers change NOTHING else — a flagged plan differs from
+// the unflagged plan only in the markers field.
+test("marker flags leave tile, sprite, glyph, and text untouched (REQ-004)", () => {
+  const base = {
+    mode: "glyph", tilePixels: 32, columns: 1, rows: 1, minX: 0, minY: 0,
+    cells: [cell({ x: 0, y: 0, discovered: true })],
+  };
+  const flagged = {
+    ...base,
+    cells: [cell({ x: 0, y: 0, discovered: true, hasHostiles: true, hasItems: true })],
+  };
+  const tileset = committedTileset();
+  const plain = toDrawPlan(base, tileset);
+  const marked = toDrawPlan(flagged, tileset);
+  const { markers: _p, ...plainRest } = plain.ops[0];
+  const { markers: _m, ...markedRest } = marked.ops[0];
+  assert.deepEqual(markedRest, plainRest, "only markers differ");
+  assert.equal(plain.ops[0].markers.length, 0);
+  assert.equal(marked.ops[0].markers.length, 2);
+});
+
+// M-T10 (REQ-003/004): aria voices the color-only signal; zero counts stay
+// byte-identical to the pre-marker label.
+test("mapAriaLabel counts marker rooms only when nonzero (REQ-004)", () => {
+  const plain = {
+    region: "R", planes: [0], z: 0,
+    cells: [{ present: true, discovered: true, current: true, title: "Sq", glyph: "+" }],
+  };
+  assert.equal(mapAriaLabel(plain), "Map: R — 1 room discovered — here: Sq",
+    "no flags: byte-identical to pre-#33");
+
+  const marked = {
+    region: "R", planes: [0], z: 0,
+    cells: [
+      { present: true, discovered: true, current: true, title: "Sq", glyph: "+", hasHostiles: true, hasItems: true },
+      { present: true, discovered: true, current: false, title: "Rd", glyph: ".", hasItems: true },
+    ],
+  };
+  assert.equal(
+    mapAriaLabel(marked),
+    "Map: R — 2 rooms discovered, hostiles in 1 room, loot in 2 rooms — here: Sq",
+  );
+});

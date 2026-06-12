@@ -2665,23 +2665,49 @@ impl Engine {
     }
 
     fn map_snapshot(&self, room: &RoomDefinition) -> MapSnapshot {
-        let rooms = self
-            .world
-            .rooms
-            .values()
-            .map(|map_room| MapRoomSnapshot {
-                id: map_room.id.clone(),
-                title: map_room.title.clone(),
-                x: map_room.x,
-                y: map_room.y,
-                z: map_room.z,
-                glyph: map_room.glyph,
-                passable: map_room.passable,
-                discovered: self.state.discovered_rooms.contains(&map_room.id),
-                current: map_room.id == self.state.current_room_id,
-                exits: map_room.exits.clone(),
-            })
-            .collect();
+        let rooms =
+            self.world
+                .rooms
+                .values()
+                .map(|map_room| {
+                    let discovered = self.state.discovered_rooms.contains(&map_room.id);
+                    // Ticket #33: presence markers are server-computed from LIVE
+                    // placements (victory removes the entity, take/drop mutate the
+                    // item list) and gated on `discovered`, so the payload never
+                    // leaks fogged state — the client draws, never infers
+                    // (Decision 041's principle). `hidden` things stay off the map
+                    // exactly as the reveal rule keeps them out of the room view
+                    // (#17 REQ-002): the map must never disclose what perceive
+                    // conceals.
+                    let has_hostiles = discovered
+                        && map_room.entities.iter().any(|entity_id| {
+                            self.world.entities.get(entity_id).is_some_and(|entity| {
+                                !entity.hidden && entity.has_role(Role::Hostile)
+                            })
+                        });
+                    let has_items = discovered
+                        && map_room.items.iter().any(|item_id| {
+                            self.world
+                                .items
+                                .get(item_id)
+                                .is_some_and(|item| !item.hidden)
+                        });
+                    MapRoomSnapshot {
+                        id: map_room.id.clone(),
+                        title: map_room.title.clone(),
+                        x: map_room.x,
+                        y: map_room.y,
+                        z: map_room.z,
+                        glyph: map_room.glyph,
+                        passable: map_room.passable,
+                        discovered,
+                        current: map_room.id == self.state.current_room_id,
+                        exits: map_room.exits.clone(),
+                        has_hostiles,
+                        has_items,
+                    }
+                })
+                .collect();
 
         MapSnapshot {
             region: room.region.clone(),
@@ -8814,5 +8840,188 @@ mod tests {
             3,
             "the spent value survives"
         );
+    }
+
+    // ============================================================
+    //  ticket #33 — map entity markers
+    // ============================================================
+
+    // The map-room entry for `id` in a snapshot.
+    fn map_room_of(engine: &Engine, id: &str) -> oathstar_protocol::MapRoomSnapshot {
+        engine
+            .snapshot()
+            .map
+            .rooms
+            .into_iter()
+            .find(|room| room.id == id)
+            .expect("the room is on the map")
+    }
+
+    // M-T1 (REQ-001): both arms of the discovered gate — the discovered start
+    // room flags live placements; the undiscovered ridge stays dark even with
+    // a hostile (wolf) AND an inserted item placed there (fog never leaks).
+    #[test]
+    fn marker_flags_gate_on_discovery() {
+        let mut world = combat_world(10, 3);
+        world.items.insert("relic".to_string(), item("relic"));
+        world
+            .rooms
+            .get_mut("ridge")
+            .expect("fixture room")
+            .items
+            .push("relic".to_string());
+        world
+            .rooms
+            .get_mut("field")
+            .expect("fixture room")
+            .items
+            .push("relic".to_string());
+        let engine = Engine::try_new(world).expect("valid world");
+
+        let field = map_room_of(&engine, "field");
+        assert!(field.discovered, "the start room is discovered");
+        assert!(field.has_hostiles, "the stray is a live hostile placement");
+        assert!(field.has_items, "the inserted relic placement flags");
+
+        let ridge = map_room_of(&engine, "ridge");
+        assert!(!ridge.discovered, "ridge is never visited");
+        assert!(
+            !ridge.has_hostiles,
+            "fog conceals the wolf (kills && -> ||)"
+        );
+        assert!(!ridge.has_items, "fog conceals the relic");
+    }
+
+    // M-T2 (REQ-001): the presence arms — a discovered room with no hostiles
+    // and no items flags neither.
+    #[test]
+    fn marker_flags_stay_false_without_presence() {
+        let mut engine = combat_engine(10, 3);
+        assert!(engine.handle_command(cmd("south")).accepted, "to clearing");
+        let clearing = map_room_of(&engine, "clearing");
+        assert!(clearing.discovered);
+        assert!(!clearing.has_hostiles, "no hostile placed in the clearing");
+        assert!(!clearing.has_items, "no items placed in the clearing");
+    }
+
+    // M-T3 (REQ-001): a discovered room whose only actors are NON-hostile
+    // never flags — the role filter, not mere entity presence.
+    #[test]
+    fn non_hostile_actors_do_not_flag() {
+        let mut world = combat_world(10, 3);
+        world
+            .rooms
+            .get_mut("field")
+            .expect("fixture room")
+            .entities
+            .retain(|id| id == "elder" || id == "idol");
+        let engine = Engine::try_new(world).expect("valid world");
+        let field = map_room_of(&engine, "field");
+        assert!(field.discovered);
+        assert!(!field.has_hostiles, "the elder and idol are not hostiles");
+    }
+
+    // M-T4 (REQ-002): the lifecycle — defeat clears the hostile flag and the
+    // dropped loot raises the item flag; taking it clears that too. Staged so
+    // every before differs from its after.
+    #[test]
+    fn marker_flags_track_defeat_loot_and_take() {
+        let mut world = combat_world(8, 1);
+        world
+            .rooms
+            .get_mut("field")
+            .expect("fixture room")
+            .entities
+            .retain(|id| id != "brute");
+        world.items.insert("fang".to_string(), item("fang"));
+        world
+            .entities
+            .get_mut("stray")
+            .expect("fixture stray")
+            .inventory
+            .push("fang".to_string());
+        let mut engine = Engine::try_new(world).expect("valid world");
+
+        let before = map_room_of(&engine, "field");
+        assert!(before.has_hostiles, "the stray prowls before the fight");
+        assert!(!before.has_items, "no ground items yet");
+
+        assert!(engine.handle_command(cmd("attack stray")).accepted); // 8 -> 4
+        let won = engine.handle_command(cmd("attack")); // 4 -> 0: victory
+        assert!(
+            won.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                }
+            )),
+            "two strikes fell the 8hp stray: {:?}",
+            won.events
+        );
+
+        let after = map_room_of(&engine, "field");
+        assert!(!after.has_hostiles, "victory removes the placement");
+        assert!(after.has_items, "the dropped fang flags the room");
+
+        assert!(engine.handle_command(cmd("take fang")).accepted);
+        assert!(
+            !map_room_of(&engine, "field").has_items,
+            "taken loot unflags"
+        );
+    }
+
+    // M-T5 (REQ-002): dropping a carried item raises the destination room's
+    // flag — the other direction of the item transition.
+    #[test]
+    fn dropping_an_item_flags_the_room() {
+        let mut world = combat_world(10, 3);
+        world.items.insert("relic".to_string(), item("relic"));
+        world
+            .rooms
+            .get_mut("field")
+            .expect("fixture room")
+            .items
+            .push("relic".to_string());
+        let mut engine = Engine::try_new(world).expect("valid world");
+        assert!(engine.handle_command(cmd("take relic")).accepted);
+        assert!(!map_room_of(&engine, "field").has_items, "taken away");
+        assert!(engine.handle_command(cmd("south")).accepted);
+        assert!(engine.handle_command(cmd("drop relic")).accepted);
+        let clearing = map_room_of(&engine, "clearing");
+        assert!(clearing.has_items, "the dropped relic flags the clearing");
+    }
+
+    // M-T13 (REQ-001, inspect finding #3): hidden things never reach the map —
+    // the reveal rule's mirror. A discovered room whose ONLY hostile and ONLY
+    // item are hidden flags neither.
+    #[test]
+    fn hidden_content_never_flags_the_map() {
+        let mut world = combat_world(10, 3);
+        let mut lurker = entity("lurker", EntityKind::Actor, &["combatant", "hostile"], &[]);
+        lurker.hidden = true;
+        lurker.combat = Some(CombatProfile {
+            health: 5,
+            attack: 1,
+            disclose_stats: false,
+            xp: 0,
+        });
+        world.entities.insert("lurker".to_string(), lurker);
+        let mut secret = item("secret");
+        secret.hidden = true;
+        world.items.insert("secret".to_string(), secret);
+        let field = world.rooms.get_mut("field").expect("fixture room");
+        field.entities.retain(|id| id == "elder" || id == "idol");
+        field.entities.push("lurker".to_string());
+        field.items.push("secret".to_string());
+        let engine = Engine::try_new(world).expect("valid world");
+
+        let room = map_room_of(&engine, "field");
+        assert!(room.discovered);
+        assert!(
+            !room.has_hostiles,
+            "the hidden lurker stays off the map (look conceals it too)"
+        );
+        assert!(!room.has_items, "the hidden secret stays off the map");
     }
 }

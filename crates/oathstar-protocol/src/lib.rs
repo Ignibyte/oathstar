@@ -190,6 +190,7 @@ pub struct MapSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)] // wire DTO of independent JSON facets, not a state machine — enums would break the camelCase payload contract
 pub struct MapRoomSnapshot {
     pub id: String,
     pub title: String,
@@ -201,6 +202,24 @@ pub struct MapRoomSnapshot {
     pub discovered: bool,
     pub current: bool,
     pub exits: BTreeMap<String, String>,
+    /// A live hostile stands in this room (ticket #33). Server-computed from
+    /// `Role::Hostile` placements and gated on `discovered`, so fogged rooms
+    /// never leak presence; omitted from JSON when false (the
+    /// omit-when-empty house pattern), keeping marker-less payloads
+    /// byte-identical to pre-#33.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_hostiles: bool,
+    /// Ground items lie in this room (ticket #33). Same gating and
+    /// serialization rules as [`Self::has_hostiles`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_items: bool,
+}
+
+/// `skip_serializing_if` predicate for omit-when-false booleans — the bool
+/// twin of the `Option::is_none` pattern used throughout this file.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's predicate signature requires &bool
+const fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 /// Lifecycle state of a sworn oath, surfaced in the snapshot and carried by oath
@@ -407,8 +426,8 @@ pub enum OutputComponent {
 mod tests {
     use super::{
         AnnouncementSeverity, CombatOutcome, CombatSnapshot, CombatantSnapshot, EventChannel,
-        GameEvent, GameEventKind, GameSnapshot, MapSnapshot, NearbySnapshot, NearbyStatsSnapshot,
-        NearbyThreatSnapshot, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
+        GameEvent, GameEventKind, GameSnapshot, MapRoomSnapshot, MapSnapshot, NearbySnapshot,
+        NearbyStatsSnapshot, NearbyThreatSnapshot, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
     };
     use std::collections::BTreeMap;
 
@@ -857,5 +876,40 @@ mod tests {
         );
         let back: CombatSnapshot = serde_json::from_value(value).expect("deserialize");
         assert_eq!(back, combat, "round-trips by value");
+    }
+
+    // Ticket #33 (M-T6, REQ-001/006): the presence flags follow the
+    // omit-when-empty house pattern — absent keys when false (byte-identical
+    // to pre-#33 payloads), camelCase keys when true, and an old payload
+    // without the keys deserializes to false. Lives in THIS crate so the
+    // package-scoped mutation run executes it against `is_false`.
+    #[test]
+    fn map_room_marker_flags_omit_when_false() {
+        let mut room = MapRoomSnapshot {
+            id: "field".to_string(),
+            title: "Field".to_string(),
+            x: 0,
+            y: 0,
+            z: 0,
+            glyph: '+',
+            passable: true,
+            discovered: true,
+            current: true,
+            exits: BTreeMap::new(),
+            has_hostiles: false,
+            has_items: false,
+        };
+        let json = serde_json::to_string(&room).expect("serialize");
+        assert!(!json.contains("hasHostiles"), "omitted when false: {json}");
+        assert!(!json.contains("hasItems"), "omitted when false: {json}");
+        let back: MapRoomSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert!(!back.has_hostiles, "absent key defaults false");
+        assert!(!back.has_items, "absent key defaults false");
+
+        room.has_hostiles = true;
+        room.has_items = true;
+        let value = serde_json::to_value(&room).expect("serialize");
+        assert_eq!(value["hasHostiles"], true, "camelCase wire key");
+        assert_eq!(value["hasItems"], true, "camelCase wire key");
     }
 }

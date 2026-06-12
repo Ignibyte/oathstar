@@ -19,6 +19,52 @@ export const MAP_PALETTE = Object.freeze({
   blocked: Object.freeze({ fill: "#181c20", stroke: "#3a2e2e", text: "#8a8076" }),
 });
 
+// Presence-marker dots (ticket #33): ember for a live hostile, gold for
+// ground items — the blank-colors vertical slice's "enemies and loot as
+// colors". Drawn last with a dark outline so they read on any tile.
+export const MAP_MARKER_COLORS = Object.freeze({
+  hostile: "#ec682b",
+  item: "#e6c85a",
+  outline: "#0f1216",
+});
+
+/**
+ * The marker dot radius for a tile (px). Pure — kept out of the seam so the
+ * geometry is unit-tested; floored so dots stay visible at small tiles.
+ *
+ * @param {number} tile tile size in CSS pixels
+ * @returns {number}
+ */
+function markerRadius(tile) {
+  return Math.max(2, Math.round(tile * 0.14));
+}
+
+/**
+ * The pre-resolved marker draw entries for one cell: hostile dot top-right,
+ * item dot bottom-right. Every field is consumed by the seam's arc() calls
+ * (PR-oathstar-render-plan-test-002 — ops carry only what is drawn).
+ *
+ * @param {object} cell a cell from {@link module:map.toMapModel}
+ * @param {number} x cell origin x (CSS px)
+ * @param {number} y cell origin y (CSS px)
+ * @param {number} tile tile size (CSS px)
+ * @returns {{cx: number, cy: number, r: number, fill: string}[]}
+ */
+function cellMarkers(cell, x, y, tile) {
+  const r = markerRadius(tile);
+  // Clamped so the two corner dots can never cross at tiny tiles (≤12px the
+  // naive r+2 inset makes them collide; at 8px they would coincide exactly).
+  const inset = Math.min(r + 2, Math.max(r, tile / 2 - r));
+  const markers = [];
+  if (cell.hasHostiles) {
+    markers.push({ cx: x + tile - inset, cy: y + inset, r, fill: MAP_MARKER_COLORS.hostile });
+  }
+  if (cell.hasItems) {
+    markers.push({ cx: x + tile - inset, cy: y + tile - inset, r, fill: MAP_MARKER_COLORS.item });
+  }
+  return markers;
+}
+
 /**
  * Hi-DPI canvas sizing for a grid model. The CSS size is `columns/rows *
  * tilePixels`; the backing store is scaled by `devicePixelRatio` so the draw
@@ -101,15 +147,18 @@ export function toDrawPlan(model, tileset = null) {
   const ops = model.cells.map((cell) => {
     const kind = cellKind(cell);
     const palette = MAP_PALETTE[kind];
+    const x = (cell.x - model.minX) * tile;
+    const y = (cell.y - model.minY) * tile;
     return {
-      x: (cell.x - model.minX) * tile,
-      y: (cell.y - model.minY) * tile,
+      x,
+      y,
       size: tile,
       fill: palette.fill,
       stroke: palette.stroke,
       textColor: palette.text,
       glyph: cell.glyph,
       sprite: kindRects ? kindRects[kind] : null,
+      markers: cellMarkers(cell, x, y, tile),
     };
   });
   return {
@@ -133,7 +182,13 @@ export function mapAriaLabel(model) {
   const floor = model.planes && model.planes.length > 1 ? `, floor ${model.z}` : "";
   const discovered = model.cells.filter((cell) => cell.present && cell.discovered).length;
   const rooms = `${discovered} ${discovered === 1 ? "room" : "rooms"} discovered`;
+  // Ticket #33: voice the color-only marker signal. Zero counts append
+  // nothing, keeping the marker-less label byte-identical to pre-#33.
+  const hostiles = model.cells.filter((cell) => cell.hasHostiles).length;
+  const loot = model.cells.filter((cell) => cell.hasItems).length;
+  const threats = hostiles ? `, hostiles in ${hostiles} ${hostiles === 1 ? "room" : "rooms"}` : "";
+  const spoils = loot ? `, loot in ${loot} ${loot === 1 ? "room" : "rooms"}` : "";
   const current = model.cells.find((cell) => cell.current);
   const here = current ? ` — here: ${current.title || current.glyph}` : "";
-  return `Map: ${region}${floor} — ${rooms}${here}`;
+  return `Map: ${region}${floor} — ${rooms}${threats}${spoils}${here}`;
 }

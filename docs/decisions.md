@@ -2552,3 +2552,49 @@ Revisit when:
 - Entity/item/overlay markers want sheet tiles (draw-plan layers).
 - Tile animation or non-integer accessibility scales are wanted (the
   integer-geometry rule and smoothing pins get re-examined).
+
+## Decision 051: Map Presence Markers Are Server-Computed, Discovery-Gated, And Reveal-Rule-Faithful
+
+Status: Locked
+
+Date: 2026-06-12
+
+What was decided (ticket #33):
+
+- **Two additive flags on the map payload, never client inference.**
+  `MapRoomSnapshot.hasHostiles` / `hasItems` are computed in
+  `Engine::map_snapshot` from LIVE placements (`Role::Hostile`
+  entities; ground items), extending Decision 041's
+  server-computes-affordances principle from the Nearby panel to the
+  map. Victory, take, and drop update them with zero extra bookkeeping
+  because placements ARE the live state.
+- **`discovered` gates the wire, not just the render.** A fogged room
+  emits neither key — presence of concealed rooms never reaches
+  devtools. Discovered rooms show live state (a visited room's marker
+  updates from across the map); remembered-last-seen was rejected for
+  v1 (needs per-room memory in GameState + saves) and is the revisit
+  trigger if stealth/scouting lands.
+- **The `hidden` reveal rule applies to every player-facing
+  projection.** A hidden hostile or hidden item never flags a room —
+  the map must not disclose what `look`/nearby conceal (#17 REQ-002
+  mirrored; inspect caught the omission pre-ship).
+- **Omit-when-false serialization** (`serde(default,
+  skip_serializing_if)` with a `const fn is_false`) keeps marker-less
+  payloads byte-identical — the additive-snapshot house pattern, bool
+  edition.
+- **Markers are presence, not identity.** One ember dot (top-right) for
+  "something hostile", one gold dot (bottom-right) for "loot here";
+  who/how-many remains the Nearby panel's in-room job. Geometry is
+  pure plan data (`op.markers`: cx/cy/r/fill, radius floored at 2px,
+  inset clamped so corner dots can never collide at tiny tiles); the
+  seam executes arcs over tile/stroke/glyph; `mapAriaLabel` voices
+  nonzero counts for accessibility parity.
+
+Revisit when:
+
+- Stealth/scouting wants remembered-last-seen instead of live flags.
+- Per-entity identity, counts, or NPC/vendor markers are wanted.
+- Enemy movement lands (markers would update per tick — fine — but the
+  knowledge model deserves a re-read).
+- The blank-colors slice's city/forest/cave world ships (markers at
+  scale: many rooms, several flagged at once).

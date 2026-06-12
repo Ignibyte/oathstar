@@ -82,6 +82,12 @@ The engine emits **structured JSON, never drawing instructions** (Decisions
   (`src/client/snapshot.js` `toNearby`), so it becomes data-driven with no client
   logic change. The map payload is untouched — entity/event markers on the canvas
   are a future overlay, not part of this foundation.
+- **That overlay shipped as ticket #33** (Decision 051): per-room
+  `hasHostiles`/`hasItems` presence flags on the map snapshot, computed under
+  the same principles as `threat` — server-authored, `Role::Hostile`-derived,
+  and respecting the `hidden` reveal rule — plus `discovered` gating so fog
+  never leaks. The client renders them as ember/gold dots; presence only,
+  never identity (who/how-many stays the Nearby panel's job, in-room).
 
 ## Commands
 

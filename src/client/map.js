@@ -73,6 +73,10 @@ export function toMapModel(mapSnapshot, config = DEFAULT_MAP_CONFIG) {
         discovered: Boolean(room?.discovered),
         current: Boolean(room?.current),
         passable: room?.passable,
+        // Ticket #33: server-computed presence markers; the wire omits
+        // false, so absence coerces to false here.
+        hasHostiles: Boolean(room?.hasHostiles),
+        hasItems: Boolean(room?.hasItems),
       });
     }
   }

@@ -13,7 +13,7 @@ import { parseEvent } from "./client/wire.js";
 import { toHud, toMenuModel, toBattle } from "./client/snapshot.js";
 import { toRoomDisplay, toExitPad } from "./client/room.js";
 import { toMapModel, DEFAULT_MAP_CONFIG } from "./client/map.js";
-import { canvasSize, toDrawPlan, mapAriaLabel } from "./client/canvas-map.js";
+import { canvasSize, toDrawPlan, mapAriaLabel, MAP_MARKER_COLORS } from "./client/canvas-map.js";
 import { validateTileset } from "./client/tileset.js";
 import { suggestCommands } from "./client/intent.js";
 
@@ -544,6 +544,17 @@ function drawMapCanvas(canvas, model) {
       ctx.fillStyle = op.textColor;
       ctx.font = `${plan.glyphFontPx}px ui-sans-serif, system-ui, sans-serif`;
       ctx.fillText(op.glyph, op.x + op.size / 2, op.y + op.size / 2, Math.max(1, op.size - 4));
+    }
+    // Presence markers draw last (ticket #33) — the at-a-glance signal sits
+    // over tile, stroke, and glyph; the outline keeps it readable on any fill.
+    for (const marker of op.markers) {
+      ctx.beginPath();
+      ctx.arc(marker.cx, marker.cy, marker.r, 0, Math.PI * 2);
+      ctx.fillStyle = marker.fill;
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = MAP_MARKER_COLORS.outline;
+      ctx.stroke();
     }
   }
 }

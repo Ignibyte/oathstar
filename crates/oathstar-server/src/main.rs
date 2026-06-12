@@ -1452,4 +1452,74 @@ mod tests {
         assert_eq!(state.0.player.focus, 0, "the spent point stays spent");
         std::fs::remove_dir_all(app.saves.root()).ok();
     }
+
+    // M-T11 (ticket #33, REQ-005): the marker lifecycle over the served seam —
+    // the wax stub flags the square at start; discovering the road reveals the
+    // stray's ember flag; felling it clears the hostile flag and the dropped
+    // fang raises the loot flag; taking the fang clears that; the undiscovered
+    // tower stays dark throughout.
+    #[tokio::test]
+    async fn map_marker_flags_track_the_served_fight() {
+        let app = test_app_state();
+        let room = |snapshot: &GameSnapshot, id: &str| {
+            snapshot
+                .map
+                .rooms
+                .iter()
+                .find(|room| room.id == id)
+                .expect("the room is on the map")
+                .clone()
+        };
+
+        let start = state_snapshot(State(app.clone())).await;
+        let square = room(&start.0, "hollowmere_square");
+        assert!(square.has_items, "the wax stub flags the square at start");
+        assert!(!square.has_hostiles, "no hostile in town");
+        let road = room(&start.0, "ashen_road");
+        assert!(!road.discovered, "the road begins fogged");
+        assert!(!road.has_hostiles, "fog conceals the stray");
+
+        for step in ["north", "north"] {
+            assert!(command(State(app.clone()), req(step)).await.0.accepted);
+        }
+        let arrived = state_snapshot(State(app.clone())).await;
+        let road = room(&arrived.0, "ashen_road");
+        assert!(road.has_hostiles, "the discovered road flags the stray");
+        assert!(!road.has_items, "no ground items before the fight");
+
+        // The 9hp stray falls to three manual 4-damage strikes.
+        assert!(
+            command(State(app.clone()), req("attack stray"))
+                .await
+                .0
+                .accepted
+        );
+        assert!(command(State(app.clone()), req("attack")).await.0.accepted);
+        let won = command(State(app.clone()), req("attack")).await;
+        assert!(
+            won.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                }
+            )),
+            "three strikes fell the stray: {:?}",
+            won.0.events
+        );
+        let after = room(&won.0.snapshot, "ashen_road");
+        assert!(!after.has_hostiles, "victory clears the ember flag");
+        assert!(after.has_items, "the dropped fang raises the loot flag");
+
+        let took = command(State(app.clone()), req("take fang")).await;
+        assert!(took.0.accepted, "the fang is takeable");
+        let cleared = room(&took.0.snapshot, "ashen_road");
+        assert!(!cleared.has_items, "taking the fang clears the loot flag");
+
+        let tower = room(&took.0.snapshot, "tower_foot");
+        assert!(
+            !tower.discovered && !tower.has_hostiles && !tower.has_items,
+            "the unvisited tower stays dark throughout"
+        );
+    }
 }
