@@ -1282,4 +1282,174 @@ mod tests {
         assert_eq!(state.0.player.max_hp, 30, "two levels grow 20 -> 30");
         assert_eq!(state.0.player.hp, 30, "healed to the final max");
     }
+
+    // F-T26 (ticket #31, REQ-006): the played economy fight — the pool
+    // spends on the road stray, settles a change-tack at the boss, keeps the
+    // remainder through victory, and rests back to full, all over the seam.
+    #[tokio::test(start_paused = true)]
+    async fn beginner_slice_plays_the_focus_economy() {
+        let app = test_app_state();
+        assert!(
+            command(State(app.clone()), req("talk mara"))
+                .await
+                .0
+                .accepted
+        );
+        assert!(command(State(app.clone()), req("swear")).await.0.accepted);
+
+        walk_to_ashen_road(&app).await;
+        let mut rx = app.events.subscribe();
+        let attack = command(State(app.clone()), req("attack stray")).await;
+        assert!(attack.0.accepted, "the road stray engages");
+        assert_eq!(attack.0.snapshot.player.focus, 5, "attacking is free");
+        let strike = command(State(app.clone()), req("power strike")).await;
+        assert_eq!(
+            strike.0.snapshot.player.focus, 3,
+            "the strike costs 2 over the seam"
+        );
+        spawn_tick_loop(app.clone());
+        let kinds = drain_combat_until_ended(&mut rx).await;
+        assert!(
+            matches!(
+                kinds.last(),
+                Some(GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                })
+            ),
+            "the strike fells the stray: {kinds:?}"
+        );
+
+        for step in ["north", "up", "up"] {
+            let moved = command(State(app.clone()), req(step)).await;
+            assert!(moved.0.accepted, "move {step} accepted");
+        }
+        let confront = command(State(app.clone()), req("confront")).await;
+        assert!(confront.0.accepted, "confront engages the Bell-Eater");
+        assert_eq!(
+            confront.0.snapshot.player.focus, 3,
+            "the pool stays spent between fights"
+        );
+        let guard = command(State(app.clone()), req("guard")).await;
+        assert_eq!(guard.0.snapshot.player.focus, 2, "the guard costs 1");
+        let switched = command(State(app.clone()), req("power strike")).await;
+        assert!(
+            switched.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage {
+                    component: OutputComponent::CombatMessage,
+                    text
+                } if text == "You change tack. You wind up a power strike."
+            )),
+            "the change-tack settles over the seam: {:?}",
+            switched.0.events
+        );
+        assert_eq!(
+            switched.0.snapshot.player.focus, 1,
+            "refund the guard, charge the strike"
+        );
+        // A fresh subscription for the boss pulses: the test channel holds 16
+        // events, so a receiver parked across the walk + queue commands lags
+        // out. Pulses only fire while the drain awaits (paused time), so
+        // nothing is missed by subscribing here.
+        drop(rx);
+        let mut rx = app.events.subscribe();
+        let kinds = drain_combat_until_ended(&mut rx).await;
+        assert!(
+            matches!(
+                kinds.last(),
+                Some(GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                })
+            ),
+            "the strike fells the boss: {kinds:?}"
+        );
+        let state = state_snapshot(State(app.clone())).await;
+        assert_eq!(state.0.player.focus, 1, "victory keeps the spent pool");
+
+        let rest = command(State(app.clone()), req("rest")).await;
+        assert!(rest.0.accepted, "rest recovers between fights");
+        let state = state_snapshot(State(app.clone())).await;
+        assert_eq!(state.0.player.focus, 5, "the pool refills to its maximum");
+        assert_eq!(state.0.player.max_focus, 5);
+    }
+
+    // F-T27 (ticket #31, REQ-006/007): a crafted one-point pool loaded over
+    // the real /load boundary visibly limits the played boss fight — the
+    // strike refuses with the typed line, the guard fits, the pulse loop
+    // still wins, and the spent point stays spent.
+    #[tokio::test(start_paused = true)]
+    async fn crafted_low_focus_limits_the_served_boss_fight() {
+        let app = test_app_state_with_saves("focus-crafted-refusal");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+        assert!(
+            command(State(app.clone()), req("talk mara"))
+                .await
+                .0
+                .accepted
+        );
+        assert!(command(State(app.clone()), req("swear")).await.0.accepted);
+        for step in ["north", "north", "north", "up", "up"] {
+            let moved = command(State(app.clone()), req(step)).await;
+            assert!(moved.0.accepted, "move {step} accepted");
+        }
+
+        let mut data = { app.engine.lock().await.save_data() };
+        data.state.player.focus = 1;
+        app.saves
+            .write_json("crafted", &data)
+            .expect("the crafted slot writes");
+        let loaded = load(State(app.clone()), slot_request(Some("crafted"))).await;
+        assert!(loaded.0.ok, "the crafted slot loads: {:?}", loaded.0.error);
+
+        let confront = command(State(app.clone()), req("confront")).await;
+        assert!(confront.0.accepted, "confront engages the Bell-Eater");
+        let strike = command(State(app.clone()), req("power strike")).await;
+        assert!(!strike.0.accepted, "one point cannot buy a strike");
+        assert!(
+            strike.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage {
+                    component: OutputComponent::SystemMessage,
+                    text
+                } if text == "You lack the focus for a power strike."
+            )),
+            "the typed refusal crosses the seam: {:?}",
+            strike.0.events
+        );
+        assert_eq!(strike.0.snapshot.player.focus, 1, "nothing spent");
+        assert_eq!(
+            strike
+                .0
+                .snapshot
+                .combat
+                .as_ref()
+                .expect("the fight is on")
+                .queued_action,
+            None,
+            "nothing queued"
+        );
+        let guard = command(State(app.clone()), req("guard")).await;
+        assert!(guard.0.accepted, "the pool still affords a guard");
+        assert_eq!(guard.0.snapshot.player.focus, 0);
+        // Subscribe right before the drain (the 16-slot test channel lags a
+        // parked receiver); the pulses only fire while the drain awaits.
+        let mut rx = app.events.subscribe();
+        spawn_tick_loop(app.clone());
+        let kinds = drain_combat_until_ended(&mut rx).await;
+        assert!(
+            matches!(
+                kinds.last(),
+                Some(GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                })
+            ),
+            "the baseline still fells the boss: {kinds:?}"
+        );
+        let state = state_snapshot(State(app.clone())).await;
+        assert_eq!(state.0.player.focus, 0, "the spent point stays spent");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+    }
 }

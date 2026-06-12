@@ -45,8 +45,25 @@ This document captures the current combat direction for Oathstar.
 > **replaces** the queued one ("You change tack. …") — one deterministic rule
 > across all actions. Outside combat every battle verb refuses cleanly. The
 > battle modal exposes Power Strike / Guard / Flee buttons beside Attack and
-> shows the queued action while it waits for the boundary. Skills content,
-> cooldowns, and any focus economy remain out of scope below.
+> shows the queued action while it waits for the boundary. Skills content
+> and cooldowns remain out of scope below.
+
+> **Focus economy v1 implemented** (ticket #31): the #25 skills now cost
+> focus — see `decisions.md` Decision 049. Engine-const prices (`power
+> strike` 2, `guard` 1; `attack`/`flee` stay free), **spent at the queue** —
+> the moment of commitment — with a typed System-channel refusal when the
+> pool can't cover it ("You lack the focus for a power strike." / "…to
+> guard."), which changes no state. Change-tack settles deterministically:
+> the replaced action's cost refunds before the new one charges (no
+> double-spend, no free-cancel gain), and a fight that ends with an action
+> still queued refunds the unfired cost on every outcome. **Victory and
+> flee keep the spent pool — defeat restores it with HP** ("battered but
+> whole"). Recovery is the `rest` verb: out of combat it refills focus to
+> max in one breath; mid-encounter it refuses ("There is no rest in the
+> midst of battle."). All arithmetic saturates, so crafted saves at i32
+> extremes load and play without panicking; a 5-point pool affords exactly
+> two power strikes and a guard. Warding/rituals, focus items, max-focus
+> growth, and authored skill economies stay future work.
 
 > **Rewards + defeat consequences v1 implemented** (ticket #26): winning and
 > losing now matter — see `decisions.md` Decision 044. **Victory** awards the

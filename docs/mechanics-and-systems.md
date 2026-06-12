@@ -392,6 +392,9 @@ Shipped (the prototype loop, realized in the engine across #22–#29):
   [Decision 047](./decisions.md#decision-047-the-boss-encounter-is-real--oath-gated-combat-entry-fulfillment-on-recovery))
 - Player cannot permanently die: defeat resets to the start room with an
   XP penalty, and the boss waits intact for the retry
+- Battle skills cost focus: power strike 2, guard 1, spent at the queue
+  with typed refusals; `rest` recovers the pool between fights (ticket
+  #31, [Decision 049](./decisions.md#decision-049-focus-is-a-real-economy-spend-on-queue-refund-on-replace-rest-to-recover))
 
 Possible improvements:
 
@@ -414,7 +417,9 @@ Defeat behavior is locked in [Decision 008](./decisions.md#decision-008-defeat-r
 Possible failure modes:
 
 - Health reaches zero and player wakes at a safe room
-- Focus depletion blocks rituals until rest
+- Focus depletion blocks rituals until rest — **shipped for skills**
+  (ticket #31): an empty pool refuses `power strike`/`guard` at the queue
+  until the player rests (out of combat); rituals will join when they land
 - Broken oath changes NPC trust or ending path
 - Enemy becomes stronger or moves
 - A route closes but another opens

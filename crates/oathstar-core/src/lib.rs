@@ -835,6 +835,18 @@ const DEFAULT_COMBAT_PULSE_TICKS: u64 = 2;
 /// #25). Heavier than the baseline strike, and just as fixed/deterministic.
 const POWER_STRIKE_DAMAGE: i32 = 6;
 
+/// Focus a power strike commits when it is queued (ticket #31). Spend happens
+/// at the queue — the moment of commitment — and the engine refunds it if the
+/// action is replaced or the fight ends before it fires. Like
+/// [`POWER_STRIKE_DAMAGE`], an engine const until module-authored skill
+/// economies land.
+const POWER_STRIKE_FOCUS_COST: i32 = 2;
+
+/// Focus a guard commits when it is queued (ticket #31); same spend/refund
+/// rules as [`POWER_STRIKE_FOCUS_COST`]. With a 5-point pool the player
+/// affords two power strikes and a guard exactly.
+const GUARD_FOCUS_COST: i32 = 1;
+
 /// An in-progress combat encounter (ticket #22), held on [`GameState::combat`].
 ///
 /// Server-authoritative and deterministic. Enemy stats are copied from the
@@ -938,6 +950,29 @@ impl CombatAction {
             Self::Flee => "You are already watching for an opening to flee.",
             Self::Guard => "You are already set to guard.",
             Self::PowerStrike => "You are already winding up a power strike.",
+        }
+    }
+
+    /// The focus the action commits when queued (ticket #31). Flee is free —
+    /// the locked "free verbs stay free" rule; its cost of 0 is what keeps it
+    /// queueable at any focus, crafted negatives included.
+    const fn focus_cost(self) -> i32 {
+        match self {
+            Self::Flee => 0,
+            Self::Guard => GUARD_FOCUS_COST,
+            Self::PowerStrike => POWER_STRIKE_FOCUS_COST,
+        }
+    }
+
+    /// The refusal line when the player cannot afford to queue the action
+    /// (ticket #31). The `Flee` arm is product-unreachable while flee costs
+    /// nothing (the queue gate skips zero-cost actions); it exists so the
+    /// table stays uniform if flee ever prices in.
+    const fn focus_refusal(self) -> &'static str {
+        match self {
+            Self::Flee => "You lack the focus to flee.",
+            Self::Guard => "You lack the focus to guard.",
+            Self::PowerStrike => "You lack the focus for a power strike.",
         }
     }
 }
@@ -1261,6 +1296,47 @@ impl Engine {
         }
     }
 
+    /// Recover focus by resting (ticket #31): out of combat the pool refills
+    /// to its maximum in one settled breath; mid-encounter rest refuses —
+    /// recovery is a between-fights decision, not a combat action. An
+    /// already-full pool refuses as a no-op, and the `>=` means a crafted
+    /// above-max focus (ticket #28) is tolerated, never clamped down.
+    fn rest(&mut self) -> (bool, Vec<GameEvent>) {
+        if self.state.combat.is_some() {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    "There is no rest in the midst of battle.",
+                )],
+            );
+        }
+        if self.state.player.focus >= self.state.player.max_focus {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    "You are already fully focused.",
+                )],
+            );
+        }
+        self.state.player.focus = self.state.player.max_focus;
+        let line = format!(
+            "You rest. Focus returns to you ({}/{}).",
+            self.state.player.focus, self.state.player.max_focus
+        );
+        (
+            true,
+            vec![self.log(
+                EventChannel::Narrative,
+                OutputComponent::NarrativeMessage,
+                line,
+            )],
+        )
+    }
+
     /// Produce the opening scene for a freshly started game (REQ-001).
     ///
     /// A session emits no events until the player acts, so this gives a client
@@ -1296,7 +1372,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory.",
+                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory, rest.",
                 ));
             }
             Command::Look { target: None } => {
@@ -1357,6 +1433,11 @@ impl Engine {
             }
             Command::Inventory => {
                 events.extend(self.list_pack());
+            }
+            Command::Rest => {
+                let (accepted, rest_events) = self.rest();
+                events.extend(rest_events);
+                return self.response(accepted, events);
             }
             Command::Unknown { input } => {
                 events.push(self.log(
@@ -2006,13 +2087,37 @@ impl Engine {
         };
         let line = match combat.queued_action {
             Some(queued) if queued == action => action.queue_already().to_string(),
-            Some(_) => {
+            replaced => {
+                // Ticket #31 — focus settles at the queue (spend-on-queue):
+                // replacing a different action refunds its committed cost
+                // before the new cost is charged, so change-tack can never
+                // double-spend or profit. Saturating throughout: a crafted
+                // save can carry focus at either i32 extreme (ticket #28).
+                let cost = action.focus_cost();
+                let effective = self
+                    .state
+                    .player
+                    .focus
+                    .saturating_add(replaced.map_or(0, CombatAction::focus_cost));
+                // `cost > 0` keeps free verbs free at ANY focus — a crafted
+                // negative pool must never soft-lock flee (REQ-002/003).
+                if cost > 0 && effective < cost {
+                    return (
+                        false,
+                        vec![self.log(
+                            EventChannel::System,
+                            OutputComponent::SystemMessage,
+                            action.focus_refusal(),
+                        )],
+                    );
+                }
+                self.state.player.focus = effective.saturating_sub(cost);
                 combat.queued_action = Some(action);
-                format!("You change tack. {}", action.queue_confirmation())
-            }
-            None => {
-                combat.queued_action = Some(action);
-                action.queue_confirmation().to_string()
+                if replaced.is_some() {
+                    format!("You change tack. {}", action.queue_confirmation())
+                } else {
+                    action.queue_confirmation().to_string()
+                }
             }
         };
         combat.log.push(line.clone());
@@ -2260,6 +2365,13 @@ impl Engine {
             .combat
             .take()
             .expect("end_combat is only called mid-encounter (combat is active)");
+        // Ticket #31: an action still queued when the fight ends never fired —
+        // its committed focus comes back on EVERY outcome (a fired action was
+        // already take()n by the skill window, so no double refund). Defeat's
+        // full restore below overwrites this; the rule stays uniform.
+        if let Some(unfired) = combat.queued_action {
+            self.state.player.focus = self.state.player.focus.saturating_add(unfired.focus_cost());
+        }
         let enemy_name = combat.enemy_name;
         let text = match outcome {
             CombatOutcome::Victory => {
@@ -2279,6 +2391,10 @@ impl Engine {
             }
             CombatOutcome::Defeat => {
                 self.state.player.hp = self.state.player.max_hp;
+                // Ticket #31: focus resets with hp — "battered but whole" is
+                // a full reset (#26's defeat shape); victory and flee keep
+                // the spent pool instead (the economy's bite).
+                self.state.player.focus = self.state.player.max_focus;
                 let lost = self.apply_defeat_penalty();
                 self.state.current_room_id = self.world.start_room_id.clone();
                 let start_title = self.current_room().title.clone();
@@ -8174,5 +8290,529 @@ mod tests {
             "the banked milestones surface at the next combat end: {t2:?}"
         );
         assert_eq!(loaded.snapshot().player.level, 3);
+    }
+
+    // ============================================================
+    //  ticket #31 — focus economy v1
+    // ============================================================
+
+    // The refusal line of a response, asserted by exact value (the refusal
+    // family is System-channel — never a combat line, never logged).
+    fn system_line(response: &CommandResponse) -> String {
+        match &response.events[0].kind {
+            GameEventKind::LogMessage {
+                component: OutputComponent::SystemMessage,
+                text,
+            } => text.clone(),
+            other => panic!("expected a system line, got {other:?}"),
+        }
+    }
+
+    // F-T9 (REQ-001/002): the cost and refusal tables, every variant exact —
+    // the only killer for the const-fn table mutants (enumerate-variant rule).
+    #[test]
+    fn focus_cost_and_refusal_tables_are_exact() {
+        assert_eq!(CombatAction::Flee.focus_cost(), 0);
+        assert_eq!(CombatAction::Guard.focus_cost(), GUARD_FOCUS_COST);
+        assert_eq!(CombatAction::Guard.focus_cost(), 1);
+        assert_eq!(
+            CombatAction::PowerStrike.focus_cost(),
+            POWER_STRIKE_FOCUS_COST
+        );
+        assert_eq!(CombatAction::PowerStrike.focus_cost(), 2);
+        // Flee's refusal arm is product-unreachable while flee is free; the
+        // unit assert is its coverage + mutation pin.
+        assert_eq!(
+            CombatAction::Flee.focus_refusal(),
+            "You lack the focus to flee."
+        );
+        assert_eq!(
+            CombatAction::Guard.focus_refusal(),
+            "You lack the focus to guard."
+        );
+        assert_eq!(
+            CombatAction::PowerStrike.focus_refusal(),
+            "You lack the focus for a power strike."
+        );
+    }
+
+    // F-T1/T2/T4 (REQ-001): queueing spends the authored cost exactly once,
+    // observable in the snapshot, with the confirmation lines byte-identical
+    // to #25's. Flee stays free.
+    #[test]
+    fn queueing_a_skill_spends_its_cost_in_the_snapshot() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        let strike = engine.handle_command(cmd("power strike"));
+        assert!(strike.accepted);
+        assert_eq!(combat_line(&strike), "You wind up a power strike.");
+        assert_eq!(strike.snapshot.player.focus, 3, "5 - 2 on the queue");
+        assert_eq!(strike.snapshot.player.max_focus, 5, "the pool cap holds");
+
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        let guard = engine.handle_command(cmd("guard"));
+        assert_eq!(
+            combat_line(&guard),
+            "You ready your guard for the next blow."
+        );
+        assert_eq!(guard.snapshot.player.focus, 4, "5 - 1 on the queue");
+
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        let flee = engine.handle_command(cmd("flee"));
+        assert_eq!(combat_line(&flee), "You watch for an opening to flee.");
+        assert_eq!(flee.snapshot.player.focus, 5, "flee is free");
+    }
+
+    // F-T3 (REQ-001/003): re-queueing the same action charges nothing — the
+    // focus ledger across already / change-tack / already shows each cost
+    // taken exactly once.
+    #[test]
+    fn requeue_and_change_tack_keep_the_ledger_exact() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        assert_eq!(engine.handle_command(cmd("guard")).snapshot.player.focus, 4);
+        let again = engine.handle_command(cmd("guard"));
+        assert!(again.accepted);
+        assert_eq!(
+            again.snapshot.player.focus, 4,
+            "the already-arm never re-charges"
+        );
+        let switched = engine.handle_command(cmd("power strike"));
+        assert_eq!(
+            switched.snapshot.player.focus, 3,
+            "refund the guard (+1), charge the strike (-2)"
+        );
+        let again = engine.handle_command(cmd("power strike"));
+        assert_eq!(
+            again.snapshot.player.focus, 3,
+            "already winding up: no charge"
+        );
+    }
+
+    // F-T5 (REQ-001): the cost is committed at the queue — the firing window
+    // charges nothing more.
+    #[test]
+    fn a_fired_power_strike_charges_nothing_more() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray")); // r1: enemy 36
+        engine.handle_command(cmd("power strike")); // focus 3
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1: enemy 32; P2: strike fires → 26
+        assert_eq!(count_lines(&t2, "power strike slams"), 1);
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.player.focus, 3, "no second charge at resolution");
+        assert_eq!(enemy_of(&snapshot.combat.expect("active")).hp, 26);
+    }
+
+    // F-T6/T8a (REQ-002): the exact-affordability boundary queues — focus ==
+    // cost accepts and lands on zero (the `<` vs `<=` mutant killer).
+    #[test]
+    fn an_exactly_affordable_skill_queues() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.state.player.focus = 2;
+        let strike = engine.handle_command(cmd("power strike"));
+        assert!(strike.accepted, "focus == cost is affordable");
+        assert_eq!(strike.snapshot.player.focus, 0);
+        assert_eq!(
+            active_combat(&strike).queued_action.as_deref(),
+            Some("power_strike")
+        );
+
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.state.player.focus = 1;
+        let guard = engine.handle_command(cmd("guard"));
+        assert!(guard.accepted);
+        assert_eq!(guard.snapshot.player.focus, 0);
+    }
+
+    // F-T7/T8b (REQ-002): one short of the cost refuses with the typed line
+    // and changes no state — focus, queue, and the persisted battle log all
+    // hold (the refusal is System-channel, never logged).
+    #[test]
+    fn an_unaffordable_skill_refuses_and_mutates_nothing() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.state.player.focus = 1;
+        let log_before = engine.state.combat.as_ref().expect("active").log.len();
+        let strike = engine.handle_command(cmd("power strike"));
+        assert!(!strike.accepted, "focus == cost - 1 refuses");
+        assert_eq!(
+            system_line(&strike),
+            "You lack the focus for a power strike."
+        );
+        assert_eq!(strike.snapshot.player.focus, 1, "nothing spent");
+        assert_eq!(active_combat(&strike).queued_action, None, "nothing queued");
+        assert_eq!(
+            engine.state.combat.as_ref().expect("active").log.len(),
+            log_before,
+            "the refusal never lands in the persisted battle log"
+        );
+
+        engine.state.player.focus = 0;
+        let guard = engine.handle_command(cmd("guard"));
+        assert!(!guard.accepted);
+        assert_eq!(system_line(&guard), "You lack the focus to guard.");
+        assert_eq!(guard.snapshot.player.focus, 0);
+    }
+
+    // F-T10 (REQ-002/003): flee queues at zero focus — the `cost > 0` arm of
+    // the gate, exercised independently of the affordability arm.
+    #[test]
+    fn flee_queues_at_zero_focus() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.state.player.focus = 0;
+        let flee = engine.handle_command(cmd("flee"));
+        assert!(flee.accepted, "free verbs stay free");
+        assert_eq!(combat_line(&flee), "You watch for an opening to flee.");
+        assert_eq!(flee.snapshot.player.focus, 0);
+    }
+
+    // F-T11/T12/T13 (REQ-003): the change-tack chain settles deterministically
+    // — refund the replaced cost, charge the new one; replacing a paid strike
+    // with free flee lands exactly back at the pre-queue pool (no gain).
+    #[test]
+    fn change_tack_settles_refund_then_charge() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        assert_eq!(engine.handle_command(cmd("guard")).snapshot.player.focus, 4);
+        let to_strike = engine.handle_command(cmd("power strike"));
+        assert_eq!(
+            combat_line(&to_strike),
+            "You change tack. You wind up a power strike."
+        );
+        assert_eq!(to_strike.snapshot.player.focus, 3, "4 + 1 - 2");
+        let to_guard = engine.handle_command(cmd("guard"));
+        assert_eq!(to_guard.snapshot.player.focus, 4, "3 + 2 - 1");
+        let to_flee = engine.handle_command(cmd("flee"));
+        assert_eq!(
+            combat_line(&to_flee),
+            "You change tack. You watch for an opening to flee."
+        );
+        assert_eq!(
+            to_flee.snapshot.player.focus, 5,
+            "a full refund and a free queue: exactly the pre-queue pool, never more"
+        );
+    }
+
+    // F-T14/T15 (REQ-003): the refund-adjusted boundary, both arms — a
+    // replace the refund cannot cover refuses (old action and old charge
+    // stand); one more point of focus and the same replace queues.
+    #[test]
+    fn change_tack_respects_the_refund_adjusted_boundary() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.state.player.focus = 1;
+        assert!(engine.handle_command(cmd("guard")).accepted); // focus 0, guard queued
+        let refused = engine.handle_command(cmd("power strike"));
+        assert!(!refused.accepted, "0 + 1 refunded < 2");
+        assert_eq!(
+            system_line(&refused),
+            "You lack the focus for a power strike."
+        );
+        assert_eq!(refused.snapshot.player.focus, 0, "the old charge stands");
+        assert_eq!(
+            active_combat(&refused).queued_action.as_deref(),
+            Some("guard"),
+            "the old action stands"
+        );
+
+        engine.state.player.focus = 1; // 1 + 1 refunded == 2: affordable
+        let switched = engine.handle_command(cmd("power strike"));
+        assert!(switched.accepted);
+        assert_eq!(switched.snapshot.player.focus, 0);
+        assert_eq!(
+            active_combat(&switched).queued_action.as_deref(),
+            Some("power_strike")
+        );
+    }
+
+    // F-T16 (REQ-004): rest out of combat restores the pool to its maximum
+    // with the exact narrative line.
+    #[test]
+    fn rest_restores_focus_out_of_combat() {
+        let mut engine = combat_engine(40, 1);
+        engine.state.player.focus = 1;
+        let rest = engine.handle_command(cmd("rest"));
+        assert!(rest.accepted);
+        assert!(
+            matches!(
+                &rest.events[0].kind,
+                GameEventKind::LogMessage { component: OutputComponent::NarrativeMessage, text }
+                    if text == "You rest. Focus returns to you (5/5)."
+            ),
+            "the narrative line by value: {:?}",
+            rest.events
+        );
+        assert_eq!(rest.snapshot.player.focus, 5);
+    }
+
+    // F-T17 (REQ-004): rest refuses mid-combat with the typed line and no
+    // recovery (the pool staged off-max so the no-op is distinguishable).
+    #[test]
+    fn rest_refuses_mid_combat() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.state.player.focus = 1;
+        let rest = engine.handle_command(cmd("rest"));
+        assert!(!rest.accepted);
+        assert_eq!(
+            system_line(&rest),
+            "There is no rest in the midst of battle."
+        );
+        assert_eq!(rest.snapshot.player.focus, 1, "no recovery mid-fight");
+    }
+
+    // F-T18 (REQ-004): an already-full pool refuses as a no-op (`>=` — the
+    // full-pool arm of the gate).
+    #[test]
+    fn rest_refuses_when_already_full() {
+        let mut engine = combat_engine(40, 1);
+        let rest = engine.handle_command(cmd("rest"));
+        assert!(!rest.accepted);
+        assert_eq!(system_line(&rest), "You are already fully focused.");
+        assert_eq!(rest.snapshot.player.focus, 5);
+    }
+
+    // F-T20 (REQ-004): help lists the recovery verb.
+    #[test]
+    fn help_lists_rest() {
+        let mut engine = combat_engine(10, 3);
+        let response = engine.handle_command(cmd("help"));
+        let text = match &response.events[0].kind {
+            GameEventKind::LogMessage { text, .. } => text.clone(),
+            other => panic!("help is a log line, got {other:?}"),
+        };
+        assert!(text.contains("rest"), "help lists rest: {text}");
+    }
+
+    // F-T21 (REQ-005): victory keeps the spent pool — the economy's bite.
+    #[test]
+    fn victory_keeps_the_spent_pool() {
+        let mut engine = combat_engine(14, 1);
+        engine.handle_command(cmd("attack stray")); // r1: enemy 10
+        engine.handle_command(cmd("power strike")); // focus 3
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1: enemy 6; P2: strike → 0, victory
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                }
+            )),
+            "the strike fells the stray: {t2:?}"
+        );
+        assert_eq!(engine.snapshot().player.focus, 3, "spent stays spent");
+    }
+
+    // F-T24 (REQ-003/005): a phase-1 kill ends the fight with the strike
+    // still queued — the unfired cost comes back.
+    #[test]
+    fn a_phase_one_kill_refunds_the_unfired_queue() {
+        let mut engine = combat_engine(8, 1);
+        engine.handle_command(cmd("attack stray")); // r1: enemy 4
+        engine.handle_command(cmd("power strike")); // focus 3, queued
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1: enemy 0 → victory; the window never runs
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                }
+            )),
+            "phase 1 fells the stray: {t2:?}"
+        );
+        assert_eq!(
+            count_lines(&t2, "power strike slams"),
+            0,
+            "the strike never fired"
+        );
+        assert_eq!(
+            engine.snapshot().player.focus,
+            5,
+            "the unfired cost refunds"
+        );
+    }
+
+    // F-T22 (REQ-005): defeat restores focus beside hp — battered but whole —
+    // and executes the refund-then-restore order with an action still queued.
+    #[test]
+    fn defeat_restores_focus_with_hp() {
+        let mut engine = combat_engine(40, 5);
+        engine.handle_command(cmd("attack stray")); // r1: enemy 36, player 15
+        engine.handle_command(cmd("power strike")); // focus 3, queued
+        engine.state.player.hp = 3; // the next return (5) is lethal
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P1: the return fells the player → defeat
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Defeat,
+                    ..
+                }
+            )),
+            "the return fells the player: {t2:?}"
+        );
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.player.hp, 20, "defeat restores hp (the #26 reset)");
+        assert_eq!(snapshot.player.focus, 5, "defeat restores focus with it");
+        assert!(snapshot.combat.is_none());
+    }
+
+    // F-T23 (REQ-005): fleeing keeps the spent pool — a fired guard's cost
+    // stays spent through the fled outcome.
+    #[test]
+    fn fleeing_keeps_the_spent_pool() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.handle_command(cmd("guard")); // focus 4
+        let _ = engine.tick();
+        let _ = engine.tick(); // P2 arms the guard; the queue clears
+        engine.handle_command(cmd("flee")); // free
+        let _ = engine.tick();
+        let t2 = engine.tick(); // P2 resolves the flee
+        assert!(
+            t2.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Fled,
+                    ..
+                }
+            )),
+            "the flee resolves: {t2:?}"
+        );
+        assert_eq!(
+            engine.snapshot().player.focus,
+            4,
+            "the guard's point stays spent"
+        );
+    }
+
+    // F-T28a (REQ-002/007): a crafted negative pool never blocks flee — the
+    // `cost > 0` conjunct holds at -1 directly and at i32::MIN through the
+    // load boundary (the required `>` → `>=` mutant killer).
+    #[test]
+    fn crafted_negative_focus_never_blocks_flee() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.state.player.focus = -1;
+        let strike = engine.handle_command(cmd("power strike"));
+        assert!(!strike.accepted);
+        assert_eq!(
+            system_line(&strike),
+            "You lack the focus for a power strike."
+        );
+        let guard = engine.handle_command(cmd("guard"));
+        assert!(!guard.accepted);
+        assert_eq!(system_line(&guard), "You lack the focus to guard.");
+        let flee = engine.handle_command(cmd("flee"));
+        assert!(flee.accepted, "flee is free even in deficit");
+        assert_eq!(combat_line(&flee), "You watch for an opening to flee.");
+        assert_eq!(flee.snapshot.player.focus, -1, "free means untouched");
+
+        let mut donor = combat_engine(40, 1);
+        donor.handle_command(cmd("attack stray"));
+        let mut data = donor.save_data();
+        data.state.player.focus = i32::MIN;
+        let mut loaded = Engine::from_save(data).expect("a crafted pool is tolerated");
+        let flee = loaded.handle_command(cmd("flee"));
+        assert!(
+            flee.accepted,
+            "flee survives the extreme through the load boundary"
+        );
+        assert_eq!(flee.snapshot.player.focus, i32::MIN);
+    }
+
+    // F-T28b (REQ-007): every new arithmetic site survives crafted extremes —
+    // the end-of-fight refund and the change-tack refund saturate at i32::MAX
+    // (no overflow panic), rest never clamps an above-max pool, a zero-max
+    // pool refuses rest, and rest recovers from i32::MIN.
+    #[test]
+    fn crafted_extremes_survive_the_new_arithmetic() {
+        // End-of-fight refund at i32::MAX: phase-1 kill with a queued strike.
+        let mut donor = combat_engine(8, 1);
+        donor.handle_command(cmd("attack stray")); // r1: enemy 4
+        let mut data = donor.save_data();
+        data.state.player.focus = i32::MAX;
+        data.state
+            .combat
+            .as_mut()
+            .expect("mid-fight save")
+            .queued_action = Some(CombatAction::PowerStrike);
+        let mut loaded = Engine::from_save(data).expect("crafted extremes load");
+        let _ = loaded.tick();
+        let _ = loaded.tick(); // P1 kill → the refund saturates, no panic
+        assert!(loaded.snapshot().combat.is_none(), "the fight resolved");
+        assert_eq!(
+            loaded.snapshot().player.focus,
+            i32::MAX,
+            "saturated, not wrapped"
+        );
+
+        // Change-tack refund at i32::MAX: replace the crafted queued strike.
+        let mut donor = combat_engine(40, 1);
+        donor.handle_command(cmd("attack stray"));
+        let mut data = donor.save_data();
+        data.state.player.focus = i32::MAX;
+        data.state
+            .combat
+            .as_mut()
+            .expect("mid-fight save")
+            .queued_action = Some(CombatAction::PowerStrike);
+        let mut loaded = Engine::from_save(data).expect("crafted extremes load");
+        let switched = loaded.handle_command(cmd("guard"));
+        assert!(switched.accepted);
+        assert_eq!(
+            switched.snapshot.player.focus,
+            i32::MAX - 1,
+            "saturated refund, exact charge, no panic"
+        );
+
+        // Rest tolerance: above-max refuses (never clamps down) …
+        let mut engine = combat_engine(40, 1);
+        engine.state.player.focus = 7;
+        let rest = engine.handle_command(cmd("rest"));
+        assert!(!rest.accepted);
+        assert_eq!(system_line(&rest), "You are already fully focused.");
+        assert_eq!(
+            rest.snapshot.player.focus, 7,
+            "an above-max pool is tolerated"
+        );
+        // … a zero-max pool has nothing to recover …
+        engine.state.player.focus = 0;
+        engine.state.player.max_focus = 0;
+        assert!(!engine.handle_command(cmd("rest")).accepted);
+        // … and a deficit recovers to the true maximum.
+        let mut engine = combat_engine(40, 1);
+        engine.state.player.focus = i32::MIN;
+        let rest = engine.handle_command(cmd("rest"));
+        assert!(rest.accepted);
+        assert_eq!(rest.snapshot.player.focus, 5);
+    }
+
+    // F-T29 (REQ-007): a spent pool round-trips the save boundary — 5/5 was
+    // the only value ever pinned before the economy.
+    #[test]
+    fn spent_focus_round_trips_through_save() {
+        let mut engine = combat_engine(40, 1);
+        engine.handle_command(cmd("attack stray"));
+        engine.handle_command(cmd("power strike")); // focus 3
+        let at_save = snapshot_value(&engine);
+        let restored = Engine::from_save(engine.save_data()).expect("mid-fight save loads");
+        assert_eq!(snapshot_value(&restored), at_save, "byte-identical restore");
+        assert_eq!(
+            restored.snapshot().player.focus,
+            3,
+            "the spent value survives"
+        );
     }
 }

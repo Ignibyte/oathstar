@@ -2439,3 +2439,63 @@ Revisit when:
 - A non-combat XP source arrives (the must-sync note above becomes a
   refactor: sync inside an `award_xp` helper).
 - Level-gated content or benefits beyond max HP are wanted.
+
+## Decision 049: Focus Is A Real Economy — Spend On Queue, Refund On Replace, Rest To Recover
+
+Status: Locked
+
+Date: 2026-06-11
+
+What was decided (ticket #31):
+
+- **Costs are engine constants, priced at the queue.**
+  `POWER_STRIKE_FOCUS_COST = 2`, `GUARD_FOCUS_COST = 1`; `attack` and
+  `flee` stay free (flee's cost is the pulse you endure — Decision 045's
+  shape). The spend happens in `queue_combat_action` — the moment of
+  commitment — so the check and the charge are atomic at one seam.
+  Spend-on-resolve was rejected: it splits the invariant across two sites
+  that can drift when a future focus spender lands between them (the #24
+  "latent simplification meets a new execution context" failure shape).
+- **The refusal is typed, at the queue, and changes nothing.** The gate is
+  `cost > 0 && effective < cost` — `effective` being the pool plus the
+  refund of whatever a change-tack would replace. Refused queues emit a
+  per-action System line ("You lack the focus for a power strike." / "…to
+  guard.") and never touch the persisted battle log, the queued action, or
+  the pool. The `cost > 0` conjunct keeps free verbs free at ANY pool
+  value, so a crafted negative focus can never soft-lock `flee`.
+- **Settlement is refund-then-charge, uniformly.** Replacing a queued
+  action refunds its cost before the new cost charges (no double-spend, no
+  free-cancel gain — strike→flee lands exactly back where it started); a
+  fight that ends with an action still queued refunds the unfired cost on
+  every outcome (the skill window `take()`s before firing, so a fired
+  action can never double-refund).
+- **Combat ends settle the pool deterministically.** Victory and flee keep
+  the spent pool — the economy's bite. Defeat restores focus beside HP:
+  "battered but whole" is a full reset (Decision 044's defeat shape).
+- **Recovery is the `rest` verb — no tick regen.** Out of combat, `rest`
+  refills the pool to max in one breath (Narrative line with the values);
+  mid-encounter it refuses ("There is no rest in the midst of battle.");
+  an already-full pool is a typed no-op. Tick regen was rejected: it adds
+  arithmetic to the spawned tick task (where a panic dies silently — the
+  #28 lesson) and softens the economy (waiting = free focus). The `>=`
+  full-pool guard means a crafted above-max focus is tolerated, never
+  clamped — rest can't be tricked into data loss.
+- **All new arithmetic saturates.** Spend, both refunds, and the
+  affordability compare survive i32 extremes from crafted saves without
+  panicking (the operator-sweep rule applied to the diff); `from_save`
+  still gates nothing numeric — values are tolerated, not corrected.
+- **The HUD bar is the visibility surface.** `PlayerSnapshot.focus` already
+  renders; the battle modal's participants stay hp-only (no protocol
+  change). Zero client/storage/content diffs — the engine is the whole
+  ticket.
+
+Revisit when:
+
+- Authored skills/classes land (module-authored costs replace the consts,
+  with validation machinery like announcements got).
+- Warding/rituals arrive (the mechanics doc's "focus for warding" — they
+  join the same spend seam).
+- Focus items or max-focus growth land (Decision 048 holds level-ups at
+  HP-only; growth needs its own decision).
+- A second focus spender can run between queue and resolve (re-examine
+  spend-on-queue's exploit analysis before adding it).

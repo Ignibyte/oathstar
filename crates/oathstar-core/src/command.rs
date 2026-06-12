@@ -104,6 +104,10 @@ pub enum Command {
     /// `inventory` / `pack` / `i` — list carried items (ticket #20). Bare verb,
     /// strict arity; trailing tokens make it [`Unknown`](Self::Unknown).
     Inventory,
+    /// `rest` — settle and recover focus (ticket #31). Bare verb, strict
+    /// arity; the engine restores focus out of combat and refuses it
+    /// mid-encounter.
+    Rest,
     /// Input that matched no known command; carries the collapsed echo of the raw
     /// input for a helpful failure message. The engine mutates no state for it.
     Unknown { input: String },
@@ -247,10 +251,10 @@ pub fn parse(input: &str) -> Command {
 }
 
 /// Parse the bare, strict-arity verbs (`swear`/`vow`, `confront`/`challenge`,
-/// `flee`, `guard`, `inventory`/`pack`/`i`) — each takes no trailing tokens. Returns
-/// `Some(command)` when `verb` is one of them (a trailing token yields
-/// `Some(Unknown)`); `None` when `verb` is not a bare verb so `parse` keeps
-/// trying. Grouping these keeps `parse` under the clippy line ceiling (#20).
+/// `flee`, `guard`, `inventory`/`pack`/`i`, `rest`) — each takes no trailing
+/// tokens. Returns `Some(command)` when `verb` is one of them (a trailing token
+/// yields `Some(Unknown)`); `None` when `verb` is not a bare verb so `parse`
+/// keeps trying. Grouping these keeps `parse` under the clippy line ceiling (#20).
 fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
     let command = match verb {
         "swear" | "vow" => Command::Swear,
@@ -258,6 +262,7 @@ fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
         "flee" => Command::Flee,
         "guard" => Command::Guard,
         "inventory" | "pack" | "i" => Command::Inventory,
+        "rest" => Command::Rest,
         _ => return None,
     };
     if rest.is_empty() {
@@ -720,6 +725,29 @@ mod tests {
                 input: "guard now".to_string()
             },
             "trailing tokens refuse — strict arity"
+        );
+    }
+
+    // F-T19 (ticket #31, REQ-004): `rest` is a bare, strict-arity verb like
+    // its siblings; near-misses stay unknown.
+    #[test]
+    fn rest_parses_as_bare_strict_arity_verb() {
+        assert_eq!(parse("rest"), Command::Rest);
+        assert_eq!(parse("REST"), Command::Rest, "the verb is case-folded");
+        assert_eq!(parse("  rest  "), Command::Rest, "whitespace trims");
+        assert_eq!(
+            parse("rest now"),
+            Command::Unknown {
+                input: "rest now".to_string()
+            },
+            "trailing tokens refuse — strict arity"
+        );
+        assert_eq!(
+            parse("rests"),
+            Command::Unknown {
+                input: "rests".to_string()
+            },
+            "near-miss verbs stay unknown"
         );
     }
 
