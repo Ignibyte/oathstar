@@ -155,6 +155,11 @@ pub struct CombatProfile {
     /// valid and a missing reward is zero — never invented (REQ-002).
     #[serde(default)]
     pub xp: u64,
+    /// Authored coins awarded on a combat victory (ticket #34) — the economy's
+    /// faucet, `xp`'s exact template: serde-defaulted, saturating award,
+    /// never invented when absent.
+    #[serde(default)]
+    pub coins: u64,
 }
 
 /// A typed interaction capability declared by an entity's role tags (ticket #21).
@@ -249,6 +254,12 @@ pub struct Item {
     /// tag list. No equipment/weight/rarity/stacking semantics in v1.
     #[serde(default)]
     pub flags: Vec<String>,
+    /// Authored trade value in coins (ticket #34): the buy price; the sell
+    /// price is `max(1, value / 2)`. `0` (the default) means priceless — a
+    /// vendor will neither sell nor buy it, so flavor items stay out of the
+    /// economy unless a module opts them in.
+    #[serde(default)]
+    pub value: u64,
 }
 
 /// A swearable oath defined by a module — leaf content data.
@@ -795,6 +806,11 @@ pub struct PlayerState {
     pub max_hp: i32,
     pub focus: i32,
     pub max_focus: i32,
+    /// The player's coin purse (ticket #34). `#[serde(default)]` keeps a
+    /// pre-commerce v2 save loadable as a coinless player — sound state, the
+    /// additive-field posture (no format bump).
+    #[serde(default)]
+    pub coins: u64,
 }
 
 /// Damage the player deals per strike (ticket #22). Fixed and deterministic (no
@@ -812,6 +828,18 @@ const LEVEL_XP_THRESHOLDS: [u64; 4] = [10, 30, 60, 100];
 /// Maximum-HP growth per level gained (ticket #30). Each level also heals to
 /// the new maximum — the milestone moment.
 const LEVEL_UP_MAX_HP_GROWTH: i32 = 5;
+
+/// The sell price a vendor pays for an item of authored `value` (ticket #34):
+/// half the buy price, floored at one coin so any sellable item is worth
+/// something. Callers refuse zero-value items before pricing them.
+const fn sell_price(value: u64) -> u64 {
+    let half = value / 2;
+    if half == 0 {
+        1
+    } else {
+        half
+    }
+}
 
 /// The level the deterministic curve assigns to `xp` (ticket #30): 1 plus the
 /// number of [`LEVEL_XP_THRESHOLDS`] crossed. Pure, total, RNG-free — identical
@@ -1086,6 +1114,7 @@ impl Engine {
                 max_hp: 20,
                 focus: 5,
                 max_focus: 5,
+                coins: 0,
             },
             oath: None,
             pack: Vec::new(),
@@ -1183,6 +1212,7 @@ impl Engine {
                 max_hp: self.state.player.max_hp,
                 focus: self.state.player.focus,
                 max_focus: self.state.player.max_focus,
+                coins: self.state.player.coins,
             },
             room: room_snapshot,
             map,
@@ -1372,7 +1402,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory, rest.",
+                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory, rest, shop, buy, sell.",
                 ));
             }
             Command::Look { target: None } => {
@@ -1386,58 +1416,45 @@ impl Engine {
             Command::Move(direction) => {
                 events.extend(self.move_direction(direction));
             }
-            Command::Swear => {
-                let (accepted, swear_events) = self.swear();
-                events.extend(swear_events);
-                return self.response(accepted, events);
-            }
-            Command::Confront => {
-                let (accepted, confront_events) = self.confront();
-                events.extend(confront_events);
-                return self.response(accepted, events);
-            }
+            Command::Swear => return self.acted(events, Self::swear),
+            Command::Confront => return self.acted(events, Self::confront),
             Command::Attack { target } => {
-                let (accepted, attack_events) = self.attack(target.as_deref());
-                events.extend(attack_events);
-                return self.response(accepted, events);
+                return self.acted(events, |engine| engine.attack(target.as_deref()));
             }
             Command::Flee => {
-                let (accepted, flee_events) = self.queue_combat_action(CombatAction::Flee);
-                events.extend(flee_events);
-                return self.response(accepted, events);
+                return self.acted(events, |engine| {
+                    engine.queue_combat_action(CombatAction::Flee)
+                });
             }
             Command::Guard => {
-                let (accepted, guard_events) = self.queue_combat_action(CombatAction::Guard);
-                events.extend(guard_events);
-                return self.response(accepted, events);
+                return self.acted(events, |engine| {
+                    engine.queue_combat_action(CombatAction::Guard)
+                });
             }
             Command::PowerStrike => {
-                let (accepted, strike_events) = self.queue_combat_action(CombatAction::PowerStrike);
-                events.extend(strike_events);
-                return self.response(accepted, events);
+                return self.acted(events, |engine| {
+                    engine.queue_combat_action(CombatAction::PowerStrike)
+                });
             }
             Command::Talk { target } => {
-                let (accepted, talk_events) = self.talk_at(&target);
-                events.extend(talk_events);
-                return self.response(accepted, events);
+                return self.acted(events, |engine| engine.talk_at(&target));
             }
             Command::Take { target } => {
-                let (accepted, take_events) = self.take_at(&target);
-                events.extend(take_events);
-                return self.response(accepted, events);
+                return self.acted(events, |engine| engine.take_at(&target));
             }
             Command::Drop { target } => {
-                let (accepted, drop_events) = self.drop_at(&target);
-                events.extend(drop_events);
-                return self.response(accepted, events);
+                return self.acted(events, |engine| engine.drop_at(&target));
             }
             Command::Inventory => {
                 events.extend(self.list_pack());
             }
-            Command::Rest => {
-                let (accepted, rest_events) = self.rest();
-                events.extend(rest_events);
-                return self.response(accepted, events);
+            Command::Rest => return self.acted(events, Self::rest),
+            Command::Shop => return self.acted(events, Self::shop),
+            Command::Buy { target } => {
+                return self.acted(events, |engine| engine.buy_at(&target));
+            }
+            Command::Sell { target } => {
+                return self.acted(events, |engine| engine.sell_at(&target));
             }
             Command::Unknown { input } => {
                 events.push(self.log(
@@ -1450,6 +1467,20 @@ impl Engine {
         }
 
         self.response(true, events)
+    }
+
+    /// Run an `(accepted, events)`-shaped command action and fold its events
+    /// into the response — the shared tail of every acting verb arm in
+    /// [`Self::handle_command`] (extracted at ticket #34 to keep that match
+    /// under the clippy line ceiling, the #19/#20 recurring class).
+    fn acted(
+        &mut self,
+        mut events: Vec<GameEvent>,
+        action: impl FnOnce(&mut Self) -> (bool, Vec<GameEvent>),
+    ) -> CommandResponse {
+        let (accepted, action_events) = action(self);
+        events.extend(action_events);
+        self.response(accepted, events)
     }
 
     fn response(&self, accepted: bool, events: Vec<GameEvent>) -> CommandResponse {
@@ -1828,6 +1859,261 @@ impl Engine {
             OutputComponent::SystemMessage,
             text,
         )]
+    }
+
+    /// The room's trading partner (ticket #34): the first placed, visible
+    /// shopkeeper. Same-room only — trade happens standing in the shop — and
+    /// a hidden vendor is skipped, because the reveal rule applies to every
+    /// player-facing surface (the #33 lesson).
+    fn find_vendor(&self) -> Option<&Entity> {
+        self.current_room()
+            .entities
+            .iter()
+            .filter_map(|entity_id| self.world.entities.get(entity_id))
+            .find(|entity| !entity.hidden && entity.has_role(Role::Shopkeeper))
+    }
+
+    /// The typed mid-combat trade refusal shared by all three shop verbs
+    /// (ticket #34) — combat is committed, like `rest`.
+    fn trade_combat_refusal(&mut self) -> (bool, Vec<GameEvent>) {
+        (
+            false,
+            vec![self.log(
+                EventChannel::System,
+                OutputComponent::SystemMessage,
+                "There is no trading in the midst of battle.",
+            )],
+        )
+    }
+
+    /// The typed no-vendor refusal shared by all three shop verbs (ticket #34).
+    fn trade_vendor_refusal(&mut self) -> (bool, Vec<GameEvent>) {
+        (
+            false,
+            vec![self.log(
+                EventChannel::System,
+                OutputComponent::SystemMessage,
+                "There is no shopkeeper here to trade with.",
+            )],
+        )
+    }
+
+    /// List the room vendor's stock with prices (ticket #34, REQ-001). The
+    /// listing is one joined Inventory line (the `list_pack` shape); an empty
+    /// stock is an honest typed refusal.
+    fn shop(&mut self) -> (bool, Vec<GameEvent>) {
+        if self.state.combat.is_some() {
+            return self.trade_combat_refusal();
+        }
+        let Some(vendor) = self.find_vendor() else {
+            return self.trade_vendor_refusal();
+        };
+        let vendor_name = vendor.name.clone();
+        let lines: Vec<String> = vendor
+            .inventory
+            .iter()
+            .filter_map(|item_id| self.world.items.get(item_id))
+            // Hidden stock stays off the counter — the reveal rule applies to
+            // every player-facing projection (the #33 lesson; `look` would
+            // conceal the same item).
+            .filter(|item| !item.hidden)
+            .map(|item| {
+                if item.value > 0 {
+                    format!("{} — {} coins", item.name, item.value)
+                } else {
+                    format!("{} — not for sale", item.name)
+                }
+            })
+            .collect();
+        if lines.is_empty() {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("{vendor_name} has nothing to sell."),
+                )],
+            );
+        }
+        let text = format!(
+            "{vendor_name} offers: {}. You have {} coins.",
+            lines.join("; "),
+            self.state.player.coins
+        );
+        (
+            true,
+            vec![self.log(
+                EventChannel::Inventory,
+                OutputComponent::SystemMessage,
+                text,
+            )],
+        )
+    }
+
+    /// Buy a stocked item from the room's vendor (ticket #34, REQ-002/003).
+    /// Settlement is exactly-once: the guards all pass before the single
+    /// mutation block moves the item stock→pack and deducts the price.
+    fn buy_at(&mut self, target: &str) -> (bool, Vec<GameEvent>) {
+        if self.state.combat.is_some() {
+            return self.trade_combat_refusal();
+        }
+        let Some(vendor) = self.find_vendor() else {
+            return self.trade_vendor_refusal();
+        };
+        let vendor_id = vendor.id.clone();
+        let vendor_name = vendor.name.clone();
+        let found = vendor
+            .inventory
+            .iter()
+            .filter_map(|item_id| self.world.items.get(item_id))
+            // Hidden stock reads as unstocked, mirroring the shop listing.
+            .filter(|item| !item.hidden)
+            .find(|item| awareness::name_or_alias_matches(&item.name, &item.aliases, target))
+            .map(|item| (item.id.clone(), item.name.clone(), item.value));
+        let Some((item_id, item_name, price)) = found else {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("{vendor_name} does not have '{target}'."),
+                )],
+            );
+        };
+        if price == 0 {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("{vendor_name} won't part with {item_name}."),
+                )],
+            );
+        }
+        if self.state.player.coins < price {
+            let coins = self.state.player.coins;
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("You cannot afford {item_name} ({price} coins; you have {coins})."),
+                )],
+            );
+        }
+        let stock = &mut self
+            .world
+            .entities
+            .get_mut(&vendor_id)
+            .expect("the vendor was resolved from this room moments ago")
+            .inventory;
+        if let Some(position) = stock.iter().position(|id| id == &item_id) {
+            stock.remove(position);
+        }
+        self.state.pack.push(item_id.clone());
+        // The affordability guard above makes underflow impossible; saturating
+        // keeps crafted-save extremes panic-free regardless (ticket #28 posture).
+        self.state.player.coins = self.state.player.coins.saturating_sub(price);
+        let coins = self.state.player.coins;
+        let mut events = vec![self.log(
+            EventChannel::Narrative,
+            OutputComponent::NarrativeMessage,
+            format!("You buy {item_name} for {price} coins. ({coins} remain.)"),
+        )];
+        // Acquisition is acquisition (inspect finding): a purchased oath
+        // objective fulfills the sworn oath exactly as a taken one does —
+        // `take_at`'s ordering, purchase line first.
+        events.extend(self.fulfill_oath_on_recovery(&item_id));
+        (true, events)
+    }
+
+    /// Sell a carried item to the room's vendor (ticket #34, REQ-004).
+    /// Oath-flagged items are never sellable (the clapper rule); a zero-value
+    /// item is worthless to vendors. Mirrors `buy_at`'s exactly-once shape.
+    fn sell_at(&mut self, target: &str) -> (bool, Vec<GameEvent>) {
+        if self.state.combat.is_some() {
+            return self.trade_combat_refusal();
+        }
+        let Some(vendor) = self.find_vendor() else {
+            return self.trade_vendor_refusal();
+        };
+        let vendor_id = vendor.id.clone();
+        let vendor_name = vendor.name.clone();
+        // Selling is lossy (buy-back costs double), so it gets `drop`'s
+        // ambiguity refusal rather than `find_in_pack`'s silent first match
+        // (inspect finding — the irreversible action must not guess).
+        let matches = self.matching_pack_items(target);
+        if matches.len() > 1 {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("More than one carried item matches '{target}'."),
+                )],
+            );
+        }
+        let Some((item_id, item_name, value, oath_bound)) = matches
+            .first()
+            .and_then(|(_, item_id, _)| self.world.items.get(item_id))
+            .map(|item| {
+                (
+                    item.id.clone(),
+                    item.name.clone(),
+                    item.value,
+                    item.flags.iter().any(|flag| flag == "oath"),
+                )
+            })
+        else {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("You are not carrying '{target}'."),
+                )],
+            );
+        };
+        if oath_bound {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("{item_name} is bound to your oath — you cannot sell it."),
+                )],
+            );
+        }
+        if value == 0 {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("{vendor_name} has no use for {item_name}."),
+                )],
+            );
+        }
+        let price = sell_price(value);
+        if let Some(position) = self.state.pack.iter().position(|id| id == &item_id) {
+            self.state.pack.remove(position);
+        }
+        self.world
+            .entities
+            .get_mut(&vendor_id)
+            .expect("the vendor was resolved from this room moments ago")
+            .inventory
+            .push(item_id);
+        self.state.player.coins = self.state.player.coins.saturating_add(price);
+        let coins = self.state.player.coins;
+        (
+            true,
+            vec![self.log(
+                EventChannel::Narrative,
+                OutputComponent::NarrativeMessage,
+                format!("You sell {item_name} for {price} coins. ({coins} now.)"),
+            )],
+        )
     }
 
     fn move_direction(&mut self, direction: Direction) -> Vec<GameEvent> {
@@ -2378,15 +2664,24 @@ impl Engine {
                 self.remove_entity_everywhere(&combat.enemy_id);
                 self.drop_enemy_inventory(&combat.enemy_id, &enemy_name, events);
                 let xp = self.enemy_xp_reward(&combat.enemy_id);
+                let coins = self.enemy_coin_reward(&combat.enemy_id);
                 // Saturating like the defeat penalty: a u64 award can never
                 // overflow-panic, however absurd the authored numbers get.
                 self.state.player.xp = self.state.player.xp.saturating_add(xp);
-                if xp > 0 {
-                    format!("You have defeated {enemy_name}. Victory! You gain {xp} XP.")
-                } else {
-                    // Byte-identical to the pre-#26 victory line, so an
-                    // unrewarded win behaves exactly as before (REQ-002).
-                    format!("You have defeated {enemy_name}. Victory!")
+                self.state.player.coins = self.state.player.coins.saturating_add(coins);
+                // Four authored-reward arms (ticket #34): the xp-only line
+                // stays byte-identical to #26, and an unrewarded win to #22.
+                match (xp > 0, coins > 0) {
+                    (true, true) => format!(
+                        "You have defeated {enemy_name}. Victory! You gain {xp} XP and {coins} coins."
+                    ),
+                    (true, false) => {
+                        format!("You have defeated {enemy_name}. Victory! You gain {xp} XP.")
+                    }
+                    (false, true) => {
+                        format!("You have defeated {enemy_name}. Victory! You gain {coins} coins.")
+                    }
+                    (false, false) => format!("You have defeated {enemy_name}. Victory!"),
                 }
             }
             CombatOutcome::Defeat => {
@@ -2447,6 +2742,17 @@ impl Engine {
             .get(enemy_id)
             .and_then(|entity| entity.combat.as_ref())
             .map_or(0, |profile| profile.xp)
+    }
+
+    /// The authored coins a defeated enemy awards (ticket #34): its combat
+    /// profile's `coins`, or 0 when no profile/reward exists — `enemy_xp_reward`'s
+    /// exact twin, total and never invented.
+    fn enemy_coin_reward(&self, enemy_id: &str) -> u64 {
+        self.world
+            .entities
+            .get(enemy_id)
+            .and_then(|entity| entity.combat.as_ref())
+            .map_or(0, |profile| profile.coins)
     }
 
     /// Drop a defeated enemy's authored inventory into the current room as
@@ -3132,6 +3438,7 @@ mod tests {
             hidden: false,
             kind: None,
             flags: Vec::new(),
+            value: 0,
         }
     }
 
@@ -3592,6 +3899,7 @@ mod tests {
             attack: 0,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         let mut entities = BTreeMap::new();
         entities.insert("warden".to_string(), warden);
@@ -4515,6 +4823,7 @@ mod tests {
             attack: 0,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         dialogue_warden.inventory = vec!["relic".to_string()];
         world.entities.insert("warden".to_string(), dialogue_warden);
@@ -5120,6 +5429,7 @@ mod tests {
             attack: stray_attack,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("stray".to_string(), stray);
 
@@ -5130,6 +5440,7 @@ mod tests {
             attack: 99,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("brute".to_string(), brute);
 
@@ -5148,6 +5459,7 @@ mod tests {
             attack: 1,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("wolf".to_string(), wolf);
 
@@ -5504,6 +5816,7 @@ mod tests {
             attack: 1,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("titan".to_string(), titan);
         let mut engine = Engine::try_new(world).expect("valid titan world");
@@ -5586,6 +5899,7 @@ mod tests {
             attack: 1,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         ok_world.entities.insert("ghoul".to_string(), ghoul);
         assert_eq!(ok_world.validate(), Ok(()));
@@ -5655,6 +5969,7 @@ mod tests {
             attack: 3,
             disclose_stats: true,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("stray".to_string(), stray);
 
@@ -5669,6 +5984,7 @@ mod tests {
             attack: 2,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("sage".to_string(), sage);
 
@@ -5679,6 +5995,7 @@ mod tests {
             attack: 1,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("wolf".to_string(), wolf);
 
@@ -5689,6 +6006,7 @@ mod tests {
             attack: 2,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("brute".to_string(), brute);
 
@@ -7715,6 +8033,7 @@ mod tests {
             attack,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world
     }
@@ -9005,6 +9324,7 @@ mod tests {
             attack: 1,
             disclose_stats: false,
             xp: 0,
+            coins: 0,
         });
         world.entities.insert("lurker".to_string(), lurker);
         let mut secret = item("secret");
@@ -9023,5 +9343,472 @@ mod tests {
             "the hidden lurker stays off the map (look conceals it too)"
         );
         assert!(!room.has_items, "the hidden secret stays off the map");
+    }
+
+    // ============================================================
+    //  ticket #34 — commerce v1
+    // ============================================================
+
+    // A commerce world: the combat fixture plus a vendor "keeper" placed in
+    // the start room ("field") stocking a priced lamp (8), a priceless relic
+    // (0), and nothing else; a sellable trinket (value 2) lies on the ground.
+    fn commerce_world() -> WorldDefinition {
+        let mut world = combat_world(8, 1);
+        // The fight stays available but the room's OTHER hostile leaves so a
+        // single victory clears the hostile presence.
+        world
+            .rooms
+            .get_mut("field")
+            .expect("fixture room")
+            .entities
+            .retain(|id| id != "brute");
+        let mut lamp = item("lamp");
+        lamp.value = 8;
+        world.items.insert("lamp".to_string(), lamp);
+        let mut relic = item("relic");
+        relic.value = 0;
+        world.items.insert("relic".to_string(), relic);
+        let mut trinket = item("trinket");
+        trinket.value = 2;
+        world.items.insert("trinket".to_string(), trinket);
+        let mut keeper = entity(
+            "keeper",
+            EntityKind::Actor,
+            &["shopkeeper"],
+            &["lamp", "relic"],
+        );
+        keeper.name = "Keeper".to_string();
+        world.entities.insert("keeper".to_string(), keeper);
+        let field = world.rooms.get_mut("field").expect("fixture room");
+        field.entities.push("keeper".to_string());
+        field.items.push("trinket".to_string());
+        world
+    }
+
+    fn commerce_engine() -> Engine {
+        Engine::try_new(commerce_world()).expect("valid commerce world")
+    }
+
+    // C-T1 (REQ-001): the listing — priced and priceless arms exact, the
+    // coins footer, and the empty-stock refusal.
+    #[test]
+    fn shop_lists_stock_with_prices() {
+        let mut engine = commerce_engine();
+        engine.state.player.coins = 3;
+        let listed = engine.handle_command(cmd("shop"));
+        assert!(listed.accepted);
+        assert_eq!(
+            log_text(&listed),
+            "Keeper offers: lamp — 8 coins; relic — not for sale. You have 3 coins."
+        );
+
+        // Empty the stock: the listing becomes the typed refusal.
+        engine
+            .world
+            .entities
+            .get_mut("keeper")
+            .expect("vendor")
+            .inventory
+            .clear();
+        let empty = engine.handle_command(cmd("browse"));
+        assert!(!empty.accepted);
+        assert_eq!(system_line(&empty), "Keeper has nothing to sell.");
+    }
+
+    // C-T1b (inspect #1): hidden stock stays off the counter and reads as
+    // unstocked at buy — the reveal rule on the commerce projection.
+    #[test]
+    fn hidden_stock_is_neither_listed_nor_buyable() {
+        let mut engine = commerce_engine();
+        engine.state.player.coins = 50;
+        engine
+            .world
+            .items
+            .get_mut("lamp")
+            .expect("authored item")
+            .hidden = true;
+        let listed = engine.handle_command(cmd("shop"));
+        assert!(
+            !log_text(&listed).contains("lamp"),
+            "hidden stock is not listed: {}",
+            log_text(&listed)
+        );
+        let bought = engine.handle_command(cmd("buy lamp"));
+        assert!(!bought.accepted);
+        assert_eq!(system_line(&bought), "Keeper does not have 'lamp'.");
+        assert_eq!(bought.snapshot.player.coins, 50, "nothing spent");
+    }
+
+    // C-T1c (inspect #4): a HIDDEN shopkeeper does not trade — the no-vendor
+    // refusal fires even though a visible non-shopkeeper (the stray) stands
+    // in the room (kills find_vendor's `&&` -> `||` mutant).
+    #[test]
+    fn a_hidden_shopkeeper_does_not_trade() {
+        let mut engine = commerce_engine();
+        engine
+            .world
+            .entities
+            .get_mut("keeper")
+            .expect("vendor")
+            .hidden = true;
+        let listed = engine.handle_command(cmd("shop"));
+        assert!(!listed.accepted);
+        assert_eq!(
+            system_line(&listed),
+            "There is no shopkeeper here to trade with."
+        );
+    }
+
+    // C-T1d (inspect #4): `shop` mid-combat refuses like every trade verb.
+    #[test]
+    fn shop_refuses_mid_combat_and_without_a_vendor() {
+        let mut engine = commerce_engine();
+        engine.handle_command(cmd("attack stray"));
+        let fighting = engine.handle_command(cmd("shop"));
+        assert!(!fighting.accepted);
+        assert_eq!(
+            system_line(&fighting),
+            "There is no trading in the midst of battle."
+        );
+
+        // A vendor-less room with a visible bystander (the elder walked past
+        // at fixture time) still refuses honestly.
+        let mut engine = combat_engine(8, 1);
+        let refused = engine.handle_command(cmd("shop"));
+        assert!(!refused.accepted);
+        assert_eq!(
+            system_line(&refused),
+            "There is no shopkeeper here to trade with."
+        );
+    }
+
+    // C-T2 (REQ-002/003): the affordability boundary, both arms exact — and
+    // the settlement is exactly-once on BOTH sides of the counter.
+    #[test]
+    fn buying_settles_exactly_once_at_the_boundary() {
+        let mut engine = commerce_engine();
+        engine.state.player.coins = 7; // price - 1
+        let refused = engine.handle_command(cmd("buy lamp"));
+        assert!(!refused.accepted);
+        assert_eq!(
+            system_line(&refused),
+            "You cannot afford lamp (8 coins; you have 7)."
+        );
+        assert_eq!(refused.snapshot.player.coins, 7, "nothing spent");
+        assert!(refused.snapshot.pack.is_empty(), "nothing gained");
+
+        engine.state.player.coins = 8; // exactly the price
+        let bought = engine.handle_command(cmd("buy lamp"));
+        assert!(bought.accepted);
+        assert_eq!(log_text(&bought), "You buy lamp for 8 coins. (0 remain.)");
+        assert_eq!(bought.snapshot.player.coins, 0);
+        assert_eq!(
+            bought.snapshot.pack.len(),
+            1,
+            "the lamp moved to the pack exactly once"
+        );
+        assert!(
+            !engine
+                .world
+                .entities
+                .get("keeper")
+                .expect("vendor")
+                .inventory
+                .contains(&"lamp".to_string()),
+            "the lamp left the stock exactly once"
+        );
+    }
+
+    // C-T3 (REQ-003): the remaining buy refusal arms, exact and stateless.
+    #[test]
+    fn buy_refusals_change_nothing() {
+        let mut engine = commerce_engine();
+        engine.state.player.coins = 50;
+
+        let unstocked = engine.handle_command(cmd("buy moonbeam"));
+        assert!(!unstocked.accepted);
+        assert_eq!(system_line(&unstocked), "Keeper does not have 'moonbeam'.");
+
+        let priceless = engine.handle_command(cmd("buy relic"));
+        assert!(!priceless.accepted);
+        assert_eq!(system_line(&priceless), "Keeper won't part with relic.");
+
+        engine.handle_command(cmd("attack stray"));
+        let fighting = engine.handle_command(cmd("buy lamp"));
+        assert!(!fighting.accepted);
+        assert_eq!(
+            system_line(&fighting),
+            "There is no trading in the midst of battle."
+        );
+
+        let mut vendorless = combat_engine(8, 1);
+        let nobody = vendorless.handle_command(cmd("buy lamp"));
+        assert!(!nobody.accepted);
+        assert_eq!(
+            system_line(&nobody),
+            "There is no shopkeeper here to trade with."
+        );
+        assert_eq!(
+            engine.snapshot().player.coins,
+            50,
+            "no refusal spent a coin"
+        );
+    }
+
+    // C-T4 (REQ-004): selling settles exactly once, and the sell-price floor
+    // pins value 1 -> 1, value 2 -> 1, value 6 -> 3 (the `/`->`%`/`*` and
+    // max-floor mutant killers).
+    #[test]
+    fn selling_credits_the_floored_half_price() {
+        assert_eq!(sell_price(1), 1, "the floor");
+        assert_eq!(sell_price(2), 1);
+        assert_eq!(sell_price(6), 3);
+
+        let mut engine = commerce_engine();
+        assert!(engine.handle_command(cmd("take trinket")).accepted);
+        let sold = engine.handle_command(cmd("sell trinket"));
+        assert!(sold.accepted);
+        assert_eq!(log_text(&sold), "You sell trinket for 1 coins. (1 now.)");
+        assert_eq!(sold.snapshot.player.coins, 1);
+        assert!(sold.snapshot.pack.is_empty(), "the trinket left the pack");
+        assert!(
+            engine
+                .world
+                .entities
+                .get("keeper")
+                .expect("vendor")
+                .inventory
+                .contains(&"trinket".to_string()),
+            "the trinket joined the stock exactly once"
+        );
+    }
+
+    // C-T5 (REQ-004): the sell refusal arms — not carried, oath-bound,
+    // worthless, ambiguous (inspect #3: the lossy verb refuses ambiguity
+    // like `drop`), mid-combat, vendor-less.
+    #[test]
+    fn sell_refusals_change_nothing() {
+        let mut engine = commerce_engine();
+
+        let missing = engine.handle_command(cmd("sell moonbeam"));
+        assert!(!missing.accepted);
+        assert_eq!(system_line(&missing), "You are not carrying 'moonbeam'.");
+
+        // Oath-bound: craft a flagged, valued item into the pack.
+        let mut sigil = item("sigil");
+        sigil.value = 9;
+        sigil.flags.push("oath".to_string());
+        engine.world.items.insert("sigil".to_string(), sigil);
+        engine.state.pack.push("sigil".to_string());
+        let bound = engine.handle_command(cmd("sell sigil"));
+        assert!(!bound.accepted);
+        assert_eq!(
+            system_line(&bound),
+            "sigil is bound to your oath — you cannot sell it."
+        );
+
+        // Worthless: a zero-value carried item.
+        engine.state.pack.push("relic_copy".to_string());
+        let mut relic_copy = item("relic_copy");
+        relic_copy.value = 0;
+        engine
+            .world
+            .items
+            .insert("relic_copy".to_string(), relic_copy);
+        let worthless = engine.handle_command(cmd("sell relic_copy"));
+        assert!(!worthless.accepted);
+        assert_eq!(system_line(&worthless), "Keeper has no use for relic_copy.");
+
+        // Ambiguous: two carried items sharing an alias refuse the sale.
+        let mut fang_a = item("fang_a");
+        fang_a.value = 4;
+        fang_a.aliases.push("fang".to_string());
+        let mut fang_b = item("fang_b");
+        fang_b.value = 4;
+        fang_b.aliases.push("fang".to_string());
+        engine.world.items.insert("fang_a".to_string(), fang_a);
+        engine.world.items.insert("fang_b".to_string(), fang_b);
+        engine.state.pack.push("fang_a".to_string());
+        engine.state.pack.push("fang_b".to_string());
+        let ambiguous = engine.handle_command(cmd("sell fang"));
+        assert!(!ambiguous.accepted);
+        assert_eq!(
+            system_line(&ambiguous),
+            "More than one carried item matches 'fang'."
+        );
+        assert_eq!(
+            engine.state.pack.len(),
+            4,
+            "every refusal left the pack whole"
+        );
+        assert_eq!(engine.snapshot().player.coins, 0, "no refusal paid a coin");
+    }
+
+    // C-T5b (inspect #2): a PURCHASED oath objective fulfills the sworn oath
+    // exactly as a taken one — acquisition is acquisition.
+    #[test]
+    fn buying_the_oath_objective_fulfills_it() {
+        // The boss-objective fixture authors a "sigil" objective; restock it
+        // on a vendor instead (valued, unflagged) — the ransom-the-relic shape.
+        let mut world = boss_objective_world(12, 1, 0);
+        let mut keeper = entity("keeper", EntityKind::Actor, &["shopkeeper"], &["sigil"]);
+        keeper.name = "Keeper".to_string();
+        world.entities.insert("keeper".to_string(), keeper);
+        world
+            .items
+            .get_mut("sigil")
+            .expect("authored objective")
+            .value = 5;
+        let start = world.start_room_id.clone();
+        world
+            .rooms
+            .get_mut(&start)
+            .expect("start room")
+            .entities
+            .push("keeper".to_string());
+        let mut engine = Engine::try_new(world).expect("valid world");
+        assert!(engine.handle_command(cmd("swear")).accepted);
+        engine.state.player.coins = 5;
+        let bought = engine.handle_command(cmd("buy sigil"));
+        assert!(bought.accepted, "{:?}", bought.events);
+        assert!(
+            bought
+                .events
+                .iter()
+                .any(|e| matches!(&e.kind, GameEventKind::OathFulfilled { .. })),
+            "the purchase fulfills the sworn oath: {:?}",
+            bought.events
+        );
+    }
+
+    // C-T6 (REQ-005): the victory coin award and ALL FOUR line-composition
+    // arms exact (the coins-only arm needs a crafted profile — no authored
+    // content has xp 0, coins > 0).
+    #[test]
+    fn victory_lines_compose_per_authored_rewards() {
+        let line_for = |xp: u64, coins: u64| {
+            let mut world = combat_world(4, 1);
+            if let Some(profile) = world
+                .entities
+                .get_mut("stray")
+                .expect("fixture stray")
+                .combat
+                .as_mut()
+            {
+                profile.xp = xp;
+                profile.coins = coins;
+            }
+            let mut engine = Engine::try_new(world).expect("valid world");
+            let won = engine.handle_command(cmd("attack stray")); // 4hp: one strike
+            let text = won
+                .events
+                .iter()
+                .find_map(|e| match &e.kind {
+                    GameEventKind::CombatEnded { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .expect("the fight ends in one strike");
+            (text, engine.snapshot().player.coins)
+        };
+
+        let (both, coins) = line_for(5, 4);
+        assert_eq!(
+            both,
+            "You have defeated Stray. Victory! You gain 5 XP and 4 coins."
+        );
+        assert_eq!(coins, 4, "the award lands in the purse");
+        let (xp_only, _) = line_for(5, 0);
+        assert_eq!(xp_only, "You have defeated Stray. Victory! You gain 5 XP.");
+        let (coins_only, _) = line_for(0, 7);
+        assert_eq!(
+            coins_only,
+            "You have defeated Stray. Victory! You gain 7 coins."
+        );
+        let (neither, _) = line_for(0, 0);
+        assert_eq!(neither, "You have defeated Stray. Victory!");
+    }
+
+    // C-T7 (REQ-007): buy+sell mutations round-trip a save byte-identically,
+    // and a pre-commerce payload without the new keys loads as coinless.
+    #[test]
+    fn commerce_state_round_trips_saves() {
+        let mut engine = commerce_engine();
+        engine.state.player.coins = 8;
+        assert!(engine.handle_command(cmd("buy lamp")).accepted);
+        assert!(engine.handle_command(cmd("take trinket")).accepted);
+        assert!(engine.handle_command(cmd("sell trinket")).accepted);
+        let at_save = snapshot_value(&engine);
+        let restored = Engine::from_save(engine.save_data()).expect("save loads");
+        assert_eq!(snapshot_value(&restored), at_save, "byte-identical restore");
+        assert_eq!(restored.snapshot().player.coins, 1);
+        assert!(
+            restored
+                .world
+                .entities
+                .get("keeper")
+                .expect("vendor")
+                .inventory
+                .contains(&"trinket".to_string()),
+            "the stock mutation persisted"
+        );
+
+        // Old payload: strip the new keys from the serialized save.
+        let mut payload = serde_json::to_value(commerce_engine().save_data()).expect("serializes");
+        let stripped = payload["state"]["player"]
+            .as_object_mut()
+            .expect("player object")
+            .remove("coins");
+        assert!(stripped.is_some(), "the key existed to strip");
+        let data: SaveData = serde_json::from_value(payload).expect("old payload deserializes");
+        let old = Engine::from_save(data).expect("old save loads");
+        assert_eq!(old.snapshot().player.coins, 0, "coinless default");
+    }
+
+    // C-T8 (REQ-007): crafted extremes through every new arithmetic site —
+    // award, credit, and the buy guard all saturate, never panic.
+    #[test]
+    fn crafted_coin_extremes_never_panic() {
+        // Victory award at a full purse saturates.
+        let mut world = combat_world(4, 1);
+        if let Some(profile) = world
+            .entities
+            .get_mut("stray")
+            .expect("fixture stray")
+            .combat
+            .as_mut()
+        {
+            profile.coins = u64::MAX;
+        }
+        let mut engine = Engine::try_new(world).expect("valid world");
+        engine.state.player.coins = 2;
+        engine.handle_command(cmd("attack stray"));
+        assert_eq!(engine.snapshot().player.coins, u64::MAX, "saturated award");
+
+        // Sell credit at a full purse saturates; the extreme value's price.
+        let mut engine = commerce_engine();
+        engine
+            .world
+            .items
+            .get_mut("trinket")
+            .expect("authored item")
+            .value = u64::MAX;
+        engine.state.player.coins = u64::MAX;
+        assert!(engine.handle_command(cmd("take trinket")).accepted);
+        let sold = engine.handle_command(cmd("sell trinket"));
+        assert!(sold.accepted);
+        assert_eq!(sold.snapshot.player.coins, u64::MAX, "saturated credit");
+
+        // Buying at an extreme price with an exactly-extreme purse.
+        let mut engine = commerce_engine();
+        engine
+            .world
+            .items
+            .get_mut("lamp")
+            .expect("authored item")
+            .value = u64::MAX;
+        engine.state.player.coins = u64::MAX;
+        let bought = engine.handle_command(cmd("buy lamp"));
+        assert!(bought.accepted);
+        assert_eq!(bought.snapshot.player.coins, 0, "MAX - MAX, no panic");
     }
 }

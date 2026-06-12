@@ -60,6 +60,10 @@ observable on the colored map (hero teal, enemies ember, loot gold).
   <item>` verbs through the #16/#25 parser pattern; typed refusals; coin
   rewards from victories OR sellable drops (decide at design). Lands in
   Mara's Candle Shop — the shop room already exists.
+  **→ PROMOTED 2026-06-12:** ticket #34
+  (`96e117f5-9d77-4ca7-81cb-10e6032d12d1`), pipeline `WORK-commerce-v1`.
+  (Bonus found at plan: `Role::Shopkeeper` has existed since #21 — no
+  new role needed; Mara already carries it.)
 - **S2 — equipment v1** (engine system): item kind `equipment` with
   authored slot (weapon/armor) + stat mods; `equip`/`unequip` verbs;
   combat math reads equipped attack/defense; gear panel wires to real

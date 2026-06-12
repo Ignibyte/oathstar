@@ -2598,3 +2598,53 @@ Revisit when:
   knowledge model deserves a re-read).
 - The blank-colors slice's city/forest/cave world ships (markers at
   scale: many rooms, several flagged at once).
+
+## Decision 052: Commerce Is Server-Authoritative, Value-Priced, And Vendor-Stocked
+
+Status: Locked
+
+Date: 2026-06-12
+
+What was decided (ticket #34):
+
+- **One authored number prices everything.** `Item.value` (serde-default
+  0) is the buy price; the sell price is `max(1, value / 2)`; `0` means
+  priceless — neither sellable nor buyable — so flavor items stay out of
+  the economy unless a module opts them in. Integer math, no haggling.
+- **The vendor's inventory IS the stock.** Finite and two-way: buying
+  drains it, selling adds to it (Mara accumulates the player's spoils).
+  The `shopkeeper` role (shipped #21, activated here) needs no hard
+  contract — an empty-handed vendor lists honestly. Vendor reach is
+  same-room, first placed, visible (`!hidden`) shopkeeper; the awareness
+  radius stays talk/look's domain.
+- **Coins are a `u64` purse on the player** (`PlayerState.coins`,
+  snapshot-visible, save round-tripped), fed by two faucets: authored
+  `CombatProfile.coins` victory rewards (the `xp` template — the 4-arm
+  victory line keeps the #26 xp-only string byte-identical) and sell
+  values. Sell-only was rejected: the fang drops once, capping a
+  sell-only lifetime economy below the cheapest item. The beginner loop
+  is authored exact: stray 4 + fang 3 + stub 1 = candle 8.
+- **Every refusal is typed and stateless** (the #25/#31 family):
+  unaffordable (with the price and purse named), unstocked, priceless,
+  worthless, oath-bound (`flags` containing `"oath"` — the clapper is
+  double-locked by flag AND value 0), ambiguous (the lossy verb gets
+  `drop`'s ambiguity refusal, never a silent first match), mid-combat,
+  no vendor. Settlement is exactly-once on both sides of the counter,
+  saturating throughout (crafted u64 extremes play panic-free).
+- **The reveal rule applies to the counter** (the #33 lesson, recaught
+  here by inspect): hidden stock is neither listed nor buyable.
+- **Acquisition is acquisition:** a purchased oath objective fulfills
+  the sworn oath exactly as a taken one (`fulfill_oath_on_recovery`
+  rides both paths) — the ransom-the-relic module shape works.
+- **No save bump:** all new fields serde-default; a pre-commerce v2
+  save loads as a coinless player over priceless items.
+
+Revisit when:
+
+- Equipment lands (S2 — gear becomes the shop's real stock).
+- Restocking/multiple vendors/markup curves are wanted (inventory-as-
+  stock and same-room reach are the v1 simplifications).
+- A `hostile`+`shopkeeper` entity is ever authored (sell-then-slay
+  refunds the goods — acceptable murder-hobo semantics today, a role
+  contract if not).
+- Currency items/stacking arrive (the docs' Currency item type).

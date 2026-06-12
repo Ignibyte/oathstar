@@ -408,7 +408,7 @@ function renderHud(snapshot) {
   el.hpBar.style.width = `${hud.hpPct}%`;
   el.focusBar.style.width = `${hud.focusPct}%`;
   el.turnCount.textContent = `Turn ${hud.tick}`;
-  el.levelValue.textContent = `Lv ${hud.level} · ${hud.xp} xp`;
+  el.levelValue.textContent = `Lv ${hud.level} · ${hud.xp} xp · ${hud.coins} coins`;
 }
 
 function renderRoom(snapshot) {

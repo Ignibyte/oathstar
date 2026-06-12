@@ -395,6 +395,9 @@ Shipped (the prototype loop, realized in the engine across #22–#29):
 - Battle skills cost focus: power strike 2, guard 1, spent at the queue
   with typed refusals; `rest` recovers the pool between fights (ticket
   #31, [Decision 049](./decisions.md#decision-049-focus-is-a-real-economy-spend-on-queue-refund-on-replace-rest-to-recover))
+- Victories pay authored coins beside XP, and Mara's shop trades them:
+  the stray funds the first candle (ticket #34,
+  [Decision 052](./decisions.md#decision-052-commerce-is-server-authoritative-value-priced-and-vendor-stocked))
 
 Possible improvements:
 

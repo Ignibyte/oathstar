@@ -68,6 +68,9 @@ name = "Black Candle"
 description = "A squat black candle that smells faintly of brine and old promises."
 aliases = ["candle", "black candle"]
 kind = "light"
+# Ticket #34: Mara's stock — the vertical slice's demo purchase. The played
+# loop funds it exactly: stray victory (4) + fang sale (3) + wax stub sale (1).
+value = 8
 
 # A loose item lying in Hollowmere Square — the first ground-placed, takeable
 # thing (ticket #18 `take` demo). Flavor-only: no mechanics, no oath link.
@@ -77,6 +80,8 @@ name = "Wax Stub"
 description = "A cold stub of black wax, dropped and forgotten on the wet cobbles."
 aliases = ["wax", "stub", "wax stub"]
 kind = "trinket"
+# Ticket #34: pocket change — sells for 1 coin.
+value = 2
 
 # The stolen bell clapper — the boss's hoarded prize and the oath's objective.
 [[items]]
@@ -95,6 +100,8 @@ name = "Cracked Fang"
 description = "A yellowed hound's fang, split down the middle. Proof of a road fight won."
 aliases = ["fang", "cracked fang"]
 kind = "trophy"
+# Ticket #34: a sellable trophy — 3 coins at Mara's counter.
+value = 6
 
 # The boss actor, placed in bell_eater_roost (see rooms.toml). The "boss" role is
 # how the engine's `confront` command finds the boss in the current room.
@@ -111,9 +118,10 @@ inventory = ["bell_clapper"]
 # to fell it, two 4-damage returns absorbed bare-handed — guard and power
 # strike visibly matter, and a player arriving hurt can genuinely lose.
 # Victory drops the clapper (inventory) and pays 25 XP (5x the stray's fang
-# fight — a milestone reward). Stats stay undisclosed: the boss reads as
-# "unknown" in the entity detail view (intended menace).
-combat = { health = 12, attack = 4, xp = 25 }
+# fight — a milestone reward). Ticket #34 adds the 25-coin purse — the
+# milestone faucet that funds post-oath shopping. Stats stay undisclosed: the
+# boss reads as "unknown" in the entity detail view (intended menace).
+combat = { health = 12, attack = 4, xp = 25, coins = 25 }
 
 # A hungry road-scavenger that haunts the Ashen Road — the beginner combat
 # encounter (ticket #22). `hostile` makes it attackable (its combat profile is
@@ -132,8 +140,9 @@ roles = ["combatant", "hostile"]
 inventory = ["stray_fang"]
 # Ticket #23: this stray discloses its combat stats to nearby inspection (the
 # visible-stats demo). A combatant without this flag (e.g. the Bell-Eater) renders
-# as "unknown" in the entity detail view. Ticket #26 adds the authored XP reward.
-combat = { health = 9, attack = 3, disclose_stats = true, xp = 5 }
+# as "unknown" in the entity detail view. Ticket #26 adds the authored XP reward;
+# #34 adds the 4-coin reward that anchors the candle loop (4 + fang 3 + stub 1 = 8).
+combat = { health = 9, attack = 3, disclose_stats = true, xp = 5, coins = 4 }
 
 # The beginner oath, offered by the module (module.toml `oath_id`). Ticket #29:
 # fulfillment is RECOVERING THE CLAPPER — defeat the Bell-Eater (confront), the

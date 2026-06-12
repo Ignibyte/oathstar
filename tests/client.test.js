@@ -452,3 +452,12 @@ test("toHud exposes level and xp", () => {
   assert.equal(empty.level, 0, "absent snapshots default like hp/focus");
   assert.equal(empty.xp, 0);
 });
+
+// Ticket #34 (C-T11): the HUD carries the coin purse; an old payload without
+// the field reads as a coinless player.
+test("toHud carries coins with a coinless default", () => {
+  const hud = toHud({ player: { hp: 5, maxHp: 9, coins: 12 } });
+  assert.equal(hud.coins, 12);
+  const old = toHud({ player: { hp: 5, maxHp: 9 } });
+  assert.equal(old.coins, 0, "absent wire field defaults to 0");
+});

@@ -80,6 +80,10 @@ pub struct PlayerSnapshot {
     pub max_hp: i32,
     pub focus: i32,
     pub max_focus: i32,
+    /// The player's coin purse (ticket #34). Serde-defaulted so a pre-commerce
+    /// payload deserializes to a coinless player.
+    #[serde(default)]
+    pub coins: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -591,6 +595,7 @@ mod tests {
                 max_hp: 1,
                 focus: 0,
                 max_focus: 0,
+                coins: 0,
             },
             room: bare_room(),
             map: MapSnapshot {
@@ -911,5 +916,21 @@ mod tests {
         let value = serde_json::to_value(&room).expect("serialize");
         assert_eq!(value["hasHostiles"], true, "camelCase wire key");
         assert_eq!(value["hasItems"], true, "camelCase wire key");
+    }
+
+    // Ticket #34 (C-T9, REQ-006): the coin purse rides the wire camelCase and
+    // a pre-commerce payload without the key deserializes to a coinless
+    // player. In-crate per the package-scoped-mutants rule.
+    #[test]
+    fn player_coins_serialize_and_default() {
+        let snapshot = bare_snapshot();
+        let mut value = serde_json::to_value(&snapshot).expect("serialize");
+        assert_eq!(value["player"]["coins"], 0, "always present, camelCase");
+        value["player"]
+            .as_object_mut()
+            .expect("player object")
+            .remove("coins");
+        let back: GameSnapshot = serde_json::from_value(value).expect("old payload deserializes");
+        assert_eq!(back.player.coins, 0, "absent key defaults to coinless");
     }
 }

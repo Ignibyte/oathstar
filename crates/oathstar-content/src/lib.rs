@@ -450,6 +450,7 @@ mod tests {
                 attack: 4,
                 disclose_stats: false,
                 xp: 25,
+                coins: 25,
             }),
             "the boss fight stats load by value (ticket #29; stats stay hidden)"
         );
@@ -489,6 +490,7 @@ mod tests {
                 attack: 3,
                 disclose_stats: true,
                 xp: 5,
+                coins: 4,
             }),
             "authored combat stats load by value (ashen_stray discloses its stats; #26 adds the XP reward)"
         );

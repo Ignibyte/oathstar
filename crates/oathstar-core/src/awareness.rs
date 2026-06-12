@@ -513,6 +513,7 @@ mod tests {
             hidden,
             kind: None,
             flags: Vec::new(),
+            value: 0,
         }
     }
 

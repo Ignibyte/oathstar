@@ -34,6 +34,9 @@ export function toHud(snapshot) {
     // Ticket #30: the progression pair the header line renders ("Lv N · M xp").
     level: player.level ?? 0,
     xp: player.xp ?? 0,
+    // Ticket #34: the coin purse, rendered beside the progression pair. An
+    // old payload without the field reads as a coinless player.
+    coins: player.coins ?? 0,
     roomName: room.title ?? snapshot?.worldTitle ?? "",
     roomKicker: room.subregion ?? room.region ?? "",
     tick: snapshot?.tick ?? 0,

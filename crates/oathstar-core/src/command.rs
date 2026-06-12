@@ -108,6 +108,17 @@ pub enum Command {
     /// arity; the engine restores focus out of combat and refuses it
     /// mid-encounter.
     Rest,
+    /// `shop` / `browse` — list a reachable shopkeeper's stock with prices
+    /// (ticket #34). Bare verb, strict arity; the engine refuses it mid-combat
+    /// or with no vendor in the room.
+    Shop,
+    /// `buy <item>` — purchase a stocked item from the room's shopkeeper
+    /// (ticket #34). Target text is preserved like a `Take` target; a bare
+    /// `buy` is [`Unknown`](Self::Unknown).
+    Buy { target: String },
+    /// `sell <item>` — sell a carried item to the room's shopkeeper
+    /// (ticket #34). Same target rules as [`Buy`](Self::Buy).
+    Sell { target: String },
     /// Input that matched no known command; carries the collapsed echo of the raw
     /// input for a helpful failure message. The engine mutates no state for it.
     Unknown { input: String },
@@ -214,6 +225,10 @@ pub fn parse(input: &str) -> Command {
         };
     }
 
+    if let Some(command) = parse_trade_verb(&verb, &rest, input) {
+        return command;
+    }
+
     // The two-token battle verb `power strike` (ticket #25): only the exact
     // pair queues the heavy blow. `power` alone, `power <other>`, trailing
     // tokens, and the fused `powerstrike` are all unknown — the grammar stays
@@ -251,10 +266,11 @@ pub fn parse(input: &str) -> Command {
 }
 
 /// Parse the bare, strict-arity verbs (`swear`/`vow`, `confront`/`challenge`,
-/// `flee`, `guard`, `inventory`/`pack`/`i`, `rest`) — each takes no trailing
-/// tokens. Returns `Some(command)` when `verb` is one of them (a trailing token
-/// yields `Some(Unknown)`); `None` when `verb` is not a bare verb so `parse`
-/// keeps trying. Grouping these keeps `parse` under the clippy line ceiling (#20).
+/// `flee`, `guard`, `inventory`/`pack`/`i`, `rest`, `shop`/`browse`) — each
+/// takes no trailing tokens. Returns `Some(command)` when `verb` is one of them
+/// (a trailing token yields `Some(Unknown)`); `None` when `verb` is not a bare
+/// verb so `parse` keeps trying. Grouping these keeps `parse` under the clippy
+/// line ceiling (#20).
 fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
     let command = match verb {
         "swear" | "vow" => Command::Swear,
@@ -263,6 +279,7 @@ fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
         "guard" => Command::Guard,
         "inventory" | "pack" | "i" => Command::Inventory,
         "rest" => Command::Rest,
+        "shop" | "browse" => Command::Shop,
         _ => return None,
     };
     if rest.is_empty() {
@@ -272,6 +289,28 @@ fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
             input: collapse(input),
         })
     }
+}
+
+/// Parse the required-target trade verbs (`buy <item>` / `sell <item>`,
+/// ticket #34) — a bare `buy`/`sell` names nothing and stays unknown, the
+/// `take`/`drop` arity rule. Returns `None` when `verb` is not a trade verb so
+/// `parse` keeps trying. Split out to keep `parse` under the clippy line
+/// ceiling (the #19/#20 recurring class).
+fn parse_trade_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
+    if !matches!(verb, "buy" | "sell") {
+        return None;
+    }
+    if rest.is_empty() {
+        return Some(Command::Unknown {
+            input: collapse(input),
+        });
+    }
+    let target = rest.join(" ");
+    Some(if verb == "buy" {
+        Command::Buy { target }
+    } else {
+        Command::Sell { target }
+    })
 }
 
 /// Parse the optional-target combat verbs (`attack`/`strike`/`fight`, ticket
@@ -773,6 +812,37 @@ mod tests {
             parse("strike"),
             Command::Attack { target: None },
             "bare strike is still the #22 attack verb"
+        );
+    }
+
+    // C-T10 (ticket #34): the trade verbs — `shop`/`browse` bare strict-arity,
+    // `buy`/`sell` required-target; near-misses stay unknown.
+    #[test]
+    fn trade_verbs_parse_with_strict_shapes() {
+        assert_eq!(parse("shop"), Command::Shop);
+        assert_eq!(parse("BROWSE"), Command::Shop, "alias, case-folded");
+        assert!(matches!(parse("shop candles"), Command::Unknown { .. }));
+        assert_eq!(
+            parse("buy black candle"),
+            Command::Buy {
+                target: "black candle".to_string()
+            },
+            "multiword targets join"
+        );
+        assert_eq!(
+            parse("SELL fang"),
+            Command::Sell {
+                target: "fang".to_string()
+            }
+        );
+        assert!(
+            matches!(parse("buy"), Command::Unknown { .. }),
+            "bare buy refuses"
+        );
+        assert!(matches!(parse("sell"), Command::Unknown { .. }));
+        assert!(
+            matches!(parse("buys lamp"), Command::Unknown { .. }),
+            "near-miss"
         );
     }
 }

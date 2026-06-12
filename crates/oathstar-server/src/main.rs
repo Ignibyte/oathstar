@@ -564,7 +564,7 @@ mod tests {
                 Some(GameEventKind::CombatEnded {
                     outcome: CombatOutcome::Victory,
                     text,
-                }) if text == "You have defeated The Bell-Eater. Victory! You gain 25 XP."
+                }) if text == "You have defeated The Bell-Eater. Victory! You gain 25 XP and 25 coins."
             ),
             "the pulse loop fells the boss with the authored reward: {kinds:?}"
         );
@@ -885,7 +885,7 @@ mod tests {
             GameEventKind::CombatEnded {
                 outcome: CombatOutcome::Victory,
                 text,
-            } if text == "You have defeated Ashen Stray. Victory! You gain 5 XP."
+            } if text == "You have defeated Ashen Stray. Victory! You gain 5 XP and 4 coins."
         ));
 
         let state = state_snapshot(State(app.clone())).await;
@@ -1520,6 +1520,106 @@ mod tests {
         assert!(
             !tower.discovered && !tower.has_hostiles && !tower.has_items,
             "the unvisited tower stays dark throughout"
+        );
+    }
+
+    // C-T12 (ticket #34, REQ-005/006): the played shop loop over the seam —
+    // fight the stray (+4 coins, fang drops), take the spoils, walk back to
+    // Mara's counter, sell the fang (+3) and the wax stub (+1), and buy the
+    // candle at exactly 8 — the authored economy lands the loop on zero.
+    #[tokio::test]
+    async fn played_shop_loop_funds_the_candle() {
+        let app = test_app_state();
+        let coins = |snapshot: &GameSnapshot| snapshot.player.coins;
+
+        // The square's wax stub is the pocket-change pickup.
+        assert!(
+            command(State(app.clone()), req("take wax stub"))
+                .await
+                .0
+                .accepted
+        );
+
+        // North to the road; three manual strikes fell the 9hp stray.
+        for step in ["north", "north"] {
+            assert!(command(State(app.clone()), req(step)).await.0.accepted);
+        }
+        assert!(
+            command(State(app.clone()), req("attack stray"))
+                .await
+                .0
+                .accepted
+        );
+        assert!(command(State(app.clone()), req("attack")).await.0.accepted);
+        let won = command(State(app.clone()), req("attack")).await;
+        assert!(
+            won.0.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                }
+            )),
+            "the stray falls: {:?}",
+            won.0.events
+        );
+        assert_eq!(coins(&won.0.snapshot), 4, "the victory faucet pays 4");
+        assert!(
+            command(State(app.clone()), req("take fang"))
+                .await
+                .0
+                .accepted
+        );
+
+        // Back to the square, east into the candle shop.
+        for step in ["south", "south", "east"] {
+            assert!(command(State(app.clone()), req(step)).await.0.accepted);
+        }
+
+        let listed = command(State(app.clone()), req("shop")).await;
+        assert!(listed.0.accepted, "Mara's counter lists");
+        let sold_fang = command(State(app.clone()), req("sell fang")).await;
+        assert!(sold_fang.0.accepted);
+        assert_eq!(coins(&sold_fang.0.snapshot), 7, "4 + 3 for the fang");
+        let sold_stub = command(State(app.clone()), req("sell wax stub")).await;
+        assert!(sold_stub.0.accepted);
+        assert_eq!(coins(&sold_stub.0.snapshot), 8, "+1 for the stub");
+
+        let bought = command(State(app.clone()), req("buy candle")).await;
+        assert!(bought.0.accepted, "{:?}", bought.0.events);
+        assert_eq!(
+            coins(&bought.0.snapshot),
+            0,
+            "the loop lands on exactly zero"
+        );
+        assert!(
+            bought
+                .0
+                .snapshot
+                .pack
+                .iter()
+                .any(|item| item.id == "candle"),
+            "the candle is carried"
+        );
+
+        // Mara's stock now holds the player's spoils — the two-way economy.
+        let relisted = command(State(app.clone()), req("shop")).await;
+        let listing = relisted
+            .0
+            .events
+            .iter()
+            .find_map(|e| match &e.kind {
+                GameEventKind::LogMessage { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("a listing line");
+        assert!(
+            listing.contains("Cracked Fang") && listing.contains("Wax Stub"),
+            "the sold goods joined the stock: {listing}"
+        );
+        assert!(
+            !listing.contains("Black Candle"),
+            "the bought candle left the stock: {listing}"
         );
     }
 }

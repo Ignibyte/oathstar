@@ -24,6 +24,18 @@ Working stance:
 
 ## Inventory Direction
 
+Implemented (ticket #34 — commerce v1, Decision 052): trading is real.
+Items carry an authored `value` (buy price; sell price is half, floored at
+one coin; `0` = priceless, out of the economy); the player carries a
+`coins` purse (HUD-visible, save round-tripped); the existing `shopkeeper`
+role trades via `shop`/`browse`, `buy <item>`, `sell <item>` — same-room,
+visible vendors only, finite two-way stock (the vendor's inventory IS the
+stock), typed refusals for every arm (unaffordable, unstocked, priceless,
+worthless, oath-bound, ambiguous, mid-combat, no vendor). Victories pay
+authored `CombatProfile.coins` beside XP. Hidden stock is neither listed
+nor buyable (the reveal rule applies to every projection); a purchased
+oath objective fulfills the oath exactly as a taken one.
+
 Inventory should support:
 
 - Carrying items
