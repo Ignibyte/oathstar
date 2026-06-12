@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { parseEvent } from "../src/client/wire.js";
 import { toComponent } from "../src/client/components.js";
-import { toHud, toMenuModel, toOaths, toNearby, toPack } from "../src/client/snapshot.js";
+import { toGear, toHud, toMenuModel, toOaths, toNearby, toPack } from "../src/client/snapshot.js";
 import { toRoomDisplay, toExitPad, DEFAULT_ROOM_DISPLAY_LIMIT } from "../src/client/room.js";
 import { toMapModel, DEFAULT_MAP_CONFIG } from "../src/client/map.js";
 import { suggestCommands, COMMAND_VOCAB } from "../src/client/intent.js";
@@ -106,6 +106,60 @@ test("snapshot view models feed HUD and the tabbed menu", () => {
   const fulfilled = toOaths(sampleSnapshot({ oath: { oathId: "o", title: "Bell", status: "fulfilled" } }));
   assert.equal(fulfilled.complete, 1);
   assert.equal(fulfilled.items[0].complete, true);
+});
+
+// EQ-T7 (ticket #35, REQ-004): the Gear panel fills from server-authored
+// player.equipment — slot labels are the view-model's mapping, everything
+// else stays an honest "empty".
+test("toGear fills panel slots from player.equipment", () => {
+  // No equipment key (a pre-#35 payload): all six slots honest-empty.
+  const bare = toGear(sampleSnapshot());
+  assert.equal(bare.total, 6);
+  assert.equal(bare.filled, 0);
+  assert.ok(bare.slots.every((slot) => slot.value === "empty" && slot.filled === false));
+
+  // Weapon + armor land in Main hand / Body; the rest stay empty.
+  const geared = toGear(
+    sampleSnapshot({
+      player: {
+        equipment: [
+          { slot: "weapon", id: "rust_edge_blade", name: "Rust-Edge Blade" },
+          { slot: "armor", id: "waxed_coat", name: "Waxed Leather Coat" },
+        ],
+      },
+    }),
+  );
+  assert.equal(geared.filled, 2);
+  const bySlot = new Map(geared.slots.map((slot) => [slot.label, slot]));
+  assert.deepEqual(bySlot.get("Main hand"), {
+    label: "Main hand",
+    value: "Rust-Edge Blade",
+    filled: true,
+  });
+  assert.deepEqual(bySlot.get("Body"), {
+    label: "Body",
+    value: "Waxed Leather Coat",
+    filled: true,
+  });
+  assert.equal(bySlot.get("Off hand").value, "empty");
+
+  // Unknown slots are ignored, duplicate slots first-wins, a nameless entry
+  // falls back to its id, and prototype-chain names stay inert.
+  const odd = toGear(
+    sampleSnapshot({
+      player: {
+        equipment: [
+          { slot: "tail", id: "x", name: "X" },
+          { slot: "weapon", id: "first" },
+          { slot: "weapon", id: "second", name: "Second" },
+          { slot: "constructor", id: "proto", name: "Proto" },
+          null,
+        ],
+      },
+    }),
+  );
+  assert.equal(odd.filled, 1);
+  assert.equal(odd.slots.find((slot) => slot.label === "Main hand").value, "first");
 });
 
 // TR1 (REQ-005, REQ-008): the room display model separates main / full and

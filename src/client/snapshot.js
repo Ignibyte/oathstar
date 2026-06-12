@@ -178,12 +178,33 @@ function combatStatusLabel(hostile, attackable, interactable) {
   return interactable ? "Can't fight here" : "Too far to attack";
 }
 
-/** Gear panel: the six equipment slots, all empty in v1. */
-export function toGear() {
+// Ticket #35: which panel slot each server-side semantic slot fills. The wire
+// speaks "weapon"/"armor"; display labels are this view-model's decision. A
+// slot kind the client doesn't know is ignored gracefully (future servers).
+const SLOT_LABELS = {
+  weapon: "Main hand",
+  armor: "Body",
+};
+
+/**
+ * Gear panel (ticket #35): the six equipment slots, filled from the
+ * server-authored `player.equipment` list. Slots without a mapped entry render
+ * "empty" — on a pre-equipment payload that is all six (the old placeholder
+ * behavior, now data-driven). Unknown slot kinds are ignored; on a duplicate
+ * slot the first entry wins.
+ */
+export function toGear(snapshot) {
+  const equipment = Array.isArray(snapshot?.player?.equipment) ? snapshot.player.equipment : [];
+  const slots = EQUIPMENT_SLOTS.map((label) => {
+    const entry = equipment.find((candidate) => SLOT_LABELS[candidate?.slot] === label);
+    return entry == null
+      ? { label, value: "empty", filled: false }
+      : { label, value: targetName(entry), filled: true };
+  });
   return {
-    filled: 0,
+    filled: slots.filter((slot) => slot.filled).length,
     total: EQUIPMENT_SLOTS.length,
-    slots: EQUIPMENT_SLOTS.map((label) => ({ label, value: "empty", filled: false })),
+    slots,
   };
 }
 
@@ -209,7 +230,7 @@ export function toMenuModel(snapshot) {
   return {
     nearby: toNearby(snapshot),
     oaths: toOaths(snapshot),
-    gear: toGear(),
+    gear: toGear(snapshot),
     pack: toPack(snapshot),
   };
 }

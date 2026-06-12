@@ -69,6 +69,9 @@ observable on the colored map (hero teal, enemies ember, loot gold).
   combat math reads equipped attack/defense; gear panel wires to real
   state; SaveData round-trip. The stray's fang or a shop blade becomes
   the first weapon.
+  **→ PROMOTED 2026-06-12:** ticket #35
+  (`3fa9b4ab-c0c3-4b0e-80ec-965562ac5a4c`), pipeline
+  `WORK-equipment-v1`.
 - **A / B / C** — from the tileset intake: flatten the sheet; the .tmx
   importer; per-room tile names over the wire (subregion colors live).
 - **W1 — the world + oath content** (integration payoff): paint

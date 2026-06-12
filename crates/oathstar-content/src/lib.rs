@@ -213,6 +213,73 @@ mod tests {
         );
     }
 
+    // T10/#35 (REQ-006): the beginner gear loads its authored equipment by
+    // value, and Mara's counter stocks the starter pieces.
+    #[test]
+    fn beginner_gear_loads_equipment_by_value() {
+        use oathstar_core::{EquipSlot, EquipmentProfile};
+        let world = load_beginner_world().expect("beginner module should load");
+        let profile = |id: &str| {
+            world
+                .items
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} item"))
+                .equipment
+        };
+        assert_eq!(
+            profile("rust_edge_blade"),
+            Some(EquipmentProfile {
+                slot: EquipSlot::Weapon,
+                attack: 2,
+                defense: 0,
+            })
+        );
+        assert_eq!(
+            profile("waxed_coat"),
+            Some(EquipmentProfile {
+                slot: EquipSlot::Armor,
+                attack: 0,
+                defense: 1,
+            })
+        );
+        assert_eq!(
+            profile("stray_fang"),
+            Some(EquipmentProfile {
+                slot: EquipSlot::Weapon,
+                attack: 1,
+                defense: 0,
+            }),
+            "the first drop is also the first weapon"
+        );
+        assert_eq!(
+            profile("candle"),
+            None,
+            "non-gear items stay non-equippable"
+        );
+        let mara = world.entities.get("mara").expect("mara entity");
+        for stocked in ["rust_edge_blade", "waxed_coat"] {
+            assert!(
+                mara.inventory.contains(&stocked.to_string()),
+                "Mara stocks {stocked}"
+            );
+        }
+    }
+
+    // #35 (REQ-006): an unknown equipment slot fails the module at parse time
+    // — the EquipSlot enum is the validation.
+    #[test]
+    fn load_rejects_an_unknown_equipment_slot() {
+        let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"a\"\n";
+        let world = "[[items]]\nid = \"hat\"\nname = \"Hat\"\ndescription = \"h\"\n\
+            equipment = { slot = \"head\", defense = 1 }\n";
+        let err = load_world_from_toml(module, ONE_ROOM, world)
+            .expect_err("an unknown slot must be rejected");
+        assert!(
+            err.to_string().contains("invalid world TOML"),
+            "unexpected error: {err}"
+        );
+    }
+
     #[test]
     fn load_rejects_malformed_rooms_toml() {
         // Module parses; rooms is the wrong shape (a string, not an array of tables).

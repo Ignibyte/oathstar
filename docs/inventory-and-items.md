@@ -36,6 +36,26 @@ authored `CombatProfile.coins` beside XP. Hidden stock is neither listed
 nor buyable (the reveal rule applies to every projection); a purchased
 oath objective fulfills the oath exactly as a taken one.
 
+Implemented (ticket #35 — equipment v1, Decision 053): wearing equipment
+is real. An item opts in with an authored `equipment = { slot, attack?,
+defense? }` table (slot `"weapon"` or `"armor"` — the `EquipSlot` enum
+rejects anything else at module parse; mods are unsigned, no cursed gear
+yet). `equip`/`wield`/`wear <item>` dons carried gear into its authored
+slot (an occupied slot swaps, the prior piece returns to the pack);
+`unequip`/`remove <slot|item>` frees it. Equipped ids live on the player
+INSTEAD of in the pack, so drop/sell refuse equipped gear with an honest
+"unequip it first" — and every text projection keeps seeing worn gear
+(`look` falls back to equipped, `inventory` appends an `Equipped:`
+clause). Combat reads gear at its three damage sites: basic strike
+4 + weapon attack, power strike 6 + weapon attack, incoming hit −
+armor defense floored at 0 (the narrated number is the dealt damage).
+The wire adds `player.equipment` (slot/id/name, omit-when-empty) and the
+client Gear panel maps weapon→Main hand, armor→Body; the other four
+slots stay decorative. Save round-trips serde-additively (format still
+2). Beginner world: the stray's fang is a +1 weapon, Mara stocks the
+Rust-Edge Blade (+2, 6 coins) and Waxed Leather Coat (−1, 4 coins) —
+the #34 funding loop buys the blade with 2 coins to spare.
+
 Inventory should support:
 
 - Carrying items

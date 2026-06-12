@@ -84,6 +84,22 @@ pub struct PlayerSnapshot {
     /// payload deserializes to a coinless player.
     #[serde(default)]
     pub coins: u64,
+    /// The player's equipped gear (ticket #35), one entry per filled slot.
+    /// Omitted when nothing is equipped and serde-defaulted, so pre-equipment
+    /// payloads and clients are both unaffected (additive-field posture).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub equipment: Vec<EquippedItemSnapshot>,
+}
+
+/// One equipped item as the client renders it (ticket #35): the semantic slot
+/// (`"weapon"` / `"armor"` — display labels are the view-model's job), plus the
+/// item's id and resolved name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EquippedItemSnapshot {
+    pub slot: String,
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -429,9 +445,10 @@ pub enum OutputComponent {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnnouncementSeverity, CombatOutcome, CombatSnapshot, CombatantSnapshot, EventChannel,
-        GameEvent, GameEventKind, GameSnapshot, MapRoomSnapshot, MapSnapshot, NearbySnapshot,
-        NearbyStatsSnapshot, NearbyThreatSnapshot, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
+        AnnouncementSeverity, CombatOutcome, CombatSnapshot, CombatantSnapshot,
+        EquippedItemSnapshot, EventChannel, GameEvent, GameEventKind, GameSnapshot,
+        MapRoomSnapshot, MapSnapshot, NearbySnapshot, NearbyStatsSnapshot, NearbyThreatSnapshot,
+        PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
     };
     use std::collections::BTreeMap;
 
@@ -596,6 +613,7 @@ mod tests {
                 focus: 0,
                 max_focus: 0,
                 coins: 0,
+                equipment: Vec::new(),
             },
             room: bare_room(),
             map: MapSnapshot {
@@ -932,5 +950,34 @@ mod tests {
             .remove("coins");
         let back: GameSnapshot = serde_json::from_value(value).expect("old payload deserializes");
         assert_eq!(back.player.coins, 0, "absent key defaults to coinless");
+    }
+
+    // ---- ticket #35: equipped-gear wire shape ----
+
+    // The equipment list omits when empty, defaults when absent, and each
+    // entry serializes slot/id/name as plain camelCase-stable keys.
+    #[test]
+    fn player_equipment_omits_when_empty_and_lists_when_filled() {
+        let empty = serde_json::to_value(bare_snapshot()).expect("serialize");
+        assert!(
+            empty["player"].get("equipment").is_none(),
+            "bare hands omit the key"
+        );
+        let back: GameSnapshot = serde_json::from_value(empty).expect("old payload deserializes");
+        assert!(
+            back.player.equipment.is_empty(),
+            "absent key defaults empty"
+        );
+
+        let mut snapshot = bare_snapshot();
+        snapshot.player.equipment = vec![EquippedItemSnapshot {
+            slot: "weapon".to_string(),
+            id: "fang".to_string(),
+            name: "Cracked Fang".to_string(),
+        }];
+        let value = serde_json::to_value(&snapshot).expect("serialize");
+        assert_eq!(value["player"]["equipment"][0]["slot"], "weapon");
+        assert_eq!(value["player"]["equipment"][0]["id"], "fang");
+        assert_eq!(value["player"]["equipment"][0]["name"], "Cracked Fang");
     }
 }

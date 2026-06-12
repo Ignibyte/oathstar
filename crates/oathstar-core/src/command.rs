@@ -119,6 +119,15 @@ pub enum Command {
     /// `sell <item>` — sell a carried item to the room's shopkeeper
     /// (ticket #34). Same target rules as [`Buy`](Self::Buy).
     Sell { target: String },
+    /// `equip` / `wield` / `wear` with a target — don a carried equipment item
+    /// (ticket #35). The slot comes from the item's authored profile, not the
+    /// verb, so `wear fang` and `wield fang` act identically. Target rules as
+    /// [`Buy`](Self::Buy): a bare verb is [`Unknown`](Self::Unknown).
+    Equip { target: String },
+    /// `unequip` / `remove` with a target — return equipped gear to the pack
+    /// (ticket #35). The target names a slot (`weapon`/`armor`) or an equipped
+    /// item. Same required-target arity as [`Equip`](Self::Equip).
+    Unequip { target: String },
     /// Input that matched no known command; carries the collapsed echo of the raw
     /// input for a helpful failure message. The engine mutates no state for it.
     Unknown { input: String },
@@ -186,46 +195,7 @@ pub fn parse(input: &str) -> Command {
         return command;
     }
 
-    // `talk`/`speak` and `take`/`get` take a required target — a bare verb with no
-    // target is an unknown command (strict arity), so the typed command always
-    // carries non-empty target text. The target keeps its case (only the verb is
-    // case-folded), matching `look <target>`.
-    if matches!(verb.as_str(), "talk" | "speak") {
-        if rest.is_empty() {
-            return Command::Unknown {
-                input: collapse(input),
-            };
-        }
-        return Command::Talk {
-            target: rest.join(" "),
-        };
-    }
-
-    if matches!(verb.as_str(), "take" | "get") {
-        if rest.is_empty() {
-            return Command::Unknown {
-                input: collapse(input),
-            };
-        }
-        return Command::Take {
-            target: rest.join(" "),
-        };
-    }
-
-    if verb == "drop" {
-        // Required target (strict arity), mirroring `take` — a bare `drop` is an
-        // unknown command, not a no-op (ticket #20).
-        if rest.is_empty() {
-            return Command::Unknown {
-                input: collapse(input),
-            };
-        }
-        return Command::Drop {
-            target: rest.join(" "),
-        };
-    }
-
-    if let Some(command) = parse_trade_verb(&verb, &rest, input) {
+    if let Some(command) = parse_targeted_verb(&verb, &rest, input) {
         return command;
     }
 
@@ -291,26 +261,32 @@ fn parse_bare_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
     }
 }
 
-/// Parse the required-target trade verbs (`buy <item>` / `sell <item>`,
-/// ticket #34) — a bare `buy`/`sell` names nothing and stays unknown, the
-/// `take`/`drop` arity rule. Returns `None` when `verb` is not a trade verb so
-/// `parse` keeps trying. Split out to keep `parse` under the clippy line
-/// ceiling (the #19/#20 recurring class).
-fn parse_trade_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
-    if !matches!(verb, "buy" | "sell") {
-        return None;
-    }
+/// Parse every required-target verb: `talk`/`speak`, `take`/`get`, `drop`
+/// (#18/#20), `buy`/`sell` (#34), and `equip`/`wield`/`wear`,
+/// `unequip`/`remove` (#35). A bare verb names nothing and stays unknown
+/// (strict arity), so the typed command always carries non-empty target text;
+/// the target keeps its case (only the verb is case-folded), matching
+/// `look <target>`. Returns `None` when `verb` is none of them so `parse`
+/// keeps trying. One table for the whole family keeps `parse` under the
+/// clippy line ceiling (the #19/#20 recurring class) without a helper per
+/// ticket.
+fn parse_targeted_verb(verb: &str, rest: &[&str], input: &str) -> Option<Command> {
+    let make: fn(String) -> Command = match verb {
+        "talk" | "speak" => |target| Command::Talk { target },
+        "take" | "get" => |target| Command::Take { target },
+        "drop" => |target| Command::Drop { target },
+        "buy" => |target| Command::Buy { target },
+        "sell" => |target| Command::Sell { target },
+        "equip" | "wield" | "wear" => |target| Command::Equip { target },
+        "unequip" | "remove" => |target| Command::Unequip { target },
+        _ => return None,
+    };
     if rest.is_empty() {
         return Some(Command::Unknown {
             input: collapse(input),
         });
     }
-    let target = rest.join(" ");
-    Some(if verb == "buy" {
-        Command::Buy { target }
-    } else {
-        Command::Sell { target }
-    })
+    Some(make(rest.join(" ")))
 }
 
 /// Parse the optional-target combat verbs (`attack`/`strike`/`fight`, ticket
@@ -842,6 +818,56 @@ mod tests {
         assert!(matches!(parse("sell"), Command::Unknown { .. }));
         assert!(
             matches!(parse("buys lamp"), Command::Unknown { .. }),
+            "near-miss"
+        );
+    }
+
+    // ---- ticket #35: equip / unequip verbs ----
+
+    // Every gear alias parses with the take/drop arity rule: required target,
+    // multiword join, case-folded verb, case-kept target, bare verb unknown.
+    #[test]
+    fn gear_verbs_parse_with_strict_shapes() {
+        assert_eq!(
+            parse("equip fang"),
+            Command::Equip {
+                target: "fang".to_string()
+            }
+        );
+        assert_eq!(
+            parse("WIELD Rust-Edge Blade"),
+            Command::Equip {
+                target: "Rust-Edge Blade".to_string()
+            },
+            "alias, case-folded verb, case-kept multiword target"
+        );
+        assert_eq!(
+            parse("wear waxed coat"),
+            Command::Equip {
+                target: "waxed coat".to_string()
+            },
+            "wear routes by the item's slot, not the verb"
+        );
+        assert_eq!(
+            parse("unequip weapon"),
+            Command::Unequip {
+                target: "weapon".to_string()
+            }
+        );
+        assert_eq!(
+            parse("REMOVE coat"),
+            Command::Unequip {
+                target: "coat".to_string()
+            }
+        );
+        assert!(
+            matches!(parse("equip"), Command::Unknown { .. }),
+            "bare equip refuses"
+        );
+        assert!(matches!(parse("unequip"), Command::Unknown { .. }));
+        assert!(matches!(parse("wield"), Command::Unknown { .. }));
+        assert!(
+            matches!(parse("equips fang"), Command::Unknown { .. }),
             "near-miss"
         );
     }

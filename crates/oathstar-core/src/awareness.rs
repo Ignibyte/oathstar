@@ -514,6 +514,7 @@ mod tests {
             kind: None,
             flags: Vec::new(),
             value: 0,
+            equipment: None,
         }
     }
 

@@ -589,7 +589,8 @@ function renderMenu(snapshot) {
     label.className = "equipment-label";
     label.textContent = slot.label;
     const value = document.createElement("span");
-    value.className = "equipment-value empty";
+    // Ticket #35: a filled slot drops the dimmed "empty" styling.
+    value.className = slot.filled ? "equipment-value" : "equipment-value empty";
     value.textContent = slot.value;
     row.append(label, value);
     el.equipment.append(row);

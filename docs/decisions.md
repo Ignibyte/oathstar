@@ -2648,3 +2648,55 @@ Revisit when:
   refunds the goods — acceptable murder-hobo semantics today, a role
   contract if not).
 - Currency items/stacking arrive (the docs' Currency item type).
+
+## Decision 053: Equipment Is Slot-Authored, Pack-Exclusive, And Gear-Aware In Combat
+
+Status: Locked
+
+Date: 2026-06-13
+
+What was decided (ticket #35):
+
+- **Items opt into gear with one authored table.** `Item.equipment =
+  { slot, attack?, defense? }` in the `CombatProfile` idiom; the
+  `EquipSlot` enum (`weapon` | `armor`, serde-lowercase) makes an invalid
+  slot fail the module at parse — the enum IS the validation. Mods are
+  unsigned (no cursed/negative gear in v1) and saturate `u32 → i32` on
+  read, so crafted extremes can never overflow combat math.
+- **Equipped means out of the pack.** The two slot ids live on
+  `PlayerState` (`equipped_weapon`/`equipped_armor`, serde-additive — no
+  save bump) INSTEAD of in the pack: drop/sell refuse worn gear by
+  construction. The corollary is binding: every projection that
+  enumerates the pack must also see the slots (`look` equipped fallback,
+  `inventory`'s `Equipped:` clause, honest "unequip it first" refusal
+  arms) — PR-claude-state-moves-audit-source-container-projections-001.
+- **Reference counts are conserved, never guarded.** Equip/unequip move
+  a live id between containers; the stow path pushes unconditionally. A
+  dedup guard on a move's return path was inspect-proven loss-only (a
+  module may legally place one id twice) and deleted.
+- **Combat reads gear at exactly three sites.** Basic strike
+  `4 + weapon.attack`, power strike `6 + weapon.attack` (one weapon
+  swings every strike), incoming `attack − armor.defense` floored at 0 —
+  and the narrated number is the DEALT damage while disclosed enemy
+  stats stay raw. A slot only ever pays its own profile's stat (a
+  crafted cross-slot id is inert).
+- **Verbs route by profile, not verb.** `equip`/`wield`/`wear` are one
+  command (the item's slot decides where it goes); `unequip`/`remove`
+  resolve a slot keyword first, then an equipped item name, with the
+  drop-grade ambiguity refusal. All seven required-target verb families
+  now parse through ONE table (`parse_targeted_verb`).
+- **The wire stays semantic.** `player.equipment` lists `slot/id/name`
+  (omit-when-empty); display labels (weapon→"Main hand", armor→"Body")
+  are the client view-model's decision. The other four panel slots stay
+  decorative until authored slots exist for them.
+
+Revisit when:
+
+- More slots (off-hand, jewelry) or hybrid-stat items are authored —
+  `slot_mod`'s own-stat filter and the panel mapping are the seams.
+- Cursed/bound/no-remove gear lands (mods go signed, flags gate
+  unequip).
+- Enemy equipment or durability is wanted (CombatProfile vs gear merge).
+- A format-version bump is scheduled: a pre-#35 binary loading a geared
+  save silently drops the equipped items (accepted additive-posture cost,
+  recorded at inspect).

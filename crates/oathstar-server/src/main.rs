@@ -1622,4 +1622,123 @@ mod tests {
             "the bought candle left the stock: {listing}"
         );
     }
+
+    /// Drive one accepted command over the seam — the played-loop tests'
+    /// shared step (ticket #35; keeps each loop under the line ceiling).
+    async fn played(app: &AppState, input: &str) -> CommandResponse {
+        let response = command(State(app.clone()), req(input)).await.0;
+        assert!(
+            response.accepted,
+            "'{input}' should be accepted: {:?}",
+            response.events
+        );
+        response
+    }
+
+    /// The `(slot, id)` pairs of the snapshot's equipped gear.
+    fn equipped_pairs(response: &CommandResponse) -> Vec<(String, String)> {
+        response
+            .snapshot
+            .player
+            .equipment
+            .iter()
+            .map(|entry| (entry.slot.clone(), entry.id.clone()))
+            .collect()
+    }
+
+    // EQ1 (ticket #35, REQ-001/003/005/006): the played gear loop over the
+    // seam — earn, buy the blade, wield it, fell the boss on strike-6 lines,
+    // buy and wear the coat, and save/load keeps both slots filled.
+    #[tokio::test]
+    async fn played_gear_loop_arms_the_oathbearer() {
+        let app = test_app_state_with_saves("eq1-gear-loop");
+        std::fs::remove_dir_all(app.saves.root()).ok();
+
+        // Swear the oath at the counter, pocket the stub on the way out.
+        for step in ["take wax stub", "east", "talk mara", "swear", "west"] {
+            played(&app, step).await;
+        }
+
+        // Fund the blade: stray coins (4) + fang (3) + stub (1) = 8 − 6 = 2.
+        for step in ["north", "north", "attack stray", "attack", "attack"] {
+            played(&app, step).await;
+        }
+        for step in [
+            "take fang",
+            "south",
+            "south",
+            "east",
+            "sell fang",
+            "sell wax stub",
+        ] {
+            played(&app, step).await;
+        }
+        let bought = played(&app, "buy blade").await;
+        assert_eq!(bought.snapshot.player.coins, 2, "8 − 6 leaves change");
+
+        // Wield it: the snapshot lists the weapon slot.
+        let wielded = played(&app, "equip blade").await;
+        assert_eq!(
+            equipped_pairs(&wielded),
+            vec![("weapon".to_string(), "rust_edge_blade".to_string())]
+        );
+
+        // The boss falls in two strike-6 blows instead of three.
+        for step in ["west", "north", "north", "north", "up", "up"] {
+            played(&app, step).await;
+        }
+        let opened = played(&app, "confront").await;
+        assert!(
+            opened.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::LogMessage { text, .. }
+                    if text.contains("You strike The Bell-Eater for 6 (6/12).")
+            )),
+            "the blade raises the opening strike: {:?}",
+            opened.events
+        );
+        let felled = played(&app, "attack").await;
+        assert!(
+            felled.events.iter().any(|e| matches!(
+                &e.kind,
+                GameEventKind::CombatEnded {
+                    outcome: CombatOutcome::Victory,
+                    ..
+                }
+            )),
+            "two armed strikes fell 12 hp: {:?}",
+            felled.events
+        );
+        assert_eq!(felled.snapshot.player.coins, 27, "2 + the boss's 25");
+
+        // Back to Mara for the coat; wear it over the blade.
+        for step in [
+            "down", "down", "south", "south", "south", "east", "buy coat",
+        ] {
+            played(&app, step).await;
+        }
+        let worn = played(&app, "wear coat").await;
+        assert_eq!(
+            equipped_pairs(&worn),
+            vec![
+                ("weapon".to_string(), "rust_edge_blade".to_string()),
+                ("armor".to_string(), "waxed_coat".to_string()),
+            ],
+            "both slots filled, weapon first"
+        );
+
+        // The gear survives the save/load round-trip byte-for-byte.
+        let saved = save(State(app.clone()), slot_request(Some("geared"))).await;
+        assert!(saved.0.ok, "save accepted: {:?}", saved.0.error);
+        let at_save = state_value(&app).await;
+        played(&app, "unequip weapon").await;
+        let loaded = load(State(app.clone()), slot_request(Some("geared"))).await;
+        assert!(loaded.0.ok, "load accepted: {:?}", loaded.0.error);
+        assert_eq!(
+            state_value(&app).await,
+            at_save,
+            "the restored /state still wears the blade and coat"
+        );
+        std::fs::remove_dir_all(app.saves.root()).ok();
+    }
 }

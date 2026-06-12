@@ -7,9 +7,9 @@ use awareness::{AwarenessKind, RadiusConfig};
 use command::{parse, Command, Direction};
 use oathstar_protocol::{
     CombatOutcome, CombatSnapshot, CombatantSnapshot, CommandRequest, CommandResponse,
-    EventChannel, GameEvent, GameEventKind, GameSnapshot, MapRoomSnapshot, MapSnapshot,
-    NearbySnapshot, NearbyStatsSnapshot, NearbyThreatSnapshot, OathSnapshot, OathStatus,
-    OutputComponent, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
+    EquippedItemSnapshot, EventChannel, GameEvent, GameEventKind, GameSnapshot, MapRoomSnapshot,
+    MapSnapshot, NearbySnapshot, NearbyStatsSnapshot, NearbyThreatSnapshot, OathSnapshot,
+    OathStatus, OutputComponent, PackItemSnapshot, PlayerSnapshot, RoomSnapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -260,6 +260,54 @@ pub struct Item {
     /// economy unless a module opts them in.
     #[serde(default)]
     pub value: u64,
+    /// What this item does when worn (ticket #35): `Some` makes it equipment
+    /// with an authored slot and stat mods, in the [`CombatProfile`] table
+    /// idiom (`equipment = { slot = "weapon", attack = 2 }`). `None` (the
+    /// default, and absent from old saves) means the item cannot be equipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipment: Option<EquipmentProfile>,
+}
+
+/// The slot a piece of equipment occupies (ticket #35).
+///
+/// Authored as lowercase strings in TOML (`"weapon"` / `"armor"`), so an
+/// invalid slot fails the module at parse time. v1's two active slots; the
+/// client's other gear-panel slots stay decorative until a future ticket
+/// adds more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EquipSlot {
+    Weapon,
+    Armor,
+}
+
+impl EquipSlot {
+    /// The lowercase wire/author-facing name (`"weapon"` / `"armor"`) — also
+    /// what `unequip <slot>` matches against.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Weapon => "weapon",
+            Self::Armor => "armor",
+        }
+    }
+}
+
+/// An item's authored equipment behavior (ticket #35).
+///
+/// Names the slot it fills plus its stat mods. Mods author as unsigned (no
+/// cursed/negative gear in v1) and default to 0, so
+/// `equipment = { slot = "armor", defense = 1 }` is complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EquipmentProfile {
+    pub slot: EquipSlot,
+    /// Added to every player strike while equipped in the weapon slot.
+    #[serde(default)]
+    pub attack: u32,
+    /// Subtracted from every incoming hit (floored at 0 damage dealt) while
+    /// equipped in the armor slot.
+    #[serde(default)]
+    pub defense: u32,
 }
 
 /// A swearable oath defined by a module — leaf content data.
@@ -811,6 +859,16 @@ pub struct PlayerState {
     /// additive-field posture (no format bump).
     #[serde(default)]
     pub coins: u64,
+    /// The item id equipped in the weapon slot (ticket #35); `None` when
+    /// bare-handed. Serde-additive like `coins`: a pre-equipment save loads
+    /// with empty hands. Equipped ids live here INSTEAD of in the pack, so
+    /// `drop`/`sell` (which search the pack) naturally refuse equipped gear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipped_weapon: Option<String>,
+    /// The item id equipped in the armor slot (ticket #35); see
+    /// [`Self::equipped_weapon`] for the storage contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipped_armor: Option<String>,
 }
 
 /// Damage the player deals per strike (ticket #22). Fixed and deterministic (no
@@ -1115,6 +1173,8 @@ impl Engine {
                 focus: 5,
                 max_focus: 5,
                 coins: 0,
+                equipped_weapon: None,
+                equipped_armor: None,
             },
             oath: None,
             pack: Vec::new(),
@@ -1150,7 +1210,10 @@ impl Engine {
     /// and then the state's world references are checked against the loaded
     /// world — the current room, the active combat enemy, and the sworn oath
     /// are exactly the state-reachable engine invariants, so a crafted payload
-    /// is refused here instead of panicking later.
+    /// is refused here instead of panicking later. Pack and equipped-slot ids
+    /// (ticket #35) are deliberately NOT validated: every consumer tolerates a
+    /// dangling id (name falls back to the id, mods to 0), so they are
+    /// tolerance-class references, not invariants.
     ///
     /// # Errors
     /// Returns a [`LoadError`] naming the first rejection: a version mismatch,
@@ -1213,6 +1276,7 @@ impl Engine {
                 focus: self.state.player.focus,
                 max_focus: self.state.player.max_focus,
                 coins: self.state.player.coins,
+                equipment: self.equipment_snapshot(),
             },
             room: room_snapshot,
             map,
@@ -1306,15 +1370,18 @@ impl Engine {
     /// window (the enemy never acts inside it, so a window defeat is
     /// impossible).
     fn resolve_power_strike(&mut self, events: &mut Vec<GameEvent>) {
+        // The equipped weapon swings every strike (ticket #35) — computed
+        // before the `&mut combat` borrow below.
+        let damage = POWER_STRIKE_DAMAGE.saturating_add(self.player_attack_bonus());
         let (line, enemy_dead) = {
             let combat = self
                 .state
                 .combat
                 .as_mut()
                 .expect("resolve_power_strike is only called with an active encounter");
-            combat.enemy_hp = combat.enemy_hp.saturating_sub(POWER_STRIKE_DAMAGE).max(0);
+            combat.enemy_hp = combat.enemy_hp.saturating_sub(damage).max(0);
             let line = format!(
-                "Your power strike slams into {} for {POWER_STRIKE_DAMAGE} ({}/{}).",
+                "Your power strike slams into {} for {damage} ({}/{}).",
                 combat.enemy_name, combat.enemy_hp, combat.enemy_max_hp
             );
             combat.log.push(line.clone());
@@ -1402,7 +1469,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory, rest, shop, buy, sell.",
+                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory, rest, shop, buy, sell, equip, unequip.",
                 ));
             }
             Command::Look { target: None } => {
@@ -1455,6 +1522,12 @@ impl Engine {
             }
             Command::Sell { target } => {
                 return self.acted(events, |engine| engine.sell_at(&target));
+            }
+            Command::Equip { target } => {
+                return self.acted(events, |engine| engine.equip_at(&target));
+            }
+            Command::Unequip { target } => {
+                return self.acted(events, |engine| engine.unequip_at(&target));
             }
             Command::Unknown { input } => {
                 events.push(self.log(
@@ -1537,17 +1610,26 @@ impl Engine {
                 "You can make out {} nearby, but it is too far off to examine closely.",
                 found.name
             ),
-            // Not nearby — fall back to the carried pack (ticket #20): a carried
-            // item has no cell, so it resolves from inventory (REQ-004).
-            None => self.find_in_pack(target).map_or_else(
-                || format!("You see nothing like '{target}' nearby."),
-                |item| {
+            // Not nearby — fall back to the carried pack (ticket #20), then to
+            // equipped gear (ticket #35): a worn item left the pack but is
+            // still possessed, and a projection must not deny it.
+            None => self
+                .find_in_pack(target)
+                .map(|item| {
                     format!(
                         "You examine the {} you are carrying. {}",
                         item.name, item.description
                     )
-                },
-            ),
+                })
+                .or_else(|| {
+                    self.find_equipped(target).map(|item| {
+                        format!(
+                            "You look over the {} you have equipped. {}",
+                            item.name, item.description
+                        )
+                    })
+                })
+                .unwrap_or_else(|| format!("You see nothing like '{target}' nearby.")),
         };
         vec![self.log(
             EventChannel::Narrative,
@@ -1799,6 +1881,19 @@ impl Engine {
         let (index, item_id, name) = match matches.as_slice() {
             [(index, item_id, name)] => (*index, item_id.clone(), name.clone()),
             [] => {
+                // Equipped gear left the pack but is still possessed (ticket
+                // #35) — the refusal must say so, not deny the item exists.
+                if let Some(equipped) = self.find_equipped(target) {
+                    let name = equipped.name.clone();
+                    return (
+                        false,
+                        vec![self.log(
+                            EventChannel::Narrative,
+                            OutputComponent::NarrativeMessage,
+                            format!("The {name} is equipped — unequip it before dropping it."),
+                        )],
+                    );
+                }
                 return (
                     false,
                     vec![self.log(
@@ -1836,23 +1931,31 @@ impl Engine {
     }
 
     /// List the player's carried items, or an honest empty state (ticket #20,
-    /// REQ-003). Always accepted — a readout of `state.pack`.
+    /// REQ-003). Always accepted — a readout of `state.pack`, with an
+    /// `Equipped:` clause when gear is worn (ticket #35): worn items left the
+    /// pack but are still possessed, and the inventory must keep saying so.
     fn list_pack(&mut self) -> Vec<GameEvent> {
         let names: Vec<String> = self
             .state
             .pack
             .iter()
-            .map(|item_id| {
-                self.world
-                    .items
-                    .get(item_id)
-                    .map_or_else(|| item_id.clone(), |item| item.name.clone())
-            })
+            .map(|item_id| self.item_name(item_id))
             .collect();
-        let text = if names.is_empty() {
+        let carrying = if names.is_empty() {
             "You are carrying nothing.".to_string()
         } else {
             format!("You are carrying: {}.", names.join(", "))
+        };
+        let equipped: Vec<String> = [EquipSlot::Weapon, EquipSlot::Armor]
+            .into_iter()
+            .filter_map(|slot| self.equipped_slot(slot))
+            .map(String::from)
+            .collect();
+        let text = if equipped.is_empty() {
+            carrying
+        } else {
+            let gear: Vec<String> = equipped.iter().map(|id| self.item_name(id)).collect();
+            format!("{carrying} Equipped: {}.", gear.join(", "))
         };
         vec![self.log(
             EventChannel::Inventory,
@@ -2065,6 +2168,19 @@ impl Engine {
                 )
             })
         else {
+            // Equipped gear is possessed but not sellable in place (ticket
+            // #35) — name the real reason instead of denying the item.
+            if let Some(equipped) = self.find_equipped(target) {
+                let name = equipped.name.clone();
+                return (
+                    false,
+                    vec![self.log(
+                        EventChannel::System,
+                        OutputComponent::SystemMessage,
+                        format!("The {name} is equipped — unequip it before selling."),
+                    )],
+                );
+            }
             return (
                 false,
                 vec![self.log(
@@ -2114,6 +2230,272 @@ impl Engine {
                 format!("You sell {item_name} for {price} coins. ({coins} now.)"),
             )],
         )
+    }
+
+    /// The display name for `item_id`, falling back to the id itself for a
+    /// dangling reference (the `list_pack` posture — never panic on state).
+    fn item_name(&self, item_id: &str) -> String {
+        self.world
+            .items
+            .get(item_id)
+            .map_or_else(|| item_id.to_string(), |item| item.name.clone())
+    }
+
+    /// The slot's equipped item id (ticket #35) — with
+    /// [`Self::equipped_slot_mut`], the single mapping from [`EquipSlot`] to
+    /// its [`PlayerState`] field.
+    fn equipped_slot(&self, slot: EquipSlot) -> Option<&str> {
+        match slot {
+            EquipSlot::Weapon => self.state.player.equipped_weapon.as_deref(),
+            EquipSlot::Armor => self.state.player.equipped_armor.as_deref(),
+        }
+    }
+
+    /// The slot's equipped-state storage (ticket #35) — the write half of the
+    /// [`Self::equipped_slot`] mapping pair.
+    const fn equipped_slot_mut(&mut self, slot: EquipSlot) -> &mut Option<String> {
+        match slot {
+            EquipSlot::Weapon => &mut self.state.player.equipped_weapon,
+            EquipSlot::Armor => &mut self.state.player.equipped_armor,
+        }
+    }
+
+    /// The first equipped item matching `query` by name/alias (ticket #35) —
+    /// the gear counterpart of [`Self::find_in_pack`], used by the projections
+    /// and refusal arms that must keep seeing possessed-but-worn gear.
+    fn find_equipped(&self, query: &str) -> Option<&Item> {
+        [EquipSlot::Weapon, EquipSlot::Armor]
+            .into_iter()
+            .filter_map(|slot| self.equipped_slot(slot))
+            .filter_map(|item_id| self.world.items.get(item_id))
+            .find(|item| awareness::name_or_alias_matches(&item.name, &item.aliases, query))
+    }
+
+    /// The stat mod contributed by the gear in `slot` (ticket #35): the
+    /// weapon's `attack` or the armor's `defense`, 0 when the slot is empty,
+    /// its id dangles, or a crafted save parked gear in the wrong slot (a
+    /// slot only ever pays its own profile's stat). Saturating `u32 → i32` so
+    /// a crafted `u32::MAX` mod can never overflow combat math.
+    fn slot_mod(&self, slot: EquipSlot) -> i32 {
+        self.equipped_slot(slot)
+            .and_then(|item_id| self.world.items.get(item_id))
+            .and_then(|item| item.equipment)
+            .filter(|profile| profile.slot == slot)
+            .map_or(0, |profile| {
+                let raw = match slot {
+                    EquipSlot::Weapon => profile.attack,
+                    EquipSlot::Armor => profile.defense,
+                };
+                i32::try_from(raw).unwrap_or(i32::MAX)
+            })
+    }
+
+    /// Damage added to every player strike by the equipped weapon (ticket #35).
+    fn player_attack_bonus(&self) -> i32 {
+        self.slot_mod(EquipSlot::Weapon)
+    }
+
+    /// Damage turned aside from every incoming hit by the equipped armor
+    /// (ticket #35); the dealt amount floors at 0.
+    fn player_defense(&self) -> i32 {
+        self.slot_mod(EquipSlot::Armor)
+    }
+
+    /// The typed mid-combat gear refusal shared by `equip`/`unequip` (ticket
+    /// #35) — changing gear is committed time, the trade-verb parity.
+    fn gear_combat_refusal(&mut self) -> (bool, Vec<GameEvent>) {
+        (
+            false,
+            vec![self.log(
+                EventChannel::System,
+                OutputComponent::SystemMessage,
+                "There is no changing gear in the midst of battle.",
+            )],
+        )
+    }
+
+    /// Resolve and perform an `equip <target>` from the carried pack (ticket
+    /// #35, REQ-001/002). The item's authored [`EquipmentProfile`] names its
+    /// slot; equipping moves the id pack → slot, and a prior occupant swaps
+    /// back into the pack in the same act. Every failure arm is a typed
+    /// refusal with no state change: mid-combat, not carried, ambiguous, or
+    /// not equipment.
+    fn equip_at(&mut self, target: &str) -> (bool, Vec<GameEvent>) {
+        if self.state.combat.is_some() {
+            return self.gear_combat_refusal();
+        }
+        let matches = self.matching_pack_items(target);
+        if matches.len() > 1 {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("More than one carried item matches '{target}'."),
+                )],
+            );
+        }
+        let Some((index, item_id, item_name)) = matches.into_iter().next() else {
+            // An already-equipped match deserves the honest arm, not a denial
+            // (ticket #35 inspect): the gear left the pack when it was donned.
+            if let Some(equipped) = self.find_equipped(target) {
+                let name = equipped.name.clone();
+                return (
+                    false,
+                    vec![self.log(
+                        EventChannel::System,
+                        OutputComponent::SystemMessage,
+                        format!("The {name} is already equipped."),
+                    )],
+                );
+            }
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("You are not carrying '{target}'."),
+                )],
+            );
+        };
+        let Some(profile) = self
+            .world
+            .items
+            .get(&item_id)
+            .and_then(|item| item.equipment)
+        else {
+            return (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("{item_name} is not something you can equip."),
+                )],
+            );
+        };
+        self.state.pack.remove(index);
+        let previous = self.equipped_slot_mut(profile.slot).replace(item_id);
+        let verb = match profile.slot {
+            EquipSlot::Weapon => "wield",
+            EquipSlot::Armor => "wear",
+        };
+        let line = previous.map_or_else(
+            || format!("You {verb} the {item_name}."),
+            |previous_id| {
+                let previous_name = self.item_name(&previous_id);
+                self.stow_into_pack(previous_id);
+                format!("You {verb} the {item_name}, stowing the {previous_name}.")
+            },
+        );
+        (
+            true,
+            vec![self.log(EventChannel::Inventory, OutputComponent::ItemCard, line)],
+        )
+    }
+
+    /// Resolve and perform an `unequip <target>` (ticket #35, REQ-001/002).
+    /// The target names a slot (`weapon`/`armor`) or an equipped item; the
+    /// freed item returns to the pack. Typed refusals, no state change:
+    /// mid-combat, an empty named slot, no equipped match, or an ambiguous
+    /// one.
+    fn unequip_at(&mut self, target: &str) -> (bool, Vec<GameEvent>) {
+        if self.state.combat.is_some() {
+            return self.gear_combat_refusal();
+        }
+        let query = target.trim().to_lowercase();
+        let slot_named = match query.as_str() {
+            "weapon" => Some(EquipSlot::Weapon),
+            "armor" => Some(EquipSlot::Armor),
+            _ => None,
+        };
+        if let Some(slot) = slot_named {
+            let Some(item_id) = self.equipped_slot_mut(slot).take() else {
+                return (
+                    false,
+                    vec![self.log(
+                        EventChannel::System,
+                        OutputComponent::SystemMessage,
+                        format!("Nothing is equipped as your {}.", slot.as_str()),
+                    )],
+                );
+            };
+            return self.finish_unequip(item_id);
+        }
+        let matches: Vec<EquipSlot> = [EquipSlot::Weapon, EquipSlot::Armor]
+            .into_iter()
+            .filter(|&slot| {
+                self.equipped_slot(slot)
+                    .and_then(|item_id| self.world.items.get(item_id))
+                    .is_some_and(|item| {
+                        awareness::name_or_alias_matches(&item.name, &item.aliases, target)
+                    })
+            })
+            .collect();
+        match matches.as_slice() {
+            [slot] => {
+                let item_id = self
+                    .equipped_slot_mut(*slot)
+                    .take()
+                    .expect("the slot matched as occupied moments ago");
+                self.finish_unequip(item_id)
+            }
+            [] => (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("You have nothing like '{target}' equipped."),
+                )],
+            ),
+            _ => (
+                false,
+                vec![self.log(
+                    EventChannel::System,
+                    OutputComponent::SystemMessage,
+                    format!("More than one equipped item matches '{target}'."),
+                )],
+            ),
+        }
+    }
+
+    /// Return an unequipped item to the pack and narrate it (ticket #35) —
+    /// the shared success tail of both `unequip` arms.
+    fn finish_unequip(&mut self, item_id: String) -> (bool, Vec<GameEvent>) {
+        let name = self.item_name(&item_id);
+        self.stow_into_pack(item_id);
+        (
+            true,
+            vec![self.log(
+                EventChannel::Inventory,
+                OutputComponent::ItemCard,
+                format!("You unequip the {name}."),
+            )],
+        )
+    }
+
+    /// Return a freed item id to the pack (ticket #35). Always pushes: both
+    /// callers move a live reference OUT of a slot, so the push conserves the
+    /// reference count exactly. (An earlier dedup guard here was inspect-caught
+    /// as loss-only — a module may legally place one id twice, and "the id is
+    /// already carried" then means two copies, not a duplicate to swallow.)
+    fn stow_into_pack(&mut self, item_id: String) {
+        self.state.pack.push(item_id);
+    }
+
+    /// The equipped-gear projection for the player snapshot (ticket #35):
+    /// one entry per filled slot, weapon first, names resolved like the pack.
+    fn equipment_snapshot(&self) -> Vec<EquippedItemSnapshot> {
+        [EquipSlot::Weapon, EquipSlot::Armor]
+            .into_iter()
+            .filter_map(|slot| {
+                let item_id = self.equipped_slot(slot)?;
+                Some(EquippedItemSnapshot {
+                    slot: slot.as_str().to_string(),
+                    id: item_id.to_string(),
+                    name: self.item_name(item_id),
+                })
+            })
+            .collect()
     }
 
     fn move_direction(&mut self, direction: Direction) -> Vec<GameEvent> {
@@ -2564,7 +2946,9 @@ impl Engine {
     /// reaching zero HP ends the fight (REQ-002/003/004). A no-op when no fight is
     /// active. Each line is recorded on the battle log (for the modal) and the feed.
     fn resolve_combat_round(&mut self, events: &mut Vec<GameEvent>) {
-        let damage = PLAYER_STRIKE_DAMAGE;
+        // Gear-aware combat (ticket #35): the equipped weapon adds to every
+        // strike. Computed before the `&mut combat` borrow below.
+        let damage = PLAYER_STRIKE_DAMAGE.saturating_add(self.player_attack_bonus());
         let (player_line, enemy_dead, enemy_name, enemy_attack) = {
             let combat = self
                 .state
@@ -2616,11 +3000,15 @@ impl Engine {
             return;
         }
 
-        self.state.player.hp = self.state.player.hp.saturating_sub(enemy_attack).max(0);
+        // Armor turns part of the return aside (ticket #35): the narrated
+        // number is the damage DEALT after reduction (floored at 0), while a
+        // disclosed enemy stat sheet keeps showing its raw attack.
+        let dealt = enemy_attack.saturating_sub(self.player_defense()).max(0);
+        self.state.player.hp = self.state.player.hp.saturating_sub(dealt).max(0);
         let player_hp = self.state.player.hp;
         let player_max_hp = self.state.player.max_hp;
         let enemy_line =
-            format!("{enemy_name} hits you for {enemy_attack} ({player_hp}/{player_max_hp}).");
+            format!("{enemy_name} hits you for {dealt} ({player_hp}/{player_max_hp}).");
         self.state
             .combat
             .as_mut()
@@ -3439,6 +3827,7 @@ mod tests {
             kind: None,
             flags: Vec::new(),
             value: 0,
+            equipment: None,
         }
     }
 
@@ -9810,5 +10199,491 @@ mod tests {
         let bought = engine.handle_command(cmd("buy lamp"));
         assert!(bought.accepted);
         assert_eq!(bought.snapshot.player.coins, 0, "MAX - MAX, no panic");
+    }
+
+    // ---- ticket #35: equipment ----
+
+    /// A piece of authored gear for the fixtures below.
+    const fn gear(slot: EquipSlot, attack: u32, defense: u32) -> EquipmentProfile {
+        EquipmentProfile {
+            slot,
+            attack,
+            defense,
+        }
+    }
+
+    /// The combat world plus a wardrobe: weapons `fang` (+1) and `blade`
+    /// (+2), armor `coat` (−1), `plate` (−2), `aegis` (−3), the plain `rock`,
+    /// and the `keeper` vendor (so trade arms are reachable). The stray's
+    /// stats come from the caller like `combat_world`.
+    fn gear_world(stray_health: u32, stray_attack: u32) -> WorldDefinition {
+        let mut world = combat_world(stray_health, stray_attack);
+        for (id, profile, value) in [
+            ("fang", Some(gear(EquipSlot::Weapon, 1, 0)), 6),
+            ("blade", Some(gear(EquipSlot::Weapon, 2, 0)), 6),
+            ("coat", Some(gear(EquipSlot::Armor, 0, 1)), 4),
+            ("plate", Some(gear(EquipSlot::Armor, 0, 2)), 4),
+            ("aegis", Some(gear(EquipSlot::Armor, 0, 3)), 4),
+            ("rock", None, 0),
+        ] {
+            let mut piece = item(id);
+            piece.equipment = profile;
+            piece.value = value;
+            world.items.insert(id.to_string(), piece);
+        }
+        let mut keeper = entity("keeper", EntityKind::Actor, &["shopkeeper"], &[]);
+        keeper.name = "Keeper".to_string();
+        world.entities.insert("keeper".to_string(), keeper);
+        world
+            .rooms
+            .get_mut("field")
+            .expect("fixture room")
+            .entities
+            .push("keeper".to_string());
+        world
+    }
+
+    /// An engine in the gear world carrying `ids`, fighting nothing.
+    fn gear_engine(ids: &[&str]) -> Engine {
+        let mut engine = Engine::try_new(gear_world(9, 3)).expect("valid gear world");
+        for id in ids {
+            engine.state.pack.push((*id).to_string());
+        }
+        engine
+    }
+
+    // G-T1 (REQ-001): equip moves the item pack → slot, narrates per slot
+    // kind, and the snapshot lists it under its semantic slot name.
+    #[test]
+    fn equip_moves_carried_gear_into_its_slot() {
+        let mut engine = gear_engine(&["fang", "coat"]);
+        let wielded = engine.handle_command(cmd("equip fang"));
+        assert!(wielded.accepted);
+        assert_eq!(log_text(&wielded), "You wield the fang.");
+        assert_eq!(engine.state.player.equipped_weapon.as_deref(), Some("fang"));
+
+        let worn = engine.handle_command(cmd("wear coat"));
+        assert!(worn.accepted);
+        assert_eq!(log_text(&worn), "You wear the coat.");
+        assert_eq!(engine.state.player.equipped_armor.as_deref(), Some("coat"));
+
+        assert!(engine.state.pack.is_empty(), "both moved out of the pack");
+        let equipment = engine.snapshot().player.equipment;
+        let listed: Vec<(String, String, String)> = equipment
+            .iter()
+            .map(|entry| (entry.slot.clone(), entry.id.clone(), entry.name.clone()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                ("weapon".to_string(), "fang".to_string(), "fang".to_string()),
+                ("armor".to_string(), "coat".to_string(), "coat".to_string()),
+            ],
+            "weapon first, slot/id/name exact"
+        );
+    }
+
+    // G-T1b (REQ-004): the snapshot lists weapon before armor regardless of
+    // the order the gear was donned (kills the projection-order mutant).
+    #[test]
+    fn equipment_snapshot_orders_weapon_first() {
+        let mut engine = gear_engine(&["fang", "coat"]);
+        assert!(engine.handle_command(cmd("wear coat")).accepted);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+        let slots: Vec<String> = engine
+            .snapshot()
+            .player
+            .equipment
+            .iter()
+            .map(|entry| entry.slot.clone())
+            .collect();
+        assert_eq!(slots, vec!["weapon".to_string(), "armor".to_string()]);
+    }
+
+    // G-T2 (REQ-001): equipping onto an occupied slot swaps — the prior
+    // occupant returns to the pack and the line names both.
+    #[test]
+    fn equip_swaps_the_occupied_slot_back_into_the_pack() {
+        let mut engine = gear_engine(&["fang", "blade"]);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+        let swapped = engine.handle_command(cmd("equip blade"));
+        assert!(swapped.accepted);
+        assert_eq!(log_text(&swapped), "You wield the blade, stowing the fang.");
+        assert_eq!(
+            engine.state.player.equipped_weapon.as_deref(),
+            Some("blade")
+        );
+        assert_eq!(engine.state.pack, vec!["fang".to_string()]);
+    }
+
+    // G-T3a (REQ-002): both gear verbs refuse mid-combat with no state change.
+    #[test]
+    fn gear_changes_refuse_mid_combat() {
+        let mut engine = gear_engine(&["fang"]);
+        engine.handle_command(cmd("attack stray"));
+        let equip = engine.handle_command(cmd("equip fang"));
+        assert!(!equip.accepted);
+        assert_eq!(
+            system_line(&equip),
+            "There is no changing gear in the midst of battle."
+        );
+        assert_eq!(engine.state.player.equipped_weapon, None);
+        assert_eq!(engine.state.pack, vec!["fang".to_string()]);
+
+        let unequip = engine.handle_command(cmd("unequip weapon"));
+        assert!(!unequip.accepted);
+        assert_eq!(
+            system_line(&unequip),
+            "There is no changing gear in the midst of battle."
+        );
+    }
+
+    // G-T3b (REQ-002): the not-carried, not-equipment, and ambiguous arms,
+    // each with zero state change.
+    #[test]
+    fn equip_refuses_missing_plain_and_ambiguous_targets() {
+        let mut engine = gear_engine(&["rock", "fang", "fang"]);
+        let missing = engine.handle_command(cmd("equip torch"));
+        assert!(!missing.accepted);
+        assert_eq!(system_line(&missing), "You are not carrying 'torch'.");
+
+        let plain = engine.handle_command(cmd("equip rock"));
+        assert!(!plain.accepted);
+        assert_eq!(system_line(&plain), "rock is not something you can equip.");
+
+        let ambiguous = engine.handle_command(cmd("equip fang"));
+        assert!(!ambiguous.accepted);
+        assert_eq!(
+            system_line(&ambiguous),
+            "More than one carried item matches 'fang'."
+        );
+        assert_eq!(
+            engine.state.pack,
+            vec!["rock".to_string(), "fang".to_string(), "fang".to_string()],
+            "every refusal left the pack untouched"
+        );
+        assert_eq!(engine.state.player.equipped_weapon, None);
+    }
+
+    // G-T3c (REQ-002, inspect #2): an already-equipped target gets the honest
+    // arm — not the "not carrying" denial.
+    #[test]
+    fn equip_names_an_already_equipped_target_honestly() {
+        let mut engine = gear_engine(&["fang"]);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+        let again = engine.handle_command(cmd("equip fang"));
+        assert!(!again.accepted);
+        assert_eq!(system_line(&again), "The fang is already equipped.");
+    }
+
+    // G-T3d (REQ-002): unequip's empty-slot arms, one per slot keyword
+    // (kills the EquipSlot::as_str arm mutants).
+    #[test]
+    fn unequip_refuses_empty_slots_by_name() {
+        let mut engine = gear_engine(&[]);
+        let weapon = engine.handle_command(cmd("unequip weapon"));
+        assert!(!weapon.accepted);
+        assert_eq!(system_line(&weapon), "Nothing is equipped as your weapon.");
+        let armor = engine.handle_command(cmd("unequip armor"));
+        assert!(!armor.accepted);
+        assert_eq!(system_line(&armor), "Nothing is equipped as your armor.");
+    }
+
+    // G-T3e (REQ-002): unequip's no-match and ambiguous arms.
+    #[test]
+    fn unequip_refuses_unknown_and_ambiguous_gear() {
+        let mut engine = gear_engine(&["fang", "coat"]);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+        assert!(engine.handle_command(cmd("wear coat")).accepted);
+
+        let unknown = engine.handle_command(cmd("unequip banana"));
+        assert!(!unknown.accepted);
+        assert_eq!(
+            system_line(&unknown),
+            "You have nothing like 'banana' equipped."
+        );
+
+        // Both equipped pieces share an alias → ambiguous, nothing taken off.
+        for id in ["fang", "coat"] {
+            engine
+                .world
+                .items
+                .get_mut(id)
+                .expect("fixture item")
+                .aliases
+                .push("kit".to_string());
+        }
+        let ambiguous = engine.handle_command(cmd("unequip kit"));
+        assert!(!ambiguous.accepted);
+        assert_eq!(
+            system_line(&ambiguous),
+            "More than one equipped item matches 'kit'."
+        );
+        assert_eq!(engine.state.player.equipped_weapon.as_deref(), Some("fang"));
+        assert_eq!(engine.state.player.equipped_armor.as_deref(), Some("coat"));
+    }
+
+    // G-T3f (REQ-001): unequip succeeds by slot keyword and by item name,
+    // returning the piece to the pack.
+    #[test]
+    fn unequip_frees_gear_by_slot_or_name() {
+        let mut engine = gear_engine(&["fang", "coat"]);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+        assert!(engine.handle_command(cmd("wear coat")).accepted);
+
+        let by_name = engine.handle_command(cmd("unequip fang"));
+        assert!(by_name.accepted);
+        assert_eq!(log_text(&by_name), "You unequip the fang.");
+        assert_eq!(engine.state.player.equipped_weapon, None);
+
+        let by_slot = engine.handle_command(cmd("unequip armor"));
+        assert!(by_slot.accepted);
+        assert_eq!(log_text(&by_slot), "You unequip the coat.");
+        assert_eq!(engine.state.player.equipped_armor, None);
+        assert_eq!(
+            engine.state.pack,
+            vec!["fang".to_string(), "coat".to_string()]
+        );
+    }
+
+    // G-T3g (REQ-002, inspect #2): drop and sell name the real reason for an
+    // equipped item instead of denying possession.
+    #[test]
+    fn drop_and_sell_refuse_equipped_gear_honestly() {
+        let mut engine = gear_engine(&["fang"]);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+
+        let dropped = engine.handle_command(cmd("drop fang"));
+        assert!(!dropped.accepted);
+        assert_eq!(
+            log_text(&dropped),
+            "The fang is equipped — unequip it before dropping it."
+        );
+
+        let sold = engine.handle_command(cmd("sell fang"));
+        assert!(!sold.accepted);
+        assert_eq!(
+            system_line(&sold),
+            "The fang is equipped — unequip it before selling."
+        );
+        assert_eq!(engine.state.player.equipped_weapon.as_deref(), Some("fang"));
+    }
+
+    // G-T4 (REQ-003): the weapon bonus lands on every strike — basic 4/5/6
+    // bare/fang/blade (boundary ±1) and the power strike at 6 + mod.
+    #[test]
+    fn weapon_mods_raise_every_strike_exactly() {
+        // Bare hands: 4 (the existing contract, re-pinned here as the base).
+        let mut engine = gear_engine(&[]);
+        let bare = engine.handle_command(cmd("attack stray"));
+        assert_eq!(
+            count_lines(&bare.events, "You strike Stray for 4 (5/9)."),
+            1
+        );
+
+        // Fang (+1): 5.
+        let mut engine = gear_engine(&["fang"]);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+        let fanged = engine.handle_command(cmd("attack stray"));
+        assert_eq!(
+            count_lines(&fanged.events, "You strike Stray for 5 (4/9)."),
+            1
+        );
+
+        // Blade (+2): 6 — and the queued power strike slams for 6 + 2 = 8.
+        let mut engine = Engine::try_new(gear_world(40, 1)).expect("valid gear world");
+        engine.state.pack.push("blade".to_string());
+        assert!(engine.handle_command(cmd("equip blade")).accepted);
+        let bladed = engine.handle_command(cmd("attack stray"));
+        assert_eq!(
+            count_lines(&bladed.events, "You strike Stray for 6 (34/40)."),
+            1
+        );
+        engine.handle_command(cmd("power strike"));
+        let _ = engine.tick();
+        let pulse = engine.tick(); // P1 round 2 (strike 6 → 28), then P2 slams 8 → 20
+        assert_eq!(
+            count_lines(&pulse, "Your power strike slams into Stray for 8 (20/40)."),
+            1,
+            "power strike carries the weapon mod: {pulse:?}"
+        );
+    }
+
+    // G-T5 (REQ-003): armor reduces every return by its defense, narrating
+    // the DEALT number, with the boundary swept across 1/2/3 vs attack 3.
+    #[test]
+    fn armor_reduces_incoming_hits_to_the_floor() {
+        for (piece, dealt, hp_after) in [("coat", 2, 18), ("plate", 1, 19), ("aegis", 0, 20)] {
+            let mut engine = gear_engine(&[piece]);
+            assert!(
+                engine
+                    .handle_command(CommandRequest {
+                        input: format!("wear {piece}"),
+                        actor_id: None,
+                    })
+                    .accepted
+            );
+            let round = engine.handle_command(cmd("attack stray"));
+            let line = format!("Stray hits you for {dealt} ({hp_after}/20).");
+            assert_eq!(
+                count_lines(&round.events, &line),
+                1,
+                "defense sweep for {piece}: {:?}",
+                round.events
+            );
+            assert_eq!(engine.state.player.hp, hp_after);
+        }
+    }
+
+    // G-T9 (REQ-003/005): crafted extremes — a u32::MAX mod saturates instead
+    // of overflowing, and cross-slot crafted gear pays nothing.
+    #[test]
+    fn crafted_gear_extremes_never_panic_and_wrong_slots_pay_zero() {
+        // MAX attack: the strike floors the enemy without panicking.
+        let mut engine = gear_engine(&["blade"]);
+        engine
+            .world
+            .items
+            .get_mut("blade")
+            .expect("fixture item")
+            .equipment = Some(gear(EquipSlot::Weapon, u32::MAX, 0));
+        assert!(engine.handle_command(cmd("equip blade")).accepted);
+        let strike = engine.handle_command(cmd("attack stray"));
+        assert!(strike.accepted);
+        assert!(engine.state.combat.is_none(), "one saturated blow ended it");
+
+        // MAX defense: every return deals exactly 0.
+        let mut engine = gear_engine(&["coat"]);
+        engine
+            .world
+            .items
+            .get_mut("coat")
+            .expect("fixture item")
+            .equipment = Some(gear(EquipSlot::Armor, 0, u32::MAX));
+        assert!(engine.handle_command(cmd("wear coat")).accepted);
+        let round = engine.handle_command(cmd("attack stray"));
+        assert_eq!(
+            count_lines(&round.events, "Stray hits you for 0 (20/20)."),
+            1
+        );
+
+        // Cross-slot crafted state: an armor profile parked in the weapon
+        // slot (and vice versa) pays 0 — a slot only pays its own stat.
+        let mut engine = gear_engine(&[]);
+        engine.state.player.equipped_weapon = Some("aegis".to_string());
+        engine.state.player.equipped_armor = Some("blade".to_string());
+        let round = engine.handle_command(cmd("attack stray"));
+        assert_eq!(
+            count_lines(&round.events, "You strike Stray for 4 (5/9)."),
+            1,
+            "armor-in-weapon-slot adds nothing"
+        );
+        assert_eq!(
+            count_lines(&round.events, "Stray hits you for 3 (17/20)."),
+            1,
+            "weapon-in-armor-slot blocks nothing"
+        );
+    }
+
+    // G-T8 (REQ-005): the save round-trip preserves both slots; a legacy
+    // payload without the keys loads bare-handed; and the crafted
+    // pack+slot duplicate is CONSERVED by unequip (inspect #1 — the dedup
+    // guard that destroyed a copy is gone).
+    #[test]
+    fn equipment_state_round_trips_saves() {
+        let mut engine = gear_engine(&["fang", "coat"]);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+        assert!(engine.handle_command(cmd("wear coat")).accepted);
+        let saved = engine.save_data();
+        let loaded = Engine::from_save(saved).expect("round-trip loads");
+        assert_eq!(loaded.state.player.equipped_weapon.as_deref(), Some("fang"));
+        assert_eq!(loaded.state.player.equipped_armor.as_deref(), Some("coat"));
+
+        // Legacy payload: strip the equipment keys entirely (the #34 coins
+        // pattern) — a pre-#35 save loads with empty hands.
+        let mut value = serde_json::to_value(engine.save_data()).expect("save serializes to JSON");
+        let player = value
+            .get_mut("state")
+            .and_then(|state| state.get_mut("player"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("player object");
+        player.remove("equipped_weapon");
+        player.remove("equipped_armor");
+        let legacy: SaveData = serde_json::from_value(value).expect("legacy payload parses");
+        let loaded = Engine::from_save(legacy).expect("legacy payload loads");
+        assert_eq!(loaded.state.player.equipped_weapon, None);
+        assert_eq!(loaded.state.player.equipped_armor, None);
+
+        // Crafted duplicate: the id in the pack AND the slot means two
+        // copies; unequip must conserve both.
+        let mut engine = gear_engine(&["fang"]);
+        engine.state.player.equipped_weapon = Some("fang".to_string());
+        let freed = engine.handle_command(cmd("unequip weapon"));
+        assert!(freed.accepted);
+        assert_eq!(
+            engine.state.pack,
+            vec!["fang".to_string(), "fang".to_string()],
+            "both copies survive"
+        );
+    }
+
+    // G-T10 (REQ-004, inspect #2): the text projections keep seeing worn
+    // gear — look falls back to equipped, and the inventory appends the
+    // Equipped clause (including over an empty pack).
+    #[test]
+    fn text_projections_keep_seeing_equipped_gear() {
+        let mut engine = gear_engine(&["rock", "fang", "coat"]);
+        assert!(engine.handle_command(cmd("equip fang")).accepted);
+        assert!(engine.handle_command(cmd("wear coat")).accepted);
+
+        let looked = engine.handle_command(cmd("look fang"));
+        assert_eq!(
+            log_text(&looked),
+            "You look over the fang you have equipped. d"
+        );
+
+        let pack = engine.handle_command(cmd("inventory"));
+        assert_eq!(
+            log_text(&pack),
+            "You are carrying: rock. Equipped: fang, coat."
+        );
+
+        engine.handle_command(cmd("drop rock"));
+        let bare_pack = engine.handle_command(cmd("inventory"));
+        assert_eq!(
+            log_text(&bare_pack),
+            "You are carrying nothing. Equipped: fang, coat."
+        );
+
+        // Unequipped, the carried fallback resumes.
+        assert!(engine.handle_command(cmd("unequip fang")).accepted);
+        let carried = engine.handle_command(cmd("look fang"));
+        assert_eq!(
+            log_text(&carried),
+            "You examine the fang you are carrying. d"
+        );
+    }
+
+    // G-T11 (REQ-006 composition): gear trades through the existing shop —
+    // buying a blade stocks the pack, equipping it arms the slot.
+    #[test]
+    fn bought_gear_equips_like_any_carried_item() {
+        let mut engine = gear_engine(&[]);
+        engine
+            .world
+            .entities
+            .get_mut("keeper")
+            .expect("vendor")
+            .inventory
+            .push("blade".to_string());
+        engine.state.player.coins = 6;
+        assert!(engine.handle_command(cmd("buy blade")).accepted);
+        assert_eq!(engine.state.player.coins, 0);
+        let wielded = engine.handle_command(cmd("equip blade"));
+        assert!(wielded.accepted);
+        assert_eq!(
+            engine.state.player.equipped_weapon.as_deref(),
+            Some("blade")
+        );
     }
 }

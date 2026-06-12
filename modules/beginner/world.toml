@@ -48,7 +48,9 @@ description = "A severe woman with wax on her sleeves and a ledger chained to he
 aliases = ["mara", "shopkeeper", "candlekeep"]
 kind = "actor"
 roles = ["talkable", "oath_giver", "shopkeeper"]
-inventory = ["candle"]
+# Ticket #35 adds the starter gear to her counter: a blade and a waxed coat
+# (a candle-keeper waterproofs leather anyway — W1 re-homes stock properly).
+inventory = ["candle", "rust_edge_blade", "waxed_coat"]
 
 # Mara's authored dialogue (ticket #19). `greeting` is the default reply; the
 # `oath` block is spoken because Mara issues the Hollow Bell oath (oath.issuer_id
@@ -83,6 +85,29 @@ kind = "trinket"
 # Ticket #34: pocket change — sells for 1 coin.
 value = 2
 
+# The starter weapon (ticket #35) — Mara's counter, 6 coins. Attack 2 lifts
+# the basic strike to 6 and the power strike to 8: the Bell-Eater (12 hp)
+# falls in two basic blows instead of three, the visible gear payoff.
+[[items]]
+id = "rust_edge_blade"
+name = "Rust-Edge Blade"
+description = "A short blade freckled with rust. The edge underneath still means it."
+aliases = ["blade", "sword", "rust-edge", "rust-edge blade"]
+kind = "weapon"
+value = 6
+equipment = { slot = "weapon", attack = 2 }
+
+# The starter armor (ticket #35) — Mara's counter, 4 coins. Defense 1 turns
+# one point of every hit aside: the stray's bite lands 2, the boss's 3.
+[[items]]
+id = "waxed_coat"
+name = "Waxed Leather Coat"
+description = "A drover's coat stiff with candle-wax. Rain and teeth both slide off it."
+aliases = ["coat", "leather coat", "waxed coat"]
+kind = "armor"
+value = 4
+equipment = { slot = "armor", defense = 1 }
+
 # The stolen bell clapper — the boss's hoarded prize and the oath's objective.
 [[items]]
 id = "bell_clapper"
@@ -102,6 +127,9 @@ aliases = ["fang", "cracked fang"]
 kind = "trophy"
 # Ticket #34: a sellable trophy — 3 coins at Mara's counter.
 value = 6
+# Ticket #35: the first drop is also the first weapon — equip it for +1
+# strike damage, or sell it toward the blade. The choice IS the tutorial.
+equipment = { slot = "weapon", attack = 1 }
 
 # The boss actor, placed in bell_eater_roost (see rooms.toml). The "boss" role is
 # how the engine's `confront` command finds the boss in the current room.
