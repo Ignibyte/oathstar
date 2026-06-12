@@ -2499,3 +2499,56 @@ Revisit when:
   HP-only; growth needs its own decision).
 - A second focus spender can run between queue and resolve (re-examine
   spend-on-queue's exploit analysis before adding it).
+
+## Decision 050: Sprite Tiles Render From A Committed, Name-Keyed Tileset With A Permanent Flat-Color Fallback
+
+Status: Locked
+
+Date: 2026-06-11
+
+What was decided (ticket #32):
+
+- **The tileset is a committed asset served from `public/`.** The starter
+  sheet (`public/tilesets/oathstar-starter-16x16/`: 128×128 PNG of 64
+  16px tiles + Tiled `.tsx` + engine-friendly `.json` + preview + README)
+  and its deterministic generator (`bin/generate_oathstar_tileset.py`)
+  are source-controlled inputs; the generator's `OUT_DIR` writes where
+  the app reads, so regeneration cannot drift from serving. The runtime
+  parses ONLY the `.json` twin — the `.tsx` ships for Tiled interop.
+- **Cells resolve to tiles by NAME, by kind.** A frozen table maps the
+  four #16 cell kinds onto tile names (`empty→shadow_void`,
+  `discovered→stone_floor`, `blocked→wall_face`, `current→spawn_marker`).
+  Names are the generator's stable contract; ids may reshuffle. Authored
+  per-room/region tiles and per-tile descriptions are the reserved next
+  step (intake: tileset-region-authoring).
+- **The pure/seam split holds.** `src/client/tileset.js` (validate +
+  name→rect resolution) and the extended `toDrawPlan(model, tileset)`
+  are DOM-free and node-tested; only `drawMapCanvas` touches `Image`/
+  `drawImage`. Plan ops carry the `sprite` source rect AND the palette
+  fields — one plan serves both modes, and ops carry only what the seam
+  draws (PR-oathstar-render-plan-test-002: the dead `kind`/`here` fields
+  were removed).
+- **Fallback is permanent and silent-safe.** Until both validated
+  metadata and the loaded sheet image exist, the seam draws the #16 flat
+  colors; fetch failure, invalid metadata (typed `{ok:false, reason}` —
+  the validator never throws), or image error warn once and leave the
+  fallback for the session. A failed tileset can never blank the map.
+- **Validation is strict where corruption hurts.** Integer-only geometry
+  (fractional source rects smear pixel art across atlas boundaries
+  regardless of smoothing flags) and a null-prototype name lookup (a
+  `__proto__` tile name must not re-prototype the table and satisfy
+  required-name checks via inheritance). The committed JSON is read by
+  the test suite — the asset itself is under contract.
+- **Crispness is pinned twice.** `ctx.imageSmoothingEnabled = false`
+  every draw (the `canvas.width` reset wipes context state) plus CSS
+  `image-rendering: pixelated`.
+
+Revisit when:
+
+- Region/sub-region tileset authoring lands (the intake doc) — per-room
+  tile assignment supersedes kind-based mapping and tile metadata may
+  feed world validation (needs a deliberate Decision 025/035 amendment).
+- A second tileset/sheet arrives (multi-sheet resolution, atlas packing).
+- Entity/item/overlay markers want sheet tiles (draw-plan layers).
+- Tile animation or non-integer accessibility scales are wanted (the
+  integer-geometry rule and smoothing pins get re-examined).

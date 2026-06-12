@@ -14,6 +14,7 @@ import { toHud, toMenuModel, toBattle } from "./client/snapshot.js";
 import { toRoomDisplay, toExitPad } from "./client/room.js";
 import { toMapModel, DEFAULT_MAP_CONFIG } from "./client/map.js";
 import { canvasSize, toDrawPlan, mapAriaLabel } from "./client/canvas-map.js";
+import { validateTileset } from "./client/tileset.js";
 import { suggestCommands } from "./client/intent.js";
 
 // Resolve the server base URL. Default to same-origin (vite dev proxy, or the
@@ -35,6 +36,50 @@ const API_BASE = resolveApiBase();
 // Client-owned map render config (REQ-007). Kept out of server state so a later
 // canvas/sprite renderer can change tile size / mode without a protocol change.
 const mapRenderConfig = { ...DEFAULT_MAP_CONFIG };
+
+// Tileset state (ticket #32). Static assets, served by the page origin (vite
+// `public/`), not the game API — so no API_BASE. Tile rendering is an
+// enhancement: until BOTH the validated metadata and the sheet image are
+// ready, drawMapCanvas keeps the flat-color draw, and any failure leaves that
+// fallback in place for the session (warn once, never throw — REQ-003).
+const TILESET_DIR = "/tilesets/oathstar-starter-16x16";
+const TILESET_JSON_URL = `${TILESET_DIR}/oathstar-starter-16x16.json`;
+let tilesetData = null;
+let tilesetImage = null;
+let lastMapModel = null;
+
+async function loadTileset() {
+  let validated;
+  try {
+    const response = await fetch(TILESET_JSON_URL);
+    if (!response.ok) {
+      console.warn(`tileset metadata unavailable (${response.status}); map keeps flat colors`);
+      return;
+    }
+    validated = validateTileset(await response.json());
+  } catch (error) {
+    console.warn("tileset metadata failed to load; map keeps flat colors", error);
+    return;
+  }
+  if (!validated.ok) {
+    console.warn(`tileset metadata invalid (${validated.reason}); map keeps flat colors`);
+    return;
+  }
+  const image = new Image();
+  image.onload = () => {
+    // Publish both together only once the image can be drawn, then repaint
+    // the last-known map so tiles appear without waiting for the next event.
+    tilesetData = validated.tileset;
+    tilesetImage = image;
+    if (lastMapModel) {
+      drawMapCanvas(el.map, lastMapModel);
+    }
+  };
+  image.onerror = () => {
+    console.warn("tileset sheet image failed to load; map keeps flat colors");
+  };
+  image.src = `${TILESET_DIR}/${validated.tileset.image}`;
+}
 
 const el = {
   log: document.querySelector("#log"),
@@ -103,6 +148,7 @@ function boot() {
   bindEvents();
   bindLogAutoscroll();
   setActiveMenuTab("nearby");
+  loadTileset();
   refreshState();
   connectEvents();
   focusCommandInput();
@@ -434,6 +480,7 @@ function openRoomModal(display) {
 
 function renderMap(snapshot) {
   const model = toMapModel(snapshot.map, mapRenderConfig);
+  lastMapModel = model;
   el.mapLabel.textContent =
     model.planes && model.planes.length > 1
       ? `${model.region || "Map"} · floor ${model.z}`
@@ -468,12 +515,28 @@ function drawMapCanvas(canvas, model) {
     return;
   }
 
-  const plan = toDrawPlan(model);
+  // Sprite tiles are pixel art: never let scaling smear them (ticket #32).
+  ctx.imageSmoothingEnabled = false;
+  const plan = toDrawPlan(model, tilesetData);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const op of plan.ops) {
-    ctx.fillStyle = op.fill;
-    ctx.fillRect(op.x, op.y, op.size, op.size);
+    if (op.sprite && tilesetImage) {
+      ctx.drawImage(
+        tilesetImage,
+        op.sprite.sx,
+        op.sprite.sy,
+        op.sprite.sSize,
+        op.sprite.sSize,
+        op.x,
+        op.y,
+        op.size,
+        op.size,
+      );
+    } else {
+      ctx.fillStyle = op.fill;
+      ctx.fillRect(op.x, op.y, op.size, op.size);
+    }
     ctx.strokeStyle = op.stroke;
     // +0.5 keeps the 1px border on a device pixel boundary (crisp, not blurry).
     ctx.strokeRect(op.x + 0.5, op.y + 0.5, op.size - 1, op.size - 1);

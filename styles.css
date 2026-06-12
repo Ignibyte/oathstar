@@ -254,6 +254,8 @@ h1 {
 .map-canvas {
   display: block;
   border-radius: 8px;
+  /* Sprite tiles are pixel art (ticket #32): keep browser scaling blocky. */
+  image-rendering: pixelated;
 }
 
 .room-brief {

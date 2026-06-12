@@ -6,6 +6,8 @@
 // Consumes the grid model from src/client/map.js `toMapModel`. The server map
 // stays renderer-agnostic JSON (Decisions 025/035); this module owns how it draws.
 
+import { kindTileRects } from "./tileset.js";
+
 // Cell kind -> colors. Mirrors the former styles.css map-cell palette (removed in
 // ticket #16); keep roughly in sync with the .legend-current / .legend-known
 // swatches still in styles.css. `blocked` is a new muted variant for discovered
@@ -81,11 +83,21 @@ function glyphFontPx(tile) {
  * (a single char fits a 32px tile); the full room title is surfaced via the
  * canvas aria-label (see {@link mapAriaLabel}), not drawn on the tile.
  *
+ * With a validated tileset (ticket #32) each op also carries `sprite` — the
+ * sheet source rect for the cell's kind — while keeping the palette fields:
+ * one plan serves both render modes, because the seam falls back to the flat
+ * fill for every op whenever the sheet image is not ready (REQ-003). Ops
+ * carry ONLY what the seam draws (PR-oathstar-render-plan-test-002): cell
+ * classification is observable through the kind-distinct palette fields and
+ * sprite rect, and is unit-tested directly on {@link cellKind}.
+ *
  * @param {object} model a model from {@link module:map.toMapModel}
+ * @param {object | null} [tileset] a validated tileset from {@link module:tileset.validateTileset}
  * @returns {{width: number, height: number, tile: number, glyphFontPx: number, ops: object[]}}
  */
-export function toDrawPlan(model) {
+export function toDrawPlan(model, tileset = null) {
   const tile = model.tilePixels;
+  const kindRects = tileset ? kindTileRects(tileset) : null;
   const ops = model.cells.map((cell) => {
     const kind = cellKind(cell);
     const palette = MAP_PALETTE[kind];
@@ -93,12 +105,11 @@ export function toDrawPlan(model) {
       x: (cell.x - model.minX) * tile,
       y: (cell.y - model.minY) * tile,
       size: tile,
-      kind,
       fill: palette.fill,
       stroke: palette.stroke,
       textColor: palette.text,
       glyph: cell.glyph,
-      here: Boolean(cell.current),
+      sprite: kindRects ? kindRects[kind] : null,
     };
   });
   return {

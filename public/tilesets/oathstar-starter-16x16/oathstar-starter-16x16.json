@@ -1,0 +1,749 @@
+{
+  "name": "oathstar-starter-16x16",
+  "tileSize": 16,
+  "columns": 8,
+  "rows": 8,
+  "image": "oathstar-starter-16x16.png",
+  "tiles": [
+    {
+      "id": 0,
+      "name": "grass",
+      "x": 0,
+      "y": 0,
+      "tags": [
+        "terrain",
+        "grass"
+      ],
+      "collision": false
+    },
+    {
+      "id": 1,
+      "name": "grass_flowers",
+      "x": 16,
+      "y": 0,
+      "tags": [
+        "terrain",
+        "grass",
+        "detail"
+      ],
+      "collision": false
+    },
+    {
+      "id": 2,
+      "name": "dirt",
+      "x": 32,
+      "y": 0,
+      "tags": [
+        "terrain",
+        "dirt"
+      ],
+      "collision": false
+    },
+    {
+      "id": 3,
+      "name": "dirt_rocks",
+      "x": 48,
+      "y": 0,
+      "tags": [
+        "terrain",
+        "dirt",
+        "detail"
+      ],
+      "collision": false
+    },
+    {
+      "id": 4,
+      "name": "stone_floor",
+      "x": 64,
+      "y": 0,
+      "tags": [
+        "terrain",
+        "floor",
+        "stone"
+      ],
+      "collision": false
+    },
+    {
+      "id": 5,
+      "name": "cracked_stone_floor",
+      "x": 80,
+      "y": 0,
+      "tags": [
+        "terrain",
+        "floor",
+        "stone"
+      ],
+      "collision": false
+    },
+    {
+      "id": 6,
+      "name": "deep_water",
+      "x": 96,
+      "y": 0,
+      "tags": [
+        "terrain",
+        "water"
+      ],
+      "collision": true
+    },
+    {
+      "id": 7,
+      "name": "shadow_void",
+      "x": 112,
+      "y": 0,
+      "tags": [
+        "terrain",
+        "void"
+      ],
+      "collision": true
+    },
+    {
+      "id": 8,
+      "name": "path_isolated",
+      "x": 0,
+      "y": 16,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:0"
+      ],
+      "collision": false
+    },
+    {
+      "id": 9,
+      "name": "path_n",
+      "x": 16,
+      "y": 16,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:1"
+      ],
+      "collision": false
+    },
+    {
+      "id": 10,
+      "name": "path_e",
+      "x": 32,
+      "y": 16,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:2"
+      ],
+      "collision": false
+    },
+    {
+      "id": 11,
+      "name": "path_ne",
+      "x": 48,
+      "y": 16,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:3"
+      ],
+      "collision": false
+    },
+    {
+      "id": 12,
+      "name": "path_s",
+      "x": 64,
+      "y": 16,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:4"
+      ],
+      "collision": false
+    },
+    {
+      "id": 13,
+      "name": "path_ns",
+      "x": 80,
+      "y": 16,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:5"
+      ],
+      "collision": false
+    },
+    {
+      "id": 14,
+      "name": "path_es",
+      "x": 96,
+      "y": 16,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:6"
+      ],
+      "collision": false
+    },
+    {
+      "id": 15,
+      "name": "path_nes",
+      "x": 112,
+      "y": 16,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:7"
+      ],
+      "collision": false
+    },
+    {
+      "id": 16,
+      "name": "path_w",
+      "x": 0,
+      "y": 32,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:8"
+      ],
+      "collision": false
+    },
+    {
+      "id": 17,
+      "name": "path_nw",
+      "x": 16,
+      "y": 32,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:9"
+      ],
+      "collision": false
+    },
+    {
+      "id": 18,
+      "name": "path_ew",
+      "x": 32,
+      "y": 32,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:10"
+      ],
+      "collision": false
+    },
+    {
+      "id": 19,
+      "name": "path_new",
+      "x": 48,
+      "y": 32,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:11"
+      ],
+      "collision": false
+    },
+    {
+      "id": 20,
+      "name": "path_sw",
+      "x": 64,
+      "y": 32,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:12"
+      ],
+      "collision": false
+    },
+    {
+      "id": 21,
+      "name": "path_nsw",
+      "x": 80,
+      "y": 32,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:13"
+      ],
+      "collision": false
+    },
+    {
+      "id": 22,
+      "name": "path_esw",
+      "x": 96,
+      "y": 32,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:14"
+      ],
+      "collision": false
+    },
+    {
+      "id": 23,
+      "name": "path_nesw",
+      "x": 112,
+      "y": 32,
+      "tags": [
+        "terrain",
+        "path",
+        "mask:15"
+      ],
+      "collision": false
+    },
+    {
+      "id": 24,
+      "name": "water_isolated",
+      "x": 0,
+      "y": 48,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:0"
+      ],
+      "collision": true
+    },
+    {
+      "id": 25,
+      "name": "water_n",
+      "x": 16,
+      "y": 48,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:1"
+      ],
+      "collision": true
+    },
+    {
+      "id": 26,
+      "name": "water_e",
+      "x": 32,
+      "y": 48,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:2"
+      ],
+      "collision": true
+    },
+    {
+      "id": 27,
+      "name": "water_ne",
+      "x": 48,
+      "y": 48,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:3"
+      ],
+      "collision": true
+    },
+    {
+      "id": 28,
+      "name": "water_s",
+      "x": 64,
+      "y": 48,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:4"
+      ],
+      "collision": true
+    },
+    {
+      "id": 29,
+      "name": "water_ns",
+      "x": 80,
+      "y": 48,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:5"
+      ],
+      "collision": true
+    },
+    {
+      "id": 30,
+      "name": "water_es",
+      "x": 96,
+      "y": 48,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:6"
+      ],
+      "collision": true
+    },
+    {
+      "id": 31,
+      "name": "water_nes",
+      "x": 112,
+      "y": 48,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:7"
+      ],
+      "collision": true
+    },
+    {
+      "id": 32,
+      "name": "water_w",
+      "x": 0,
+      "y": 64,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:8"
+      ],
+      "collision": true
+    },
+    {
+      "id": 33,
+      "name": "water_nw",
+      "x": 16,
+      "y": 64,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:9"
+      ],
+      "collision": true
+    },
+    {
+      "id": 34,
+      "name": "water_ew",
+      "x": 32,
+      "y": 64,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:10"
+      ],
+      "collision": true
+    },
+    {
+      "id": 35,
+      "name": "water_new",
+      "x": 48,
+      "y": 64,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:11"
+      ],
+      "collision": true
+    },
+    {
+      "id": 36,
+      "name": "water_sw",
+      "x": 64,
+      "y": 64,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:12"
+      ],
+      "collision": true
+    },
+    {
+      "id": 37,
+      "name": "water_nsw",
+      "x": 80,
+      "y": 64,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:13"
+      ],
+      "collision": true
+    },
+    {
+      "id": 38,
+      "name": "water_esw",
+      "x": 96,
+      "y": 64,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:14"
+      ],
+      "collision": true
+    },
+    {
+      "id": 39,
+      "name": "water_nesw",
+      "x": 112,
+      "y": 64,
+      "tags": [
+        "terrain",
+        "water",
+        "shore",
+        "mask:15"
+      ],
+      "collision": true
+    },
+    {
+      "id": 40,
+      "name": "wall_top",
+      "x": 0,
+      "y": 80,
+      "tags": [
+        "wall",
+        "stone"
+      ],
+      "collision": true
+    },
+    {
+      "id": 41,
+      "name": "wall_face",
+      "x": 16,
+      "y": 80,
+      "tags": [
+        "wall",
+        "stone"
+      ],
+      "collision": true
+    },
+    {
+      "id": 42,
+      "name": "wall_left",
+      "x": 32,
+      "y": 80,
+      "tags": [
+        "wall",
+        "stone"
+      ],
+      "collision": true
+    },
+    {
+      "id": 43,
+      "name": "wall_right",
+      "x": 48,
+      "y": 80,
+      "tags": [
+        "wall",
+        "stone"
+      ],
+      "collision": true
+    },
+    {
+      "id": 44,
+      "name": "wall_corner_nw",
+      "x": 64,
+      "y": 80,
+      "tags": [
+        "wall",
+        "stone"
+      ],
+      "collision": true
+    },
+    {
+      "id": 45,
+      "name": "wall_corner_ne",
+      "x": 80,
+      "y": 80,
+      "tags": [
+        "wall",
+        "stone"
+      ],
+      "collision": true
+    },
+    {
+      "id": 46,
+      "name": "wall_corner_sw",
+      "x": 96,
+      "y": 80,
+      "tags": [
+        "wall",
+        "stone"
+      ],
+      "collision": true
+    },
+    {
+      "id": 47,
+      "name": "wall_corner_se",
+      "x": 112,
+      "y": 80,
+      "tags": [
+        "wall",
+        "stone"
+      ],
+      "collision": true
+    },
+    {
+      "id": 48,
+      "name": "rock",
+      "x": 0,
+      "y": 96,
+      "tags": [
+        "object"
+      ],
+      "collision": true
+    },
+    {
+      "id": 49,
+      "name": "boulder",
+      "x": 16,
+      "y": 96,
+      "tags": [
+        "object"
+      ],
+      "collision": true
+    },
+    {
+      "id": 50,
+      "name": "bush",
+      "x": 32,
+      "y": 96,
+      "tags": [
+        "object"
+      ],
+      "collision": false
+    },
+    {
+      "id": 51,
+      "name": "tree_canopy",
+      "x": 48,
+      "y": 96,
+      "tags": [
+        "object"
+      ],
+      "collision": true
+    },
+    {
+      "id": 52,
+      "name": "tree_trunk",
+      "x": 64,
+      "y": 96,
+      "tags": [
+        "object"
+      ],
+      "collision": true
+    },
+    {
+      "id": 53,
+      "name": "mushrooms",
+      "x": 80,
+      "y": 96,
+      "tags": [
+        "object"
+      ],
+      "collision": false
+    },
+    {
+      "id": 54,
+      "name": "chest_closed",
+      "x": 96,
+      "y": 96,
+      "tags": [
+        "object"
+      ],
+      "collision": true
+    },
+    {
+      "id": 55,
+      "name": "sign",
+      "x": 112,
+      "y": 96,
+      "tags": [
+        "object"
+      ],
+      "collision": true
+    },
+    {
+      "id": 56,
+      "name": "door_closed",
+      "x": 0,
+      "y": 112,
+      "tags": [
+        "feature"
+      ],
+      "collision": true
+    },
+    {
+      "id": 57,
+      "name": "stairs_down",
+      "x": 16,
+      "y": 112,
+      "tags": [
+        "feature"
+      ],
+      "collision": false
+    },
+    {
+      "id": 58,
+      "name": "torch",
+      "x": 32,
+      "y": 112,
+      "tags": [
+        "feature"
+      ],
+      "collision": false
+    },
+    {
+      "id": 59,
+      "name": "pillar",
+      "x": 48,
+      "y": 112,
+      "tags": [
+        "feature"
+      ],
+      "collision": true
+    },
+    {
+      "id": 60,
+      "name": "rubble",
+      "x": 64,
+      "y": 112,
+      "tags": [
+        "feature"
+      ],
+      "collision": false
+    },
+    {
+      "id": 61,
+      "name": "altar",
+      "x": 80,
+      "y": 112,
+      "tags": [
+        "feature"
+      ],
+      "collision": true
+    },
+    {
+      "id": 62,
+      "name": "spawn_marker",
+      "x": 96,
+      "y": 112,
+      "tags": [
+        "feature"
+      ],
+      "collision": false
+    },
+    {
+      "id": 63,
+      "name": "exit_marker",
+      "x": 112,
+      "y": 112,
+      "tags": [
+        "feature"
+      ],
+      "collision": false
+    }
+  ]
+}

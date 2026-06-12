@@ -99,14 +99,15 @@ test("toDrawPlan positions cells and carries kind/label/colors (REQ-001/004)", (
 
   const [here, wall] = plan.ops;
   assert.deepEqual([here.x, here.y, here.size], [0, 0, 32], "minX/minY offset applied");
-  assert.equal(here.kind, "current");
+  // Classification is observable through the kind-distinct palette fields the
+  // seam draws (PR-oathstar-render-plan-test-002); cellKind has direct tests.
   assert.equal(here.fill, MAP_PALETTE.current.fill);
+  assert.equal(here.textColor, MAP_PALETTE.current.text);
   assert.equal(here.glyph, "+", "the room glyph is the on-tile mark");
-  assert.equal(here.here, true);
   assert.equal(plan.glyphFontPx, 13, "32px tile -> 13px glyph font");
 
   assert.deepEqual([wall.x, wall.y], [32, 0], "second column at one tile over");
-  assert.equal(wall.kind, "blocked");
+  assert.equal(wall.fill, MAP_PALETTE.blocked.fill);
   assert.equal(wall.stroke, MAP_PALETTE.blocked.stroke);
 });
 
@@ -128,7 +129,7 @@ test("toDrawPlan draws the glyph on-tile, floors the glyph font, blanks empty ce
   assert.equal(plan.glyphFontPx, 9, "16px tile floors the glyph font at 9px (REQ-005)");
   assert.equal(plan.ops[0].glyph, "@", "the room glyph is drawn on-tile (title goes to aria)");
   assert.equal(plan.ops[0].size, 16);
-  assert.equal(plan.ops[1].kind, "empty");
+  assert.equal(plan.ops[1].fill, MAP_PALETTE.empty.fill, "absent cells stay fog");
   assert.equal(plan.ops[1].textColor, null, "empty cells draw no glyph (null text color)");
 });
 
@@ -139,8 +140,8 @@ test("toMapModel + toDrawPlan render only the current z-plane (REQ-003)", () => 
   const plan = toDrawPlan(model);
   // plane z=0 has 2 rooms (a,b) in a 2x1 box; the z=1 tower is excluded.
   assert.equal(plan.ops.length, 2);
-  assert.ok(plan.ops.some((op) => op.kind === "current"));
-  assert.ok(plan.ops.some((op) => op.kind === "blocked"));
+  assert.ok(plan.ops.some((op) => op.fill === MAP_PALETTE.current.fill));
+  assert.ok(plan.ops.some((op) => op.fill === MAP_PALETTE.blocked.fill));
 });
 
 test("toMapModel cell carries passable; the server snapshot is untouched (REQ-004)", () => {
@@ -184,4 +185,93 @@ test("no game-engine dependency is declared (REQ-007)", () => {
   for (const banned of ["phaser", "pixi.js", "pixi", "kiwi.js", "melonjs"]) {
     assert.ok(!(banned in deps), `must not depend on ${banned}`);
   }
+});
+
+// ---- ticket #32: sprite tiles in the draw plan ----
+
+import { validateTileset, KIND_TILE_NAMES, tileRect } from "../src/client/tileset.js";
+
+function committedTileset() {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const raw = JSON.parse(
+    readFileSync(
+      join(root, "public", "tilesets", "oathstar-starter-16x16", "oathstar-starter-16x16.json"),
+      "utf8",
+    ),
+  );
+  const result = validateTileset(raw);
+  assert.equal(result.ok, true, "the committed tileset validates");
+  return result.tileset;
+}
+
+// T5 (REQ-003): without a tileset the plan is the flat-color contract — every
+// palette field the seam's fallback draws, plus sprite: null.
+test("toDrawPlan without a tileset keeps the flat-color contract (REQ-003)", () => {
+  const model = {
+    mode: "glyph",
+    tilePixels: 32,
+    columns: 2,
+    rows: 1,
+    minX: 0,
+    minY: 0,
+    cells: [
+      cell({ x: 0, y: 0, current: true }),
+      cell({ x: 1, y: 0, discovered: true, passable: false }),
+    ],
+  };
+  for (const plan of [toDrawPlan(model), toDrawPlan(model, null)]) {
+    const [current, blocked] = plan.ops;
+    assert.equal(current.sprite, null, "no tileset -> no sprite rect");
+    assert.equal(blocked.sprite, null);
+    assert.equal(current.fill, MAP_PALETTE.current.fill, "fallback fill retained");
+    assert.equal(blocked.fill, MAP_PALETTE.blocked.fill);
+    assert.equal(blocked.stroke, MAP_PALETTE.blocked.stroke);
+  }
+});
+
+// T6 (REQ-002/003): with the real tileset every op carries its kind's sheet
+// rect — the exact field the seam blits — while the fallback fields remain.
+test("toDrawPlan with the committed tileset resolves a sprite rect per kind (REQ-002)", () => {
+  const tileset = committedTileset();
+  const model = {
+    mode: "glyph",
+    tilePixels: 32,
+    columns: 2,
+    rows: 2,
+    minX: 0,
+    minY: 0,
+    cells: [
+      cell({ x: 0, y: 0, current: true }),
+      cell({ x: 1, y: 0, discovered: true, passable: false }),
+      cell({ x: 0, y: 1, discovered: true }),
+      cell({ x: 1, y: 1, present: false }),
+    ],
+  };
+  const plan = toDrawPlan(model, tileset);
+  const [current, blocked, discovered, empty] = plan.ops;
+  assert.deepEqual(current.sprite, tileRect(tileset, KIND_TILE_NAMES.current));
+  assert.deepEqual(blocked.sprite, tileRect(tileset, KIND_TILE_NAMES.blocked));
+  assert.deepEqual(discovered.sprite, tileRect(tileset, KIND_TILE_NAMES.discovered));
+  assert.deepEqual(empty.sprite, tileRect(tileset, KIND_TILE_NAMES.empty));
+  assert.equal(current.sprite.sSize, 16, "source tiles are the sheet's 16px");
+  assert.equal(current.size, 32, "dest tiles stay the configured tilePixels");
+  // The fallback fields survive (the seam uses them until the image loads).
+  assert.equal(current.fill, MAP_PALETTE.current.fill);
+  assert.equal(blocked.stroke, MAP_PALETTE.blocked.stroke);
+});
+
+// T7 (REQ-006): glyph + text + aria are mode-independent — byte-identical
+// plans apart from the sprite field, and the same aria summary.
+test("tileset rendering leaves glyph, text, and aria behavior unchanged (REQ-006)", () => {
+  const model = toMapModel(stackedSnapshot());
+  const flat = toDrawPlan(model);
+  const tiled = toDrawPlan(model, committedTileset());
+  assert.equal(flat.glyphFontPx, tiled.glyphFontPx);
+  assert.equal(flat.ops.length, tiled.ops.length);
+  for (let i = 0; i < flat.ops.length; i += 1) {
+    const { sprite: _flatSprite, ...flatRest } = flat.ops[i];
+    const { sprite: _tiledSprite, ...tiledRest } = tiled.ops[i];
+    assert.deepEqual(tiledRest, flatRest, `op ${i} differs only in sprite`);
+  }
+  assert.equal(mapAriaLabel(model), mapAriaLabel(model), "aria is model-only");
 });
