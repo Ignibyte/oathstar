@@ -2509,12 +2509,14 @@ Date: 2026-06-11
 What was decided (ticket #32):
 
 - **The tileset is a committed asset served from `public/`.** The starter
-  sheet (`public/tilesets/oathstar-starter-16x16/`: 128×128 PNG of 64
-  16px tiles + Tiled `.tsx` + engine-friendly `.json` + preview + README)
-  and its deterministic generator (`bin/generate_oathstar_tileset.py`)
-  are source-controlled inputs; the generator's `OUT_DIR` writes where
-  the app reads, so regeneration cannot drift from serving. The runtime
-  parses ONLY the `.json` twin — the `.tsx` ships for Tiled interop.
+  sheet (`public/tilesets/oathstar-starter-16x16/`: PNG sheet + Tiled
+  `.tsx` + engine-friendly `.json` + preview + README — originally a
+  128×128 sheet of 64 textured 16px tiles; flattened to a 64×48 sheet of
+  11 solid-color tiles at ticket #36, Decision 054) and its deterministic
+  generator (`bin/generate_oathstar_tileset.py`) are source-controlled
+  inputs; the generator's `OUT_DIR` writes where the app reads, so
+  regeneration cannot drift from serving. The runtime parses ONLY the
+  `.json` twin — the `.tsx` ships for Tiled interop.
 - **Cells resolve to tiles by NAME, by kind.** A frozen table maps the
   four #16 cell kinds onto tile names (`empty→shadow_void`,
   `discovered→stone_floor`, `blocked→wall_face`, `current→spawn_marker`).
@@ -2700,3 +2702,45 @@ Revisit when:
 - A format-version bump is scheduled: a pre-#35 binary loading a geared
   save silently drops the equipped items (accepted additive-posture cost,
   recorded at inspect).
+
+## Decision 054: The Blank-Colors Era — Flat Tiles Are The Contract, Art Is A Skin
+
+Status: Locked
+
+Date: 2026-06-12
+
+What was decided (ticket #36, step A of the blank-colors program):
+
+- **Every tile is ONE uniform color block.** The committed sheet is now
+  11 solid-color 16px tiles on a 4×3 grid (64×48 PNG, 225 bytes): the
+  four load-bearing names (`shadow_void`/`stone_floor`/`wall_face`/
+  `spawn_marker`) plus the flat extras step C paints sub-regions with
+  (`grass`, `dirt` road, `cave_floor`, `deep_water`, `stairs_up`,
+  `stairs_down`, `exit_marker`). The 32 texture-era path/water
+  connectivity variants and prop tiles are gone — entities stay runtime
+  overlays (Decision 051).
+- **The palette is authored once and pinned twice.** The generator's
+  `FLAT_TILES` table is the single source (name → rgba/tags/collision);
+  each tile's `color` hex ships in the JSON and tsx as contract; a
+  committed-asset test decodes the PNG (zero-dep node:zlib reader) and
+  asserts every named tile is 256 identical opaque pixels equal to its
+  declared color. Pixel-based, so the pin survives PNG-encoder byte
+  drift across PIL versions.
+- **Generation is deterministic and guarded.** No rng; compress_level
+  pinned; re-runs reproduce the committed bytes on the same toolchain
+  (checksum-verified); table guards refuse overflow past the grid and
+  non-opaque colors.
+- **Art returns as a skin.** Because cells resolve tiles BY NAME
+  (Decision 050), shipping real art later is a regeneration of this
+  sheet — no code, map, save, or wire change. The blank-colors look is
+  the slice's deliberate aesthetic: legibility is the feature.
+
+Revisit when:
+
+- Step C lands (per-room tile names over the wire) — the floor variants
+  go live per sub-region.
+- Real art direction exists — regenerate with textured painters behind
+  the same names; the uniformity pin is then RETIRED deliberately (it
+  pins the era, not the architecture).
+- More names are needed (the spare slot, then grid growth — the
+  capacity assert names the ceiling).

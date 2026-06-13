@@ -136,6 +136,9 @@ rooms' `region`/`subregion` fields map 1:1 onto the metadata model.
   client + KIND_TILE_NAMES need zero changes; add the flat extras
   (subregion floor variants, water, stairs, exit marker). Tests update
   (tile count + name cross-checks). Client untouched.
+  **→ PROMOTED 2026-06-12:** ticket #36
+  (`edd292c5-a346-49aa-86a8-f60191f2a081`), pipeline
+  `WORK-tileset-flatten-v1`.
 - **B: the pilot importer** (= step 2 below), now de-risked by the
   spike: Rust importer in the content-crate orbit, implicit-room
   cascade materialization, adjacency-derived exits, reachability
