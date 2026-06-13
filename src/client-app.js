@@ -42,8 +42,8 @@ const mapRenderConfig = { ...DEFAULT_MAP_CONFIG };
 // enhancement: until BOTH the validated metadata and the sheet image are
 // ready, drawMapCanvas keeps the flat-color draw, and any failure leaves that
 // fallback in place for the session (warn once, never throw — REQ-003).
-const TILESET_DIR = "/tilesets/oathstar-starter-16x16";
-const TILESET_JSON_URL = `${TILESET_DIR}/oathstar-starter-16x16.json`;
+const TILESET_DIR = "/tilesets/oathstar-starter-32x32";
+const TILESET_JSON_URL = `${TILESET_DIR}/oathstar-starter-32x32.json`;
 let tilesetData = null;
 let tilesetImage = null;
 let lastMapModel = null;

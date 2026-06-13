@@ -1,9 +1,9 @@
 {
-  "name": "oathstar-starter-16x16",
-  "tileSize": 16,
+  "name": "oathstar-starter-32x32",
+  "tileSize": 32,
   "columns": 4,
   "rows": 3,
-  "image": "oathstar-starter-16x16.png",
+  "image": "oathstar-starter-32x32.png",
   "tiles": [
     {
       "id": 0,
@@ -20,7 +20,7 @@
     {
       "id": 1,
       "name": "stone_floor",
-      "x": 16,
+      "x": 32,
       "y": 0,
       "color": "#696f68",
       "tags": [
@@ -33,7 +33,7 @@
     {
       "id": 2,
       "name": "wall_face",
-      "x": 32,
+      "x": 64,
       "y": 0,
       "color": "#434a4a",
       "tags": [
@@ -44,7 +44,7 @@
     {
       "id": 3,
       "name": "spawn_marker",
-      "x": 48,
+      "x": 96,
       "y": 0,
       "color": "#5fccb1",
       "tags": [
@@ -57,7 +57,7 @@
       "id": 4,
       "name": "grass",
       "x": 0,
-      "y": 16,
+      "y": 32,
       "color": "#347b41",
       "tags": [
         "terrain",
@@ -69,8 +69,8 @@
     {
       "id": 5,
       "name": "dirt",
-      "x": 16,
-      "y": 16,
+      "x": 32,
+      "y": 32,
       "color": "#815b30",
       "tags": [
         "terrain",
@@ -82,8 +82,8 @@
     {
       "id": 6,
       "name": "cave_floor",
-      "x": 32,
-      "y": 16,
+      "x": 64,
+      "y": 32,
       "color": "#463e4e",
       "tags": [
         "terrain",
@@ -95,8 +95,8 @@
     {
       "id": 7,
       "name": "deep_water",
-      "x": 48,
-      "y": 16,
+      "x": 96,
+      "y": 32,
       "color": "#265c91",
       "tags": [
         "terrain",
@@ -108,7 +108,7 @@
       "id": 8,
       "name": "stairs_up",
       "x": 0,
-      "y": 32,
+      "y": 64,
       "color": "#a96a37",
       "tags": [
         "feature",
@@ -119,8 +119,8 @@
     {
       "id": 9,
       "name": "stairs_down",
-      "x": 16,
-      "y": 32,
+      "x": 32,
+      "y": 64,
       "color": "#472d1c",
       "tags": [
         "feature",
@@ -131,8 +131,8 @@
     {
       "id": 10,
       "name": "exit_marker",
-      "x": 32,
-      "y": 32,
+      "x": 64,
+      "y": 64,
       "color": "#d8a941",
       "tags": [
         "feature",

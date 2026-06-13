@@ -2744,3 +2744,43 @@ Revisit when:
   pins the era, not the architecture).
 - More names are needed (the spare slot, then grid growth — the
   capacity assert names the ceiling).
+
+## Decision 055: The Map Reads Bigger — Native 32px Tiles, 64px Cells
+
+Status: Locked
+
+Date: 2026-06-12
+
+What was decided (ticket #37, owner direction — the map was too small to read):
+
+- **The on-page cell is 64px, not 32.** `DEFAULT_MAP_CONFIG.tilePixels` is 64
+  (`src/client/map.js`) — a crisp integer 2× of the source sheet, so
+  `canvasSize` doubles both the CSS footprint and the device-pixel backing
+  store. The beginner world (a ~2×4 z-plane box) goes from ~64–128px to
+  ~128–256px on the page; `.map-frame { overflow:auto }` scrolls anything
+  larger. `mapRenderConfig` keeps this a live per-client knob for a future
+  zoom/accessibility control.
+- **The source sheet is native 32px, not 16.** The generator is `TILE=32` → a
+  128×96 PNG; the committed asset directory is renamed `oathstar-starter-16x16/`
+  → `oathstar-starter-32x32/`. Real art later is authored at the source
+  resolution rather than upscaled from 16px. The blit is source 32 → dest 64,
+  nearest-neighbour (`imageSmoothingEnabled=false`) — pixel-perfect at the
+  integer factor.
+- **The blank-colors contract (Decision 054) is unchanged, only re-scaled.**
+  Same 11 names in the same order, same authored palette, same four
+  load-bearing `KIND_TILE_NAMES`. The pixel uniformity pin now reads 32×32 =
+  1024 identical pixels per tile (it loops `raw.tileSize`, so the test logic was
+  untouched — only the geometry literals moved). Generation stays deterministic
+  (byte-identical re-runs).
+- **Client + asset only — no wire/engine change.** Rooms carry grid coordinates,
+  not pixels (Decisions 025/035); `MapRoomSnapshot` is untouched. The whole
+  change is the generator constant, the regenerated sheet, two one-line client
+  edits (`tilePixels`, `TILESET_DIR`), and the contract-test geometry.
+
+Revisit when:
+
+- The owner wants a different on-page size — change `tilePixels` (or expose the
+  `mapRenderConfig` zoom knob); no asset change is needed for a different integer
+  scale.
+- Real 1:1 art at 64px is wanted — regenerate at `TILE=64` (name-keyed, no
+  code/map/wire change); the source then equals the cell and nothing upscales.

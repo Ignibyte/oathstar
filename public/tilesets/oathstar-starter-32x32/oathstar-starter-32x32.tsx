@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<tileset version="1.10" tiledversion="1.11.2" name="oathstar-starter-16x16" tilewidth="16" tileheight="16" tilecount="12" columns="4">
- <image source="oathstar-starter-16x16.png" width="64" height="48"/>
+<tileset version="1.10" tiledversion="1.11.2" name="oathstar-starter-32x32" tilewidth="32" tileheight="32" tilecount="12" columns="4">
+ <image source="oathstar-starter-32x32.png" width="128" height="96"/>
  <tile id="0">
   <properties>
    <property name="name" value="shadow_void"/>

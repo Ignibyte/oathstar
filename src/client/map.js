@@ -7,7 +7,12 @@
 
 export const MAP_RENDER_MODES = ["glyph", "ascii", "sprite"];
 
-export const DEFAULT_MAP_CONFIG = Object.freeze({ tilePixels: 32, mode: "glyph" });
+// 64px cells render the map at a legible on-page size (ticket #37): a crisp
+// integer 2x of the 32px source sheet (imageSmoothingEnabled=false in the seam).
+// `mapRenderConfig` keeps this a live per-client knob — no server round-trip —
+// for a future zoom/accessibility control (docs/ui-design.md: configurable tile
+// sizes). canvasSize derives both CSS and backing-store px from tilePixels.
+export const DEFAULT_MAP_CONFIG = Object.freeze({ tilePixels: 64, mode: "glyph" });
 
 function normalizeConfig(config) {
   const mode = MAP_RENDER_MODES.includes(config?.mode) ? config.mode : DEFAULT_MAP_CONFIG.mode;

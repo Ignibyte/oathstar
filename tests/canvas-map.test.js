@@ -11,7 +11,7 @@ import {
   toDrawPlan,
   mapAriaLabel,
 } from "../src/client/canvas-map.js";
-import { toMapModel } from "../src/client/map.js";
+import { toMapModel, DEFAULT_MAP_CONFIG } from "../src/client/map.js";
 
 function cell(overrides = {}) {
   return {
@@ -61,6 +61,27 @@ test("canvasSize scales the backing store by devicePixelRatio (REQ-005)", () => 
   for (const bad of [0, -2, Number.NaN, Infinity, undefined]) {
     assert.equal(canvasSize(model, bad).dpr, 1, `dpr ${bad} clamps to 1`);
   }
+});
+
+// ticket #37 (REQ-002): the default render config enlarges each cell to 64px —
+// a crisp integer 2x of the 32px source — so the on-page map is physically ~2x
+// the prior build. canvasSize derives both CSS and backing px from tilePixels.
+test("the default map config enlarges cells to 64px for a bigger on-page map (REQ-002)", () => {
+  assert.equal(DEFAULT_MAP_CONFIG.tilePixels, 64, "default cell is the enlarged 64px");
+  const model = toMapModel(stackedSnapshot()); // built with the default config
+  assert.equal(model.tilePixels, 64);
+  // the z=0 plane is a 2x1 box -> the canvas is columns*64 css px...
+  const at1 = canvasSize(model, 1);
+  assert.equal(at1.cssWidth, model.columns * 64);
+  assert.equal(at1.cssHeight, model.rows * 64);
+  // ...doubled into the backing store for hi-dpi crispness, css unchanged.
+  const at2 = canvasSize(model, 2);
+  assert.equal(at2.backingWidth, model.columns * 64 * 2, "backing scales 2x for crispness");
+  assert.equal(at2.cssWidth, model.columns * 64, "css size is dpr-independent");
+  // every drawn cell takes the enlarged 64px destination.
+  const plan = toDrawPlan(model);
+  assert.equal(plan.tile, 64);
+  assert.ok(plan.ops.every((op) => op.size === 64), "every op draws at the enlarged 64px cell");
 });
 
 test("cellKind classifies empty/discovered/current/blocked (REQ-004)", () => {
@@ -195,7 +216,7 @@ function committedTileset() {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   const raw = JSON.parse(
     readFileSync(
-      join(root, "public", "tilesets", "oathstar-starter-16x16", "oathstar-starter-16x16.json"),
+      join(root, "public", "tilesets", "oathstar-starter-32x32", "oathstar-starter-32x32.json"),
       "utf8",
     ),
   );
@@ -253,7 +274,7 @@ test("toDrawPlan with the committed tileset resolves a sprite rect per kind (REQ
   assert.deepEqual(blocked.sprite, tileRect(tileset, KIND_TILE_NAMES.blocked));
   assert.deepEqual(discovered.sprite, tileRect(tileset, KIND_TILE_NAMES.discovered));
   assert.deepEqual(empty.sprite, tileRect(tileset, KIND_TILE_NAMES.empty));
-  assert.equal(current.sprite.sSize, 16, "source tiles are the sheet's 16px");
+  assert.equal(current.sprite.sSize, 32, "source tiles are the sheet's 32px");
   assert.equal(current.size, 32, "dest tiles stay the configured tilePixels");
   // The fallback fields survive (the seam uses them until the image loads).
   assert.equal(current.fill, MAP_PALETTE.current.fill);

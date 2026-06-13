@@ -1,12 +1,12 @@
 ---
 title: TICKET-37-scale-map-32px-tiles-enlarged-canvas
-status: open
+status: closed
 ticket: 5a348bfb-4c21-4696-bea3-4597c32da5da
 ticket_number: 37
 type: feature
 created: 2026-06-12
 intake:
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/active/WORK-scale-map-32px-enlarged-canvas.spec.md
 ---
 
 # TICKET-37-scale-map-32px-tiles-enlarged-canvas

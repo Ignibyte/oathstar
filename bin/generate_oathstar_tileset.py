@@ -18,10 +18,10 @@ from xml.sax.saxutils import escape
 
 from PIL import Image, ImageDraw
 
-TILE = 16
+TILE = 32
 COLS = 4
 ROWS = 3
-NAME = "oathstar-starter-16x16"
+NAME = "oathstar-starter-32x32"
 
 ROOT = Path(__file__).resolve().parents[1]
 # The vite-served home (ticket #32): regeneration writes where the app reads.

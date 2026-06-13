@@ -326,7 +326,7 @@ test("map.toMapModel builds a grid, flags current, and passes config through", (
   const snap = sampleSnapshot();
   const model = toMapModel(snap.map, DEFAULT_MAP_CONFIG);
   assert.equal(model.mode, "glyph");
-  assert.equal(model.tilePixels, 32);
+  assert.equal(model.tilePixels, 64);
   assert.equal(model.columns, 1);
   assert.equal(model.rows, 2);
   const current = model.cells.find((cell) => cell.current);
@@ -340,7 +340,7 @@ test("map.toMapModel builds a grid, flags current, and passes config through", (
 
   const fallback = toMapModel(snap.map, { mode: "nope", tilePixels: -5 });
   assert.equal(fallback.mode, "glyph");
-  assert.equal(fallback.tilePixels, 32);
+  assert.equal(fallback.tilePixels, 64);
 
   // server map shape is untouched
   assert.equal(snap.map.rooms.length, 2);

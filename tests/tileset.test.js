@@ -11,10 +11,10 @@ import { KIND_TILE_NAMES, validateTileset, tileRect, kindTileRects } from "../sr
 // real served file, so regenerating with different names/geometry fails here
 // loudly instead of silently blanking the map at runtime.
 const here = dirname(fileURLToPath(import.meta.url));
-const ASSET_DIR = join(here, "..", "public", "tilesets", "oathstar-starter-16x16");
-const REAL_JSON_PATH = join(ASSET_DIR, "oathstar-starter-16x16.json");
-const REAL_PNG_PATH = join(ASSET_DIR, "oathstar-starter-16x16.png");
-const REAL_TSX_PATH = join(ASSET_DIR, "oathstar-starter-16x16.tsx");
+const ASSET_DIR = join(here, "..", "public", "tilesets", "oathstar-starter-32x32");
+const REAL_JSON_PATH = join(ASSET_DIR, "oathstar-starter-32x32.json");
+const REAL_PNG_PATH = join(ASSET_DIR, "oathstar-starter-32x32.png");
+const REAL_TSX_PATH = join(ASSET_DIR, "oathstar-starter-32x32.tsx");
 
 function realTilesetJson() {
   return JSON.parse(readFileSync(REAL_JSON_PATH, "utf8"));
@@ -117,16 +117,16 @@ test("the committed tileset JSON validates with every name resolvable", () => {
   const result = validateTileset(raw);
   assert.equal(result.ok, true, `committed asset must validate: ${result.reason ?? ""}`);
   const { tileset } = result;
-  assert.equal(tileset.tileSize, 16);
+  assert.equal(tileset.tileSize, 32);
   assert.equal(tileset.columns, 4);
   assert.equal(tileset.rows, 3);
-  assert.equal(tileset.image, "oathstar-starter-16x16.png");
+  assert.equal(tileset.image, "oathstar-starter-32x32.png");
   assert.equal(tileset.tiles.length, 11, "the flat sheet carries 11 named tiles (ticket #36)");
   for (const tile of raw.tiles) {
     const rect = tileRect(tileset, tile.name);
     assert.deepEqual(
       rect,
-      { sx: tile.x, sy: tile.y, sSize: 16 },
+      { sx: tile.x, sy: tile.y, sSize: 32 },
       `every committed name resolves to its authored rect (${tile.name})`,
     );
   }
@@ -187,8 +187,8 @@ test("validateTileset refuses malformed metadata with typed reasons, never throw
 // unknown name (the only absent-name path left after validation).
 test("tileRect resolves committed names to authored rects and unknown names to null", () => {
   const { tileset } = validateTileset(realTilesetJson());
-  assert.deepEqual(tileRect(tileset, "grass"), { sx: 0, sy: 16, sSize: 16 });
-  assert.deepEqual(tileRect(tileset, "stone_floor"), { sx: 16, sy: 0, sSize: 16 });
+  assert.deepEqual(tileRect(tileset, "grass"), { sx: 0, sy: 32, sSize: 32 });
+  assert.deepEqual(tileRect(tileset, "stone_floor"), { sx: 32, sy: 0, sSize: 32 });
   assert.equal(tileRect(tileset, "no_such_tile"), null);
   assert.equal(tileRect(tileset, "hasOwnProperty"), null, "prototype names are not tiles");
 });

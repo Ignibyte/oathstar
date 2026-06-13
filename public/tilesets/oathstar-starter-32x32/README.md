@@ -1,4 +1,4 @@
-# Oathstar Starter 16x16 Tileset (blank-colors era)
+# Oathstar Starter 32x32 Tileset (blank-colors era)
 
 Every tile is ONE uniform color block (ticket #36): the slice plays in
 legible flat color with zero art debt. The client resolves tiles BY NAME
@@ -7,17 +7,17 @@ this sheet — no code, map, or save changes.
 
 ## Files
 
-- `oathstar-starter-16x16.png` - source sprite sheet, 64x48 pixels.
-- `oathstar-starter-16x16-preview.png` - scaled preview with grid lines.
-- `oathstar-starter-16x16.json` - engine-friendly metadata (the contract).
-- `oathstar-starter-16x16.tsx` - Tiled-compatible tileset metadata.
+- `oathstar-starter-32x32.png` - source sprite sheet, 128x96 pixels.
+- `oathstar-starter-32x32-preview.png` - scaled preview with grid lines.
+- `oathstar-starter-32x32.json` - engine-friendly metadata (the contract).
+- `oathstar-starter-32x32.tsx` - Tiled-compatible tileset metadata.
 - `bin/generate_oathstar_tileset.py` - deterministic generator (re-runs
   reproduce the committed bytes exactly on the same PIL toolchain; the
   test pin compares pixels, not bytes).
 
 ## Format
 
-- Tile size: 16x16.
+- Tile size: 32x32.
 - Sheet size: 4 columns by 3 rows; 11 named tiles, last slot a spare.
 - Tile IDs: row-major, starting at 0.
 - Metadata includes `name`, pixel `x`/`y`, `color` (the authored palette
