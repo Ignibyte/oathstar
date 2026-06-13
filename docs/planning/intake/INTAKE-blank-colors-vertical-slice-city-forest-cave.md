@@ -74,11 +74,25 @@ observable on the colored map (hero teal, enemies ember, loot gold).
   `WORK-equipment-v1`.
 - **A / B / C** — from the tileset intake: flatten the sheet; the .tmx
   importer; per-room tile names over the wire (subregion colors live).
+  **→ PROMOTED 2026-06-12:** A = ticket #36 ✅ (shipped);
+  B = ticket #39 (`b46517e6-9306-4a2e-a09e-18c04b013151`);
+  C = ticket #38 (`51636b55-d4e7-4f22-a826-0a2b5fc04b76`).
+- **(new) Scale the map** — 32px tiles + enlarged canvas (owner
+  direction 2026-06-12). **→ PROMOTED:** ticket #37
+  (`5a348bfb-4c21-4696-bea3-4597c32da5da`).
 - **W1 — the world + oath content** (integration payoff): paint
   city/forest/cave (one .tmx per sub-region via B, or TOML if B is
   deferred); author the enemy roster, vendor stock, equipment drops, and
   the slice's oath chain; balance the route; the served end-to-end test
   plays the WHOLE loop over the seam.
+  **→ PROMOTED 2026-06-12:** ticket #40
+  (`4a2356ea-a9b9-46b8-8977-f4b1ac2f667c`).
+
+**Recommended sequence (2026-06-12):** #38 (biome colors — small, visible)
+and #37 (32px scale) next, in either order → #40 (W1, hand-authored in
+TOML) → #39 (the .tmx importer) only when hand-authoring gets painful.
+The importer is authoring infrastructure, not a visible step, so it is
+deliberately deferred behind the playable world.
 
 ## Sequencing Options
 

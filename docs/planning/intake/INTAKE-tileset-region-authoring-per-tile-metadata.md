@@ -143,8 +143,13 @@ rooms' `region`/`subregion` fields map 1:1 onto the metadata model.
   spike: Rust importer in the content-crate orbit, implicit-room
   cascade materialization, adjacency-derived exits, reachability
   validation, beginner-world round-trip parity.
+  **→ PROMOTED 2026-06-12:** ticket #39
+  (`b46517e6-9306-4a2e-a09e-18c04b013151`). Deferred behind C + W1 per
+  the recommended sequence (authoring infra, not a visible step).
 - **C: per-room tile names over the wire** (= step 3 below) — makes the
   subregion floor colors visible in the client.
+  **→ PROMOTED 2026-06-12:** ticket #38
+  (`51636b55-d4e7-4f22-a826-0a2b5fc04b76`). Recommended NEXT.
 - Step 0 (runtime overlay markers) and step 1 (per-tile descriptions)
   remain independent and unordered against A–C.
 
