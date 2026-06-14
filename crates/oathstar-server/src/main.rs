@@ -10,7 +10,9 @@ use axum::{
 };
 use oathstar_core::{Engine, SaveData};
 use oathstar_datastar::{feed_patch, opening_patches};
-use oathstar_protocol::{CommandRequest, CommandResponse, GameEvent, GameSnapshot};
+use oathstar_protocol::{
+    AuthRole, CommandRequest, CommandResponse, GameEvent, GameSnapshot, Principal,
+};
 use oathstar_storage::{FileSaveStore, SaveStore};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -18,6 +20,10 @@ use tokio::{
     sync::{broadcast, Mutex},
     time,
 };
+
+mod auth;
+
+use auth::{AuthError, AuthPrincipal, SessionStore};
 
 /// The slot a save/load request without an explicit `slot` uses (ticket #28).
 /// The v1 client always saves and loads here; named slots are exercised by
@@ -37,6 +43,10 @@ struct AppState {
     /// at `OATHSTAR_SAVE_DIR` (default `saves`). The store is the only
     /// persistence path — slot validation and symlink defense come with it.
     saves: FileSaveStore,
+    /// The auth session registry (ticket #41): resolves a bearer token to its
+    /// `Principal` for protected routes. Empty in production until a real
+    /// session source exists; seeded by `OATHSTAR_DEV_OWNER` in local dev.
+    auth_sessions: Arc<SessionStore>,
 }
 
 /// The JSON body of POST `/save` and `/load` (ticket #28). The body itself is
@@ -90,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
         events,
         opening,
         saves: FileSaveStore::new(save_dir),
+        auth_sessions: Arc::new(SessionStore::from_env()),
     };
 
     spawn_tick_loop(app_state.clone());
@@ -104,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/events", get(events_json))
         .route("/events/json", get(events_json))
         .route("/events/datastar", get(events_datastar))
+        .route("/admin/session", get(admin_session))
         .with_state(app_state);
 
     let addr: SocketAddr = std::env::var("OATHSTAR_ADDR")
@@ -126,6 +138,16 @@ async fn health() -> Json<serde_json::Value> {
         "ok": true,
         "service": "oathstar-server"
     }))
+}
+
+/// Protected probe (ticket #41): the auth boundary's first consumer. The
+/// `AuthPrincipal` extractor refuses unauthenticated callers with 401; this
+/// handler then requires an editor-tier session ([`AuthRole::Owner`] satisfies
+/// it via full authority) and echoes the authenticated principal. The admin
+/// shell surface itself is a later ticket.
+async fn admin_session(principal: AuthPrincipal) -> Result<Json<Principal>, AuthError> {
+    auth::require_role(&principal.0, AuthRole::Editor)?;
+    Ok(Json(principal.0))
 }
 
 async fn state_snapshot(State(app): State<AppState>) -> Json<GameSnapshot> {
@@ -360,6 +382,7 @@ mod tests {
             events: events.clone(),
             opening,
             saves: FileSaveStore::new(scratch_save_dir("tick-loop")),
+            auth_sessions: Arc::new(SessionStore::default()),
         };
         let mut rx = events.subscribe();
         spawn_tick_loop(state);
@@ -395,6 +418,7 @@ mod tests {
             events,
             opening,
             saves: FileSaveStore::new(scratch_save_dir(tag)),
+            auth_sessions: Arc::new(SessionStore::default()),
         }
     }
 
@@ -407,6 +431,86 @@ mod tests {
 
     #[tokio::test]
     async fn state_snapshot_returns_engine_state() {
+        let snapshot = state_snapshot(State(test_app_state())).await;
+        assert_eq!(snapshot.0.current_room_id, "hollowmere_square");
+    }
+
+    // ── ticket #41: auth boundary integration ───────────────────────────────
+
+    fn auth_principal(roles: Vec<AuthRole>) -> AuthPrincipal {
+        AuthPrincipal(Principal {
+            id: "tester".to_owned(),
+            name: "Tester".to_owned(),
+            roles,
+        })
+    }
+
+    // REQ-002/006: a non-editor principal is forbidden (403) at the probe.
+    #[tokio::test]
+    async fn admin_session_forbids_a_player() {
+        use axum::response::IntoResponse;
+
+        let rejection = admin_session(auth_principal(vec![AuthRole::Player]))
+            .await
+            .expect_err("a player must be forbidden");
+        assert_eq!(
+            rejection.into_response().status(),
+            axum::http::StatusCode::FORBIDDEN
+        );
+    }
+
+    // REQ-003/006: an editor — and an owner, via full authority — gets the
+    // authenticated principal echoed back.
+    #[tokio::test]
+    async fn admin_session_echoes_an_authorized_principal() {
+        for roles in [vec![AuthRole::Editor], vec![AuthRole::Owner]] {
+            let echoed = admin_session(auth_principal(roles.clone()))
+                .await
+                .expect("an authorized principal is echoed");
+            assert_eq!(echoed.0.id, "tester");
+            assert_eq!(echoed.0.roles, roles);
+        }
+    }
+
+    // REQ-001: the extractor refuses an unauthenticated request with 401 before
+    // the handler body runs; a seeded dev-owner token yields the principal.
+    #[tokio::test]
+    async fn auth_principal_extractor_gates_on_the_session() {
+        use axum::extract::FromRequestParts;
+        use axum::response::IntoResponse;
+
+        let mut state = test_app_state();
+        state.auth_sessions = Arc::new(SessionStore::from_owner_token(Some("devtok".to_owned())));
+
+        let mut no_auth = axum::http::Request::builder()
+            .body(axum::body::Body::empty())
+            .expect("request builds")
+            .into_parts()
+            .0;
+        let rejection = AuthPrincipal::from_request_parts(&mut no_auth, &state)
+            .await
+            .expect_err("a request with no session must be rejected");
+        assert_eq!(
+            rejection.into_response().status(),
+            axum::http::StatusCode::UNAUTHORIZED
+        );
+
+        let mut with_auth = axum::http::Request::builder()
+            .header(axum::http::header::AUTHORIZATION, "Bearer devtok")
+            .body(axum::body::Body::empty())
+            .expect("request builds")
+            .into_parts()
+            .0;
+        let principal = AuthPrincipal::from_request_parts(&mut with_auth, &state)
+            .await
+            .expect("a seeded token authenticates");
+        assert!(principal.0.grants(AuthRole::Owner));
+    }
+
+    // REQ-005: player endpoints need no auth — the default app state carries an
+    // empty session store and `/state` still answers.
+    #[tokio::test]
+    async fn player_endpoints_need_no_auth() {
         let snapshot = state_snapshot(State(test_app_state())).await;
         assert_eq!(snapshot.0.current_room_id, "hollowmere_square");
     }

@@ -18,6 +18,54 @@ pub struct CommandResponse {
     pub snapshot: GameSnapshot,
 }
 
+/// The authentication/authorization role vocabulary for online play and the
+/// `/admin/editor` (Oathstar Studio) surfaces (Decision 056, ticket #41).
+///
+/// This is the *auth* role — distinct from `oathstar-core`'s entity-capability
+/// `Role` (Decision 039), which describes what an in-world entity can do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthRole {
+    /// Plays assigned or public worlds.
+    Player,
+    /// Accesses `/admin/editor` and creates or updates draft content.
+    Editor,
+    /// Accesses `/admin` and manages server or world settings.
+    Admin,
+    /// Runs live-session game-master tools, once that mode exists.
+    Dm,
+    /// Full server authority; grants every other role's access.
+    Owner,
+}
+
+/// An authenticated caller: a stable `id`, a display `name`, and the auth
+/// `roles` the caller holds (ticket #41).
+///
+/// Echoed as JSON by the protected probe route; the real account, session, and
+/// persistence model is deferred (Decision 056).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Principal {
+    /// Stable identifier for the caller (an account id or a dev handle).
+    pub id: String,
+    /// Human-readable display name.
+    pub name: String,
+    /// The auth roles this principal holds.
+    pub roles: Vec<AuthRole>,
+}
+
+impl Principal {
+    /// Whether this principal is granted `required`. An [`AuthRole::Owner`] is
+    /// full server authority (Decision 056) and therefore grants every role;
+    /// otherwise the principal must hold `required` explicitly. Distinct powers
+    /// do not imply one another (an [`AuthRole::Admin`] is not an
+    /// [`AuthRole::Editor`]).
+    #[must_use]
+    pub fn grants(&self, required: AuthRole) -> bool {
+        self.roles.contains(&AuthRole::Owner) || self.roles.contains(&required)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameSnapshot {
@@ -979,5 +1027,69 @@ mod tests {
         assert_eq!(value["player"]["equipment"][0]["slot"], "weapon");
         assert_eq!(value["player"]["equipment"][0]["id"], "fang");
         assert_eq!(value["player"]["equipment"][0]["name"], "Cracked Fang");
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::{AuthRole, Principal};
+
+    fn principal(roles: Vec<AuthRole>) -> Principal {
+        Principal {
+            id: "u".to_string(),
+            name: "User".to_string(),
+            roles,
+        }
+    }
+
+    #[test]
+    fn owner_grants_every_role() {
+        let owner = principal(vec![AuthRole::Owner]);
+        for required in [
+            AuthRole::Player,
+            AuthRole::Editor,
+            AuthRole::Admin,
+            AuthRole::Dm,
+            AuthRole::Owner,
+        ] {
+            assert!(owner.grants(required), "owner must grant {required:?}");
+        }
+    }
+
+    #[test]
+    fn non_owner_grants_only_its_own_roles() {
+        let editor = principal(vec![AuthRole::Editor]);
+        assert!(editor.grants(AuthRole::Editor));
+        assert!(!editor.grants(AuthRole::Admin), "editor is not admin");
+        assert!(!editor.grants(AuthRole::Owner));
+
+        let player = principal(vec![AuthRole::Player]);
+        assert!(!player.grants(AuthRole::Editor), "player is not editor");
+
+        // Distinct powers do not cross-imply (Decision 056).
+        let admin = principal(vec![AuthRole::Admin]);
+        assert!(!admin.grants(AuthRole::Editor), "admin is not editor");
+        assert!(admin.grants(AuthRole::Admin));
+    }
+
+    #[test]
+    fn auth_role_uses_snake_case_wire_tokens() {
+        assert_eq!(serde_json::to_value(AuthRole::Owner).unwrap(), "owner");
+        assert_eq!(serde_json::to_value(AuthRole::Dm).unwrap(), "dm");
+        assert_eq!(serde_json::to_value(AuthRole::Player).unwrap(), "player");
+        let parsed: AuthRole = serde_json::from_value(serde_json::json!("editor")).unwrap();
+        assert_eq!(parsed, AuthRole::Editor);
+    }
+
+    #[test]
+    fn principal_round_trips_camel_case() {
+        let original = principal(vec![AuthRole::Owner, AuthRole::Editor]);
+        let value = serde_json::to_value(&original).unwrap();
+        assert_eq!(value["id"], "u");
+        assert_eq!(value["name"], "User");
+        assert_eq!(value["roles"][0], "owner");
+        assert_eq!(value["roles"][1], "editor");
+        let back: Principal = serde_json::from_value(value).unwrap();
+        assert_eq!(back, original);
     }
 }
