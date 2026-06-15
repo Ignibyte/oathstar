@@ -378,6 +378,7 @@ dependencies = [
  "anyhow",
  "oathstar-core",
  "serde",
+ "serde_json",
  "toml",
 ]
 

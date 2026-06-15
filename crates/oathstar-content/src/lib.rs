@@ -7,6 +7,12 @@ use oathstar_core::{
 };
 use serde::Deserialize;
 
+mod map_document;
+pub use map_document::{
+    Cell, ContentCatalog, MapDocument, MapValidationError, RefKind, RoomCell, TerrainCell,
+    TerrainDef, SUPPORTED_TILE_SIZE,
+};
+
 const BEGINNER_MODULE: &str = include_str!("../../../modules/beginner/module.toml");
 const BEGINNER_ROOMS: &str = include_str!("../../../modules/beginner/rooms.toml");
 const BEGINNER_WORLD: &str = include_str!("../../../modules/beginner/world.toml");

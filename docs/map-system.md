@@ -250,3 +250,42 @@ server-authoritative MUD/grid surface.
 - Keep the backend renderer-agnostic.
 - Allow text, canvas, and sprite renderers to use the same map payload.
 - Default to a 32x32 tile grid when canvas rendering begins.
+
+## Map Document Model (authoring)
+
+Ticket #43 adds a first-party **map document model** (`oathstar-content`'s
+`MapDocument`) — the canonical artifact the Studio `/admin/editor` edits, distinct
+from the runtime [`MapSnapshot`](#backend-payload) wire DTO. It is renderer-agnostic
+and serde-serializable (JSON drafts), authored on a **16×16-pixel source grid** — the
+painted-tile unit. (The on-screen render scale — ticket #37's 32px source / 64px
+cells — is a separate client concern; the name-keyed tileset keeps source resolution
+independent of map/world data.)
+
+Shape:
+
+- `tile_size` (pinned to 16), and `width` / `height` / `floors` grid bounds.
+- a name-keyed `terrain_palette` (`name → { tile, passable }`) and a sparse `terrain`
+  layer (a `Vec` of `{ x, y, z, terrain }` cells).
+- `rooms`: a `Vec` of room cells, each a stable `id` with optional
+  `title` / `description` / `glyph` overrides (an *ordinary* room takes engine
+  defaults; a *special* room overrides them), a required `region` (+ optional
+  `subregion`), `combat_enabled`, `exits` (direction → room id; `up`/`down` are
+  stairs), and entity / item / fixture reference ids.
+- `spawn`: the start cell (must land on a room cell).
+
+Two seams turn a draft into playable world data:
+
+- `MapDocument::validate(&ContentCatalog)` refuses, with a typed
+  `MapValidationError` that **names the offending cell/reference**, on: an unsupported
+  tile size, an out-of-bounds or duplicate cell, unknown terrain, a room without
+  passable terrain, a duplicate room id, an undeclared region/subregion, a dangling
+  exit, an unknown entity/item/fixture reference, or a missing / non-room spawn.
+- `MapDocument::materialize(&ContentCatalog)` deterministically builds an
+  `oathstar_core::WorldDefinition` (one room per room cell; entities/items pulled from
+  the catalog), then runs the engine's own `WorldDefinition::validate` as a final net
+  so the output is always `Engine::try_new`-constructable.
+
+Fixtures are modeled and validated but not yet materialized (the engine has no fixture
+concept). The TMX/TMJ importer (#39), per-room biome colors over the wire (#38), and
+the `/admin/editor` canvas UI are separate tickets; both Studio and any importer
+materialize the **same** validated world data.
