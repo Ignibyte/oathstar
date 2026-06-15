@@ -1,0 +1,17 @@
+[package]
+name = "oathstar-studio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+axum-extra = { workspace = true, features = ["cookie"] }
+oathstar-auth = { path = "../oathstar-auth" }
+serde.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

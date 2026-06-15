@@ -2,7 +2,7 @@ use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_stream::stream;
 use axum::{
-    extract::State,
+    extract::{FromRef, State},
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
@@ -21,9 +21,7 @@ use tokio::{
     time,
 };
 
-mod auth;
-
-use auth::{AuthError, AuthPrincipal, SessionStore};
+use oathstar_auth::{AuthError, AuthPrincipal, SessionStore};
 
 /// The slot a save/load request without an explicit `slot` uses (ticket #28).
 /// The v1 client always saves and loads here; named slots are exercised by
@@ -43,10 +41,17 @@ struct AppState {
     /// at `OATHSTAR_SAVE_DIR` (default `saves`). The store is the only
     /// persistence path — slot validation and symlink defense come with it.
     saves: FileSaveStore,
-    /// The auth session registry (ticket #41): resolves a bearer token to its
-    /// `Principal` for protected routes. Empty in production until a real
-    /// session source exists; seeded by `OATHSTAR_DEV_OWNER` in local dev.
-    auth_sessions: Arc<SessionStore>,
+    /// The auth session registry (ticket #41/#42): resolves a bearer token (or a
+    /// studio session id) to its `Principal`. Empty in production until a real
+    /// session source exists; seeded by `OATHSTAR_DEV_OWNER` in local dev. Shared
+    /// with the studio via the `oathstar-auth` crate.
+    auth_sessions: SessionStore,
+}
+
+impl FromRef<AppState> for SessionStore {
+    fn from_ref(state: &AppState) -> Self {
+        state.auth_sessions.clone()
+    }
 }
 
 /// The JSON body of POST `/save` and `/load` (ticket #28). The body itself is
@@ -100,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
         events,
         opening,
         saves: FileSaveStore::new(save_dir),
-        auth_sessions: Arc::new(SessionStore::from_env()),
+        auth_sessions: SessionStore::from_env(),
     };
 
     spawn_tick_loop(app_state.clone());
@@ -146,7 +151,7 @@ async fn health() -> Json<serde_json::Value> {
 /// it via full authority) and echoes the authenticated principal. The admin
 /// shell surface itself is a later ticket.
 async fn admin_session(principal: AuthPrincipal) -> Result<Json<Principal>, AuthError> {
-    auth::require_role(&principal.0, AuthRole::Editor)?;
+    oathstar_auth::require_role(&principal.0, AuthRole::Editor)?;
     Ok(Json(principal.0))
 }
 
@@ -382,7 +387,7 @@ mod tests {
             events: events.clone(),
             opening,
             saves: FileSaveStore::new(scratch_save_dir("tick-loop")),
-            auth_sessions: Arc::new(SessionStore::default()),
+            auth_sessions: SessionStore::default(),
         };
         let mut rx = events.subscribe();
         spawn_tick_loop(state);
@@ -418,7 +423,7 @@ mod tests {
             events,
             opening,
             saves: FileSaveStore::new(scratch_save_dir(tag)),
-            auth_sessions: Arc::new(SessionStore::default()),
+            auth_sessions: SessionStore::default(),
         }
     }
 
@@ -480,7 +485,7 @@ mod tests {
         use axum::response::IntoResponse;
 
         let mut state = test_app_state();
-        state.auth_sessions = Arc::new(SessionStore::from_owner_token(Some("devtok".to_owned())));
+        state.auth_sessions = SessionStore::from_owner_token(Some("devtok".to_owned()));
 
         let mut no_auth = axum::http::Request::builder()
             .body(axum::body::Body::empty())

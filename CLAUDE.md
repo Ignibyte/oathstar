@@ -8,7 +8,9 @@ Guidance for Claude Code working in this repo.
 (`crates/oathstar-*`), a working JS prototype/frontend (`src/`, `tests/`), and
 a Tauri shell (`src-tauri/`). Design docs live in `docs/`; locked design
 choices in `docs/decisions.md`. The engine is mid-migration from the JS
-prototype to the Rust workspace.
+prototype to the Rust workspace. The secure admin/management UI is a **separate
+loopback Rust sidecar** (`oathstar-studio`) on a shared `oathstar-auth` crate —
+not routes on the public game server (Decision 058).
 
 ## How we work — the pipeline (binding: CONSTITUTION.md)
 
