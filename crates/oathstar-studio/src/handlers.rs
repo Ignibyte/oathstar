@@ -72,6 +72,7 @@ mod tests {
         StudioState {
             sessions: SessionStore::new(),
             owner_secret: secret.map(str::to_owned),
+            catalog: std::sync::Arc::new(oathstar_content::ContentCatalog::default()),
         }
     }
 

@@ -10,7 +10,9 @@ anyhow.workspace = true
 axum.workspace = true
 axum-extra = { workspace = true, features = ["cookie"] }
 oathstar-auth = { path = "../oathstar-auth" }
+oathstar-content = { path = "../oathstar-content" }
 serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 
 [lints]

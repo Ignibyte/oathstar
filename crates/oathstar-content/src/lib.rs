@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context};
 use oathstar_core::{
@@ -72,6 +72,22 @@ struct WorldToml {
 
 pub fn load_beginner_world() -> anyhow::Result<WorldDefinition> {
     load_world_from_toml(BEGINNER_MODULE, BEGINNER_ROOMS, BEGINNER_WORLD)
+}
+
+/// Build the beginner world's content catalog — the entity/item registry a map
+/// document validates its references against.
+///
+/// Fixtures are empty (the engine has no fixture concept yet).
+///
+/// # Errors
+/// Returns an error if the embedded beginner module fails to load.
+pub fn beginner_catalog() -> anyhow::Result<ContentCatalog> {
+    let world = load_beginner_world()?;
+    Ok(ContentCatalog {
+        entities: world.entities,
+        items: world.items,
+        fixtures: BTreeSet::new(),
+    })
 }
 
 /// Index a list of id-bearing content items into a `BTreeMap`, rejecting any
@@ -308,6 +324,17 @@ mod tests {
         assert_eq!(world.subregions.len(), 5);
         assert!(world.entities.contains_key("mara"));
         assert!(world.items.contains_key("candle"));
+    }
+
+    #[test]
+    fn beginner_catalog_mirrors_the_world_content() {
+        let catalog = beginner_catalog().expect("catalog loads");
+        let world = load_beginner_world().expect("world loads");
+        assert_eq!(catalog.entities, world.entities);
+        assert_eq!(catalog.items, world.items);
+        assert!(catalog.entities.contains_key("mara"));
+        assert!(catalog.items.contains_key("candle"));
+        assert!(catalog.fixtures.is_empty());
     }
 
     // T8: a dangling reference in assembled content is rejected through the loader

@@ -188,7 +188,7 @@ pub struct ContentCatalog {
 }
 
 /// Which catalog an [`MapValidationError::UnknownReference`] failed against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RefKind {
     /// An entity placement.
     Entity,
@@ -213,7 +213,7 @@ impl fmt::Display for RefKind {
 ///
 /// Each variant names the offending cell and/or reference so an editor can point
 /// the author at it. Mirrors the engine's hand-rolled error style.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum MapValidationError {
     /// `tile_size` is not [`SUPPORTED_TILE_SIZE`].
     UnsupportedTileSize {
@@ -304,7 +304,7 @@ pub enum MapValidationError {
         cell: Cell,
     },
     /// The materialized world failed the engine's own invariant check.
-    WorldInvalid(WorldValidationError),
+    WorldInvalid(#[serde(serialize_with = "serialize_world_error")] WorldValidationError),
 }
 
 impl fmt::Display for MapValidationError {
@@ -380,6 +380,17 @@ impl std::error::Error for MapValidationError {
             _ => None,
         }
     }
+}
+
+/// Serialize a wrapped [`WorldValidationError`] as its Display string.
+///
+/// The engine error is not `Serialize`; its `Display` already names the offending
+/// item, which is what an editor needs.
+fn serialize_world_error<S: serde::Serializer>(
+    error: &WorldValidationError,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&error.to_string())
 }
 
 impl MapDocument {
@@ -1442,5 +1453,40 @@ mod tests {
         });
         assert!(wrapped.source().is_some());
         assert!(MapValidationError::NoSpawnPoint.source().is_none());
+    }
+
+    #[test]
+    fn world_invalid_serializes_as_the_inner_message() {
+        // `serialize_world_error` emits the inner engine error's Display (the
+        // wrapper's "materialized world is invalid:" prefix is not applied here).
+        let error = MapValidationError::WorldInvalid(WorldValidationError::StartRoomMissing {
+            start_room_id: "s".to_owned(),
+        });
+        assert_eq!(
+            serde_json::to_value(&error).expect("serializes"),
+            serde_json::json!({ "WorldInvalid": "start room 's' does not exist" })
+        );
+    }
+
+    #[test]
+    fn unknown_reference_serializes_with_named_fields() {
+        // Pins the external tag, the field names, and RefKind's capitalized form.
+        let error = MapValidationError::UnknownReference {
+            room_id: "r".to_owned(),
+            cell: Cell { x: 1, y: 2, z: 3 },
+            kind: RefKind::Entity,
+            id: "x".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(&error).expect("serializes"),
+            serde_json::json!({
+                "UnknownReference": {
+                    "room_id": "r",
+                    "cell": { "x": 1, "y": 2, "z": 3 },
+                    "kind": "Entity",
+                    "id": "x"
+                }
+            })
+        );
     }
 }

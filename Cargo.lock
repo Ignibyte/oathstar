@@ -442,7 +442,9 @@ dependencies = [
  "axum",
  "axum-extra",
  "oathstar-auth",
+ "oathstar-content",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

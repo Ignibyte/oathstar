@@ -5,13 +5,17 @@
 //! shares the auth/session model with the game server via `oathstar-auth`. This
 //! v1 is the shell + owner login; the map editor is a later ticket (#43).
 
+use std::sync::Arc;
+
 use axum::{
     routing::{get, post},
     Router,
 };
 use oathstar_auth::SessionStore;
+use oathstar_content::ContentCatalog;
 
 mod config;
+mod editor;
 mod handlers;
 mod render;
 
@@ -22,6 +26,7 @@ use config::StudioConfig;
 struct StudioState {
     sessions: SessionStore,
     owner_secret: Option<String>,
+    catalog: Arc<ContentCatalog>,
 }
 
 #[tokio::main]
@@ -36,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
     let state = StudioState {
         sessions: SessionStore::new(),
         owner_secret: config.owner_secret,
+        catalog: Arc::new(oathstar_content::beginner_catalog()?),
     };
 
     let app = Router::new()
@@ -45,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::login_form).post(handlers::login_submit),
         )
         .route("/logout", post(handlers::logout))
+        .route("/editor/maps/validate", post(editor::validate))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(config.addr).await?;

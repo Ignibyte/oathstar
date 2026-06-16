@@ -289,3 +289,12 @@ Fixtures are modeled and validated but not yet materialized (the engine has no f
 concept). The TMX/TMJ importer (#39), per-room biome colors over the wire (#38), and
 the `/admin/editor` canvas UI are separate tickets; both Studio and any importer
 materialize the **same** validated world data.
+
+**Served by the studio (ticket #44).** The `oathstar-studio` sidecar exposes an
+Editor-gated `POST /editor/maps/validate`: it takes a `MapDocument` JSON body and runs
+validate + materialize against a server-built `ContentCatalog` (from
+`load_beginner_world()`), answering `200 {ok:true, room_count, region_count,
+start_room_id}` for a valid document or `200 {ok:false, message, error}` (the typed
+`MapValidationError` as JSON, naming the offending cell/ref) — with `401`/`403`/`400` for
+a missing session, a non-editor, or a malformed body. This is the backend the
+`/admin/editor` canvas UI will call.
