@@ -8,7 +8,7 @@ use axum::{
     body::Bytes,
     extract::State,
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     Json,
 };
 use axum_extra::extract::cookie::CookieJar;
@@ -16,7 +16,7 @@ use oathstar_auth::{principal_from_cookie, require_role, AuthRole};
 use oathstar_content::{MapDocument, MapValidationError};
 use serde::Serialize;
 
-use crate::StudioState;
+use crate::{render, StudioState};
 
 /// A successful validate/materialize — a compact summary of the world.
 #[derive(Serialize)]
@@ -92,16 +92,75 @@ pub async fn validate(State(studio): State<StudioState>, jar: CookieJar, body: B
     }
 }
 
+/// A ref-free, valid starter [`MapDocument`] (JSON) the editor opens with — a
+/// 6×3 walled sketch: a floor corridor (rooms `atrium` and `hall`, `spawn` on
+/// `atrium`) ringed by walls, with an empty right-hand column. Ref-free, so it
+/// validates against any catalog; embedded verbatim into the page and sent by
+/// the Validate control.
+const STARTER_DOC: &str = r#"{
+  "id": "sketch-map",
+  "title": "Sketch Map",
+  "tile_size": 16,
+  "width": 6,
+  "height": 3,
+  "floors": 1,
+  "terrain_palette": {
+    "floor": { "tile": "stone_floor", "passable": true },
+    "wall": { "tile": "wall_face", "passable": false }
+  },
+  "terrain": [
+    { "x": 0, "y": 0, "z": 0, "terrain": "wall" },
+    { "x": 1, "y": 0, "z": 0, "terrain": "wall" },
+    { "x": 2, "y": 0, "z": 0, "terrain": "wall" },
+    { "x": 3, "y": 0, "z": 0, "terrain": "wall" },
+    { "x": 4, "y": 0, "z": 0, "terrain": "wall" },
+    { "x": 0, "y": 1, "z": 0, "terrain": "wall" },
+    { "x": 1, "y": 1, "z": 0, "terrain": "floor" },
+    { "x": 2, "y": 1, "z": 0, "terrain": "floor" },
+    { "x": 3, "y": 1, "z": 0, "terrain": "floor" },
+    { "x": 4, "y": 1, "z": 0, "terrain": "wall" },
+    { "x": 0, "y": 2, "z": 0, "terrain": "wall" },
+    { "x": 1, "y": 2, "z": 0, "terrain": "wall" },
+    { "x": 2, "y": 2, "z": 0, "terrain": "wall" },
+    { "x": 3, "y": 2, "z": 0, "terrain": "wall" },
+    { "x": 4, "y": 2, "z": 0, "terrain": "wall" }
+  ],
+  "regions": {
+    "sketch": { "id": "sketch", "name": "Sketch" }
+  },
+  "rooms": [
+    { "x": 1, "y": 1, "z": 0, "id": "atrium", "region": "sketch", "exits": { "east": "hall" } },
+    { "x": 3, "y": 1, "z": 0, "id": "hall", "region": "sketch", "exits": { "west": "atrium" } }
+  ],
+  "spawn": { "x": 1, "y": 1, "z": 0 }
+}"#;
+
+/// `GET /editor` — the studio map editor canvas page (ticket #45).
+///
+/// Editor-gated like [`crate::handlers::dashboard`] (an Owner session grants
+/// Editor): redirects to `/login` without a valid editor session, otherwise
+/// renders the canvas shell around [`STARTER_DOC`]. The page validates by
+/// posting the document to [`validate`]; this handler itself takes no input.
+pub async fn editor_page(State(studio): State<StudioState>, jar: CookieJar) -> Response {
+    let Some(principal) = principal_from_cookie(&jar, &studio.sessions) else {
+        return Redirect::to("/login").into_response();
+    };
+    if require_role(&principal, AuthRole::Editor).is_err() {
+        return Redirect::to("/login").into_response();
+    }
+    render::editor_page(STARTER_DOC).into_response()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::validate;
+    use super::{editor_page, validate, STARTER_DOC};
     use crate::StudioState;
     use axum::body::{to_bytes, Body, Bytes};
     use axum::extract::{FromRequestParts, State};
     use axum::http::{header, Request, StatusCode};
     use axum_extra::extract::cookie::CookieJar;
     use oathstar_auth::{owner_principal, AuthRole, Principal, SessionStore, SESSION_COOKIE};
-    use oathstar_content::ContentCatalog;
+    use oathstar_content::{ContentCatalog, MapDocument};
     use std::sync::Arc;
 
     /// A valid, reference-free document: two rooms in one region, spawned on `alpha`.
@@ -165,6 +224,29 @@ mod tests {
             .expect("the body collects");
         let value = serde_json::from_slice(&bytes).expect("a JSON body");
         (status, value)
+    }
+
+    /// Call `editor_page` (the GET page handler) with an optional session cookie.
+    async fn page(state: StudioState, cookie: Option<String>) -> axum::response::Response {
+        let jar = jar(cookie.as_deref()).await;
+        editor_page(State(state), jar).await
+    }
+
+    fn location(response: &axum::response::Response) -> String {
+        response
+            .headers()
+            .get(header::LOCATION)
+            .expect("a Location header")
+            .to_str()
+            .expect("an ascii Location")
+            .to_owned()
+    }
+
+    async fn body_string(response: axum::response::Response) -> String {
+        let bytes = to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("the body collects");
+        String::from_utf8(bytes.to_vec()).expect("a utf-8 body")
     }
 
     #[tokio::test]
@@ -244,5 +326,79 @@ mod tests {
             body["message"]
         );
         assert_eq!(body["error"]["UnsupportedTileSize"]["found"], 32);
+    }
+
+    #[tokio::test]
+    async fn editor_page_redirects_anonymous() {
+        // REQ-001 / T1: no session → redirect to /login, page not served.
+        let response = page(studio(), None).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(location(&response), "/login");
+    }
+
+    #[tokio::test]
+    async fn editor_page_redirects_a_player() {
+        // REQ-001 / T2: a real Player session is refused. Paired with the editor/owner
+        // 200s below, this kills the role-gate mutant (PR-claude-gated-page-role-mutant-001) —
+        // a no-cookie-only test would leave the require_role branch alive.
+        let state = studio();
+        let id = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Player]));
+        let response = page(state, Some(cookie_header(&id))).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(location(&response), "/login");
+    }
+
+    #[tokio::test]
+    async fn editor_page_renders_for_an_editor() {
+        // REQ-002 / T3: an Editor sees the canvas shell with the embedded starter doc.
+        let state = studio();
+        let id = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let response = page(state, Some(cookie_header(&id))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_string(response).await;
+        assert!(html.contains(r#"class="editor""#));
+        assert!(html.contains(r#"<canvas id="map""#));
+        assert!(html.contains(r#"id="map-doc""#));
+        assert!(html.contains(r#"id="validate""#));
+        assert!(html.contains(r#"id="result""#));
+        assert!(html.contains(r#"<a href="/">"#));
+        assert!(html.contains("Sketch Map")); // the embedded starter doc title
+    }
+
+    #[tokio::test]
+    async fn editor_page_admits_an_owner() {
+        // REQ-002 / T4: an Owner session grants Editor and reaches the page.
+        let state = studio();
+        let id = state.sessions.create_session(owner_principal());
+        let response = page(state, Some(cookie_header(&id))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn starter_doc_is_valid() {
+        // REQ-006/REQ-008 / T12: the shipped starter doc deserializes, materializes,
+        // and validates ok:true through the real endpoint (2 rooms, 1 region, start atrium).
+        let doc: MapDocument = serde_json::from_str(STARTER_DOC).expect("STARTER_DOC parses");
+        let world = doc
+            .materialize(&ContentCatalog::default())
+            .expect("STARTER_DOC materializes");
+        assert_eq!(world.rooms.len(), 2);
+        assert_eq!(world.regions.len(), 1);
+        assert_eq!(world.start_room_id, "atrium");
+
+        let state = studio();
+        let id = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let (status, body) = call(state, Some(cookie_header(&id)), STARTER_DOC).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["room_count"], 2);
+        assert_eq!(body["region_count"], 1);
+        assert_eq!(body["start_room_id"], "atrium");
     }
 }

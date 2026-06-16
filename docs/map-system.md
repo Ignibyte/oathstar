@@ -298,3 +298,15 @@ start_room_id}` for a valid document or `200 {ok:false, message, error}` (the ty
 `MapValidationError` as JSON, naming the offending cell/ref) — with `401`/`403`/`400` for
 a missing session, a non-editor, or a malformed body. This is the backend the
 `/admin/editor` canvas UI will call.
+
+**Rendered by the studio (ticket #45).** The same sidecar now serves an
+Editor-gated `GET /editor` page that draws a server-embedded starter
+`MapDocument` on a first-party `<canvas>` (current z-plane: empty / terrain
+floor / wall / room / spawn) and a **Validate** control that POSTs the document
+to `/editor/maps/validate` and shows the typed result. It follows the same
+pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model
+(`static/editor-canvas.js`, `node --test`-covered) plus a thin canvas/`fetch`
+glue kept as a server-side string — **mirroring** the #16 renderer (Decision
+050), not reusing it (the authoring document shape differs from the runtime
+snapshot). v1 is render + validate; tile-palette paint/erase (intake D-paint),
+the room inspector (E), and publish (F) are later slices.

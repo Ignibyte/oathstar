@@ -72,3 +72,38 @@ body.dashboard { padding: 1.25rem; }
 }
 .panel h2 { margin: 0 0 0.3rem; font-size: 1rem; }
 .soon { margin: 0; color: var(--muted); font-style: italic; }
+.cta { color: var(--brass); font-weight: 600; }
+
+/* editor (ticket #45) */
+body.editor { padding: 1.25rem; }
+.editor header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.crumbs a { color: var(--brass); }
+.editor-main { display: grid; gap: 1rem; margin-top: 1rem; }
+.hint { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.85rem; }
+canvas#map {
+  display: block;
+  image-rendering: pixelated;
+  background: #0c1014;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.controls { display: grid; gap: 0.6rem; }
+#result {
+  margin: 0;
+  min-height: 1.5rem;
+  padding: 0.5rem 0.7rem;
+  white-space: pre-wrap;
+  color: var(--muted);
+  background: #0e1316;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+#result[data-ok="true"] { color: var(--ink); border-color: #3f5a3f; }
+#result[data-ok="false"] { color: var(--danger); border-color: rgba(217, 138, 138, 0.4); }

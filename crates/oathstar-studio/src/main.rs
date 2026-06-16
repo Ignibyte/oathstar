@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::login_form).post(handlers::login_submit),
         )
         .route("/logout", post(handlers::logout))
+        .route("/editor", get(editor::editor_page))
         .route("/editor/maps/validate", post(editor::validate))
         .with_state(state);
 
