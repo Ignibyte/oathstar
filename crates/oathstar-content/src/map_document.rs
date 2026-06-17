@@ -140,6 +140,107 @@ impl RoomCell {
     }
 }
 
+/// A registered tile sheet, sliced into `columns * rows` tiles.
+///
+/// The editor slices a raw sheet at `tile_size` into this grid; `tiles` carries
+/// optional metadata only for the tiles that need it. Authoring-visual.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tileset {
+    /// Stable id; layer cells reference it.
+    pub id: String,
+    /// Sheet image path (resolved by the renderer, not here).
+    pub image: String,
+    /// Source tile edge in pixels; one of [`SUPPORTED_TILE_SIZES`].
+    pub tile_size: u32,
+    /// Sheet width in tiles.
+    pub columns: u32,
+    /// Sheet height in tiles.
+    pub rows: u32,
+    /// Sparse per-tile metadata, keyed by tile index (`0..columns*rows`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tiles: BTreeMap<u32, TileMeta>,
+}
+
+/// Optional authoring metadata for one tile of a [`Tileset`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TileMeta {
+    /// Human-facing tile name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Whether a creature may stand on this tile (authoring hint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passable: Option<bool>,
+    /// Free-form tags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+/// The role a tile layer plays.
+///
+/// One generic kind for now; the editor paints onto `Tile` layers. Future kinds
+/// (ground / decoration / overlay) extend this enum.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerKind {
+    /// A generic paintable tile layer.
+    #[default]
+    Tile,
+}
+
+/// A painted tile on a layer — a coordinate plus the tile it shows.
+///
+/// Flattened (not a `Cell`-keyed map) because a struct cannot be a JSON map key;
+/// mirrors [`TerrainCell`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayerCell {
+    /// Column.
+    pub x: i32,
+    /// Row.
+    pub y: i32,
+    /// Floor / z-plane.
+    pub z: i32,
+    /// Id of the [`Tileset`] the tile comes from.
+    pub tileset: String,
+    /// Tile index within that tileset (`0..columns*rows`).
+    pub index: u32,
+}
+
+impl LayerCell {
+    /// The coordinate of this layer cell.
+    const fn cell(&self) -> Cell {
+        Cell {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+        }
+    }
+}
+
+/// A named, stackable layer of painted tiles.
+///
+/// Authoring-visual: validated, but not yet materialized into the runtime world.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Layer {
+    /// Stable layer id (unique within the document).
+    pub id: String,
+    /// Human-facing layer name.
+    pub name: String,
+    /// What the layer is for.
+    #[serde(default)]
+    pub kind: LayerKind,
+    /// Whether the layer is drawn (an authoring toggle).
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    /// Painted cells; a coordinate may be painted at most once per layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cells: Vec<LayerCell>,
+}
+
+/// Serde default for [`Layer::visible`] — a new layer is visible.
+const fn default_true() -> bool {
+    true
+}
+
 /// A complete map authoring document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MapDocument {
@@ -173,6 +274,12 @@ pub struct MapDocument {
     /// The spawn / start cell; must land on a room cell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn: Option<Cell>,
+    /// Registered tile sheets that the layers paint from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tilesets: Vec<Tileset>,
+    /// Painted tile layers (authoring-visual; not yet materialized).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<Layer>,
 }
 
 /// The content a map document validates and materializes against.
@@ -223,7 +330,7 @@ pub enum MapValidationError {
         /// The unsupported size found.
         found: u32,
     },
-    /// A terrain or room cell sits outside the declared grid bounds.
+    /// A terrain, room, or layer cell sits outside the declared grid bounds.
     CellOutOfBounds {
         /// The offending cell.
         cell: Cell,
@@ -235,7 +342,8 @@ pub enum MapValidationError {
         /// The unknown terrain name.
         name: String,
     },
-    /// Two terrain cells, or two room cells, occupy the same coordinate.
+    /// Two terrain cells, two room cells, or two cells of one layer occupy the
+    /// same coordinate.
     DuplicateCell {
         /// The doubly-occupied cell.
         cell: Cell,
@@ -306,6 +414,46 @@ pub enum MapValidationError {
         /// The spawn cell.
         cell: Cell,
     },
+    /// Two tilesets share an id.
+    DuplicateTilesetId {
+        /// The duplicated tileset id.
+        id: String,
+    },
+    /// A tileset declares an unsupported tile size or empty dimensions.
+    UnsupportedTilesetGeometry {
+        /// The offending tileset id.
+        id: String,
+    },
+    /// Tileset metadata names a tile index outside the sheet.
+    TileMetaIndexOutOfRange {
+        /// The tileset id.
+        tileset: String,
+        /// The out-of-range index.
+        index: u32,
+    },
+    /// Two layers share an id.
+    DuplicateLayerId {
+        /// The duplicated layer id.
+        id: String,
+    },
+    /// A layer cell references a tileset the document does not declare.
+    UnknownTilesetRef {
+        /// The layer id.
+        layer: String,
+        /// The offending cell.
+        cell: Cell,
+        /// The unknown tileset id.
+        tileset: String,
+    },
+    /// A layer cell references a tile index outside its tileset.
+    TileIndexOutOfRange {
+        /// The layer id.
+        layer: String,
+        /// The offending cell.
+        cell: Cell,
+        /// The out-of-range index.
+        index: u32,
+    },
     /// The materialized world failed the engine's own invariant check.
     WorldInvalid(#[serde(serialize_with = "serialize_world_error")] WorldValidationError),
 }
@@ -371,6 +519,28 @@ impl fmt::Display for MapValidationError {
             ),
             Self::NoSpawnPoint => write!(f, "the map declares no spawn point"),
             Self::SpawnNotARoom { cell } => write!(f, "spawn cell {cell} is not a room"),
+            Self::DuplicateTilesetId { id } => write!(f, "tileset id '{id}' is reused"),
+            Self::UnsupportedTilesetGeometry { id } => write!(
+                f,
+                "tileset '{id}' has unsupported geometry (tile size must be one of {SUPPORTED_TILE_SIZES:?}, columns and rows must be positive)"
+            ),
+            Self::TileMetaIndexOutOfRange { tileset, index } => write!(
+                f,
+                "tileset '{tileset}' metadata names out-of-range tile index {index}"
+            ),
+            Self::DuplicateLayerId { id } => write!(f, "layer id '{id}' is reused"),
+            Self::UnknownTilesetRef {
+                layer,
+                cell,
+                tileset,
+            } => write!(
+                f,
+                "layer '{layer}' cell {cell} references unknown tileset '{tileset}'"
+            ),
+            Self::TileIndexOutOfRange { layer, cell, index } => write!(
+                f,
+                "layer '{layer}' cell {cell} references out-of-range tile index {index}"
+            ),
             Self::WorldInvalid(err) => write!(f, "materialized world is invalid: {err}"),
         }
     }
@@ -407,6 +577,75 @@ impl MapDocument {
             && i64::from(cell.z) < i64::from(self.floors)
     }
 
+    /// Validate the tileset registry.
+    ///
+    /// Returns each tileset id mapped to its tile capacity (`columns*rows`, as
+    /// `u64` to avoid overflow) so the layer pass can range-check tile indices.
+    fn check_tilesets(&self) -> Result<BTreeMap<&str, u64>, MapValidationError> {
+        let mut tileset_capacity: BTreeMap<&str, u64> = BTreeMap::new();
+        for ts in &self.tilesets {
+            if !SUPPORTED_TILE_SIZES.contains(&ts.tile_size) || ts.columns == 0 || ts.rows == 0 {
+                return Err(MapValidationError::UnsupportedTilesetGeometry { id: ts.id.clone() });
+            }
+            let capacity = u64::from(ts.columns) * u64::from(ts.rows);
+            for &index in ts.tiles.keys() {
+                if u64::from(index) >= capacity {
+                    return Err(MapValidationError::TileMetaIndexOutOfRange {
+                        tileset: ts.id.clone(),
+                        index,
+                    });
+                }
+            }
+            if tileset_capacity.insert(ts.id.as_str(), capacity).is_some() {
+                return Err(MapValidationError::DuplicateTilesetId { id: ts.id.clone() });
+            }
+        }
+        Ok(tileset_capacity)
+    }
+
+    /// Validate the tile layers against the tileset capacities.
+    ///
+    /// Authoring-visual: layers are validated but never reach `build_world`, so
+    /// the runtime world is unaffected by their presence.
+    fn check_layers(
+        &self,
+        tileset_capacity: &BTreeMap<&str, u64>,
+    ) -> Result<(), MapValidationError> {
+        let mut layer_ids: BTreeSet<&str> = BTreeSet::new();
+        for layer in &self.layers {
+            if !layer_ids.insert(layer.id.as_str()) {
+                return Err(MapValidationError::DuplicateLayerId {
+                    id: layer.id.clone(),
+                });
+            }
+            let mut painted: BTreeSet<Cell> = BTreeSet::new();
+            for lc in &layer.cells {
+                let cell = lc.cell();
+                if !self.in_bounds(cell) {
+                    return Err(MapValidationError::CellOutOfBounds { cell });
+                }
+                if !painted.insert(cell) {
+                    return Err(MapValidationError::DuplicateCell { cell });
+                }
+                let Some(&capacity) = tileset_capacity.get(lc.tileset.as_str()) else {
+                    return Err(MapValidationError::UnknownTilesetRef {
+                        layer: layer.id.clone(),
+                        cell,
+                        tileset: lc.tileset.clone(),
+                    });
+                };
+                if u64::from(lc.index) >= capacity {
+                    return Err(MapValidationError::TileIndexOutOfRange {
+                        layer: layer.id.clone(),
+                        cell,
+                        index: lc.index,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Validate the document against `catalog`, returning the resolved start room
     /// id used by [`materialize`](Self::materialize).
     fn check(&self, catalog: &ContentCatalog) -> Result<String, MapValidationError> {
@@ -415,6 +654,9 @@ impl MapDocument {
                 found: self.tile_size,
             });
         }
+
+        let tileset_capacity = self.check_tilesets()?;
+        self.check_layers(&tileset_capacity)?;
 
         // Terrain layer: every cell in bounds, palette-known, and unique. Store the
         // resolved (name, passable) so the room loop needs no second palette lookup
@@ -657,8 +899,8 @@ fn check_refs(
 #[cfg(test)]
 mod tests {
     use super::{
-        Cell, ContentCatalog, MapDocument, MapValidationError, RefKind, RoomCell, TerrainCell,
-        TerrainDef, SUPPORTED_TILE_SIZES,
+        Cell, ContentCatalog, Layer, LayerCell, LayerKind, MapDocument, MapValidationError,
+        RefKind, RoomCell, TerrainCell, TerrainDef, TileMeta, Tileset, SUPPORTED_TILE_SIZES,
     };
     use oathstar_core::{
         Engine, Entity, EntityKind, Item, RegionDefinition, SubregionDefinition,
@@ -767,6 +1009,8 @@ mod tests {
             subregions: BTreeMap::new(),
             rooms: vec![room(0, 0, 0, "start")],
             spawn: Some(Cell { x: 0, y: 0, z: 0 }),
+            tilesets: Vec::new(),
+            layers: Vec::new(),
         }
     }
 
@@ -1348,6 +1592,310 @@ mod tests {
         assert!(world.entities.contains_key("used"));
         assert!(!world.entities.contains_key("unused"));
         assert!(!world.items.contains_key("idle"));
+    }
+
+    // ---- ticket #47: tilesets + tile layers ----
+
+    fn tileset(id: &str) -> Tileset {
+        Tileset {
+            id: id.to_owned(),
+            image: format!("{id}.png"),
+            tile_size: 16,
+            columns: 2,
+            rows: 3,
+            tiles: BTreeMap::new(),
+        }
+    }
+
+    fn layer_cell(x: i32, y: i32, z: i32, tileset: &str, index: u32) -> LayerCell {
+        LayerCell {
+            x,
+            y,
+            z,
+            tileset: tileset.to_owned(),
+            index,
+        }
+    }
+
+    fn layer(id: &str, cells: Vec<LayerCell>) -> Layer {
+        Layer {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            kind: LayerKind::Tile,
+            visible: true,
+            cells,
+        }
+    }
+
+    #[test]
+    fn tileset_and_layer_validate() {
+        // RT-1: a registered tileset (with sparse metadata) + an in-range cell.
+        let mut doc = valid_doc();
+        let mut ts = tileset("ts");
+        ts.tiles.insert(
+            0,
+            TileMeta {
+                name: Some("ice".to_owned()),
+                passable: Some(true),
+                tags: vec!["cold".to_owned()],
+            },
+        );
+        doc.tilesets = vec![ts];
+        doc.layers = vec![layer("ground", vec![layer_cell(0, 0, 0, "ts", 0)])];
+        assert_eq!(doc.validate(&empty_catalog()), Ok(()));
+    }
+
+    #[test]
+    fn layer_cell_unknown_tileset_is_refused() {
+        // RT-2.
+        let mut doc = valid_doc();
+        doc.tilesets = vec![tileset("ts")];
+        doc.layers = vec![layer("ground", vec![layer_cell(0, 0, 0, "missing", 0)])];
+        assert_eq!(
+            doc.validate(&empty_catalog()),
+            Err(MapValidationError::UnknownTilesetRef {
+                layer: "ground".to_owned(),
+                cell: Cell { x: 0, y: 0, z: 0 },
+                tileset: "missing".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn layer_tile_index_boundary_is_exact() {
+        // RT-3: capacity 6 (the helper tileset is 2x3 — product != sum, so this
+        // also kills the `*` -> `+` capacity mutant; keep it non-square). index 5
+        // validates; index 6 is refused — the exact boundary also kills `>=`->`>`.
+        let mut ok = valid_doc();
+        ok.tilesets = vec![tileset("ts")];
+        ok.layers = vec![layer("g", vec![layer_cell(0, 0, 0, "ts", 5)])];
+        assert_eq!(ok.validate(&empty_catalog()), Ok(()));
+
+        let mut bad = valid_doc();
+        bad.tilesets = vec![tileset("ts")];
+        bad.layers = vec![layer("g", vec![layer_cell(0, 0, 0, "ts", 6)])];
+        assert_eq!(
+            bad.validate(&empty_catalog()),
+            Err(MapValidationError::TileIndexOutOfRange {
+                layer: "g".to_owned(),
+                cell: Cell { x: 0, y: 0, z: 0 },
+                index: 6,
+            })
+        );
+    }
+
+    #[test]
+    fn duplicate_tileset_and_layer_ids_are_refused() {
+        // RT-4: both copies have valid geometry so control reaches the dup check.
+        let mut dt = valid_doc();
+        dt.tilesets = vec![tileset("ts"), tileset("ts")];
+        assert_eq!(
+            dt.validate(&empty_catalog()),
+            Err(MapValidationError::DuplicateTilesetId {
+                id: "ts".to_owned()
+            })
+        );
+
+        let mut dl = valid_doc();
+        dl.tilesets = vec![tileset("ts")];
+        dl.layers = vec![layer("L", vec![]), layer("L", vec![])];
+        assert_eq!(
+            dl.validate(&empty_catalog()),
+            Err(MapValidationError::DuplicateLayerId { id: "L".to_owned() })
+        );
+    }
+
+    #[test]
+    fn layer_duplicate_cell_and_out_of_bounds_are_refused() {
+        // RT-5: the dup-cell case paints the same IN-BOUNDS coord twice; the
+        // out-of-bounds case reuses the shared CellOutOfBounds variant.
+        let mut dup = valid_doc();
+        dup.tilesets = vec![tileset("ts")];
+        dup.layers = vec![layer(
+            "g",
+            vec![layer_cell(1, 1, 0, "ts", 0), layer_cell(1, 1, 0, "ts", 1)],
+        )];
+        assert_eq!(
+            dup.validate(&empty_catalog()),
+            Err(MapValidationError::DuplicateCell {
+                cell: Cell { x: 1, y: 1, z: 0 }
+            })
+        );
+
+        let mut oob = valid_doc();
+        oob.tilesets = vec![tileset("ts")];
+        oob.layers = vec![layer("g", vec![layer_cell(9, 9, 0, "ts", 0)])];
+        assert_eq!(
+            oob.validate(&empty_catalog()),
+            Err(MapValidationError::CellOutOfBounds {
+                cell: Cell { x: 9, y: 9, z: 0 }
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_tileset_geometry_isolates_each_predicate() {
+        // RT-6: each tileset is bad on exactly ONE predicate (valid on the other
+        // two), so the `||` -> `&&` mutants die.
+        let bad = [
+            Tileset {
+                id: "rows".to_owned(),
+                image: "x.png".to_owned(),
+                tile_size: 16,
+                columns: 4,
+                rows: 0,
+                tiles: BTreeMap::new(),
+            },
+            Tileset {
+                id: "cols".to_owned(),
+                image: "x.png".to_owned(),
+                tile_size: 16,
+                columns: 0,
+                rows: 4,
+                tiles: BTreeMap::new(),
+            },
+            Tileset {
+                id: "size".to_owned(),
+                image: "x.png".to_owned(),
+                tile_size: 7,
+                columns: 4,
+                rows: 4,
+                tiles: BTreeMap::new(),
+            },
+        ];
+        for ts in bad {
+            let id = ts.id.clone();
+            let mut doc = valid_doc();
+            doc.tilesets = vec![ts];
+            assert_eq!(
+                doc.validate(&empty_catalog()),
+                Err(MapValidationError::UnsupportedTilesetGeometry { id })
+            );
+        }
+    }
+
+    #[test]
+    fn tileset_tile_meta_index_boundary_is_exact() {
+        // RT-7: capacity 6 (2x3). metadata index 5 validates; index 6 is refused.
+        let mut ok = valid_doc();
+        let mut ts_ok = tileset("ts");
+        ts_ok.tiles.insert(5, TileMeta::default());
+        ok.tilesets = vec![ts_ok];
+        assert_eq!(ok.validate(&empty_catalog()), Ok(()));
+
+        let mut bad = valid_doc();
+        let mut ts_bad = tileset("ts");
+        ts_bad.tiles.insert(6, TileMeta::default());
+        bad.tilesets = vec![ts_bad];
+        assert_eq!(
+            bad.validate(&empty_catalog()),
+            Err(MapValidationError::TileMetaIndexOutOfRange {
+                tileset: "ts".to_owned(),
+                index: 6,
+            })
+        );
+    }
+
+    #[test]
+    fn pre_slice_document_round_trips_without_tilesets_or_layers() {
+        // RT-8: a document authored before this slice still loads + validates and
+        // re-serializes WITHOUT the new keys (serde-additive backward-compat).
+        let json = r#"{
+            "id":"m","title":"M","tile_size":16,"width":4,"height":4,"floors":1,
+            "terrain_palette":{"floor":{"tile":"f","passable":true}},
+            "terrain":[{"x":0,"y":0,"z":0,"terrain":"floor"}],
+            "regions":{"reg":{"id":"reg","name":"Reg"}},
+            "rooms":[{"x":0,"y":0,"z":0,"id":"start","region":"reg"}],
+            "spawn":{"x":0,"y":0,"z":0}
+        }"#;
+        let doc: MapDocument = serde_json::from_str(json).expect("pre-slice doc deserializes");
+        assert!(doc.tilesets.is_empty());
+        assert!(doc.layers.is_empty());
+        assert_eq!(doc.validate(&empty_catalog()), Ok(()));
+        let value = serde_json::to_value(&doc).expect("serializes");
+        assert!(
+            value.get("tilesets").is_none(),
+            "tilesets omitted when empty"
+        );
+        assert!(value.get("layers").is_none(), "layers omitted when empty");
+    }
+
+    #[test]
+    fn layers_do_not_affect_materialization() {
+        // RT-9: layers are authoring-visual; the materialized world is identical.
+        let base = valid_doc()
+            .materialize(&empty_catalog())
+            .expect("base materializes");
+        let mut layered_doc = valid_doc();
+        layered_doc.tilesets = vec![tileset("ts")];
+        layered_doc.layers = vec![layer("g", vec![layer_cell(0, 0, 0, "ts", 0)])];
+        let layered = layered_doc
+            .materialize(&empty_catalog())
+            .expect("layered materializes");
+        // WorldDefinition is not PartialEq; its deterministic (BTreeMap) Debug
+        // form is a faithful structural-equality proxy.
+        assert_eq!(format!("{base:?}"), format!("{layered:?}"));
+    }
+
+    #[test]
+    fn new_variant_error_messages_render() {
+        // RT-10: exact Display strings for the 6 new variants (mutation pins).
+        let cell = Cell { x: 1, y: 2, z: 3 };
+        let cases = [
+            (
+                MapValidationError::DuplicateTilesetId {
+                    id: "ts".to_owned(),
+                },
+                "tileset id 'ts' is reused",
+            ),
+            (
+                MapValidationError::UnsupportedTilesetGeometry {
+                    id: "ts".to_owned(),
+                },
+                "tileset 'ts' has unsupported geometry (tile size must be one of [8, 16, 32], columns and rows must be positive)",
+            ),
+            (
+                MapValidationError::TileMetaIndexOutOfRange {
+                    tileset: "ts".to_owned(),
+                    index: 9,
+                },
+                "tileset 'ts' metadata names out-of-range tile index 9",
+            ),
+            (
+                MapValidationError::DuplicateLayerId { id: "g".to_owned() },
+                "layer id 'g' is reused",
+            ),
+            (
+                MapValidationError::UnknownTilesetRef {
+                    layer: "g".to_owned(),
+                    cell,
+                    tileset: "ts".to_owned(),
+                },
+                "layer 'g' cell (1, 2, 3) references unknown tileset 'ts'",
+            ),
+            (
+                MapValidationError::TileIndexOutOfRange {
+                    layer: "g".to_owned(),
+                    cell,
+                    index: 9,
+                },
+                "layer 'g' cell (1, 2, 3) references out-of-range tile index 9",
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn layer_visible_and_kind_default_when_omitted() {
+        // RT-11: a Layer JSON omitting `visible`/`kind` defaults to true/Tile
+        // (kills the `default_true` -> false mutant).
+        let parsed: Layer =
+            serde_json::from_str(r#"{"id":"g","name":"Ground"}"#).expect("layer deserializes");
+        assert!(parsed.visible, "visible defaults to true");
+        assert_eq!(parsed.kind, LayerKind::Tile, "kind defaults to Tile");
+        assert!(parsed.cells.is_empty());
     }
 
     // ---- mutation pins: Display / RefKind / source ----

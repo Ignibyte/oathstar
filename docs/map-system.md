@@ -274,6 +274,12 @@ Shape:
   `subregion`), `combat_enabled`, `exits` (direction → room id; `up`/`down` are
   stairs), and entity / item / fixture reference ids.
 - `spawn`: the start cell (must land on a room cell).
+- `tilesets` + `layers` (additive — slice 1 of the paint editor): a registry of
+  tile sheets (`{ id, image, tile_size, columns, rows }`, sliced into tiles with
+  optional sparse per-tile metadata) and named tile layers (each a `Vec` of
+  `{ x, y, z, tileset, index }` cells — a tile is referenced by tileset id +
+  integer index). **Authoring-visual**: validated but not materialized into the
+  runtime world yet (see `INTAKE-paint-system-tile-editor`).
 
 Two seams turn a draft into playable world data:
 
@@ -281,7 +287,9 @@ Two seams turn a draft into playable world data:
   `MapValidationError` that **names the offending cell/reference**, on: an unsupported
   tile size, an out-of-bounds or duplicate cell, unknown terrain, a room without
   passable terrain, a duplicate room id, an undeclared region/subregion, a dangling
-  exit, an unknown entity/item/fixture reference, or a missing / non-room spawn.
+  exit, an unknown entity/item/fixture reference, a missing / non-room spawn, or
+(slice 1) a duplicate tileset/layer id, unsupported tileset geometry, or a layer
+tile reference / index out of range.
 - `MapDocument::materialize(&ContentCatalog)` deterministically builds an
   `oathstar_core::WorldDefinition` (one room per room cell; entities/items pulled from
   the catalog), then runs the engine's own `WorldDefinition::validate` as a final net
