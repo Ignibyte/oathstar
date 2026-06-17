@@ -66,16 +66,20 @@ stack. Strict, no baselines, source-fix only. **17 gates**:
 Tools: `cargo install cargo-mutants cargo-audit cargo-deny cargo-machete cargo-llvm-cov`,
 `brew install gitleaks shellcheck`. Run the gate before `/commit`; fix every red at source.
 
-## The forge sidecar (knowledge)
+## The forge (knowledge)
 
-Oathstar is paired with **oathstar-forge** (`../oathstar-forge`), a knowledge +
-codegraph + doc-search MCP service registered as the `forge` server in
-`.mcp.json` (tools appear as `mcp__forge__*`). Start it with
-`../oathstar-forge/scripts/start-all.sh`.
+Oathstar uses **forge**, a knowledge + codegraph + doc-search MCP service
+registered as the `forge` server in `.mcp.json` (tools appear as `mcp__forge__*`).
+It is now a **single shared instance serving multiple projects** (HTTP MCP at
+`http://127.0.0.1:8080/mcp/forge`), reached via the **per-project bearer** in
+`.mcp.json` — that bearer is what scopes every call to Oathstar's project. It is
+centrally/owner-managed (no per-project `start-all.sh` anymore) and indexes its
+own server-side clone, so the codegraph's commit can lag your local worktree.
 
 - **Recall** before planning/coding: `knowledge-search`, `knowledge-context`
   (lessons/failures/prevention rules), `docs-search` (design docs),
-  `code-find`/`code-callers` (the codegraph over Rust + JS).
+  `code-find`/`code-callers` (the codegraph over Rust + JS) — pass `repo:"oathstar"`
+  to the `code-*` tools (their default is `example-repo` on the shared instance).
 - **Capture** at phase close: `aar-submit` (lessons), `failure-record`,
   `prevention-rule-record` / `architecture-decision-record`.
 - Tickets/sprints/bulletins are there too (`ticket-*`, `bulletin-list`).
