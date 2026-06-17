@@ -107,3 +107,19 @@ canvas#map {
 }
 #result[data-ok="true"] { color: var(--ink); border-color: #3f5a3f; }
 #result[data-ok="false"] { color: var(--danger); border-color: rgba(217, 138, 138, 0.4); }
+
+/* paint palette (ticket #48) */
+canvas#map { cursor: crosshair; }
+.palette-scroll {
+  max-height: 60vh;
+  overflow: auto;
+  background: #0c1014;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+canvas#palette {
+  display: block;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+#active-tile { color: var(--brass); }

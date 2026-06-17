@@ -7,7 +7,7 @@
 use axum::{
     body::Bytes,
     extract::State,
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Redirect, Response},
     Json,
 };
@@ -132,7 +132,13 @@ const STARTER_DOC: &str = r#"{
     { "x": 1, "y": 1, "z": 0, "id": "atrium", "region": "sketch", "exits": { "east": "hall" } },
     { "x": 3, "y": 1, "z": 0, "id": "hall", "region": "sketch", "exits": { "west": "atrium" } }
   ],
-  "spawn": { "x": 1, "y": 1, "z": 0 }
+  "spawn": { "x": 1, "y": 1, "z": 0 },
+  "tilesets": [
+    { "id": "arctic", "image": "arctic.png", "tile_size": 8, "columns": 30, "rows": 203 }
+  ],
+  "layers": [
+    { "id": "ground", "name": "Ground", "kind": "tile", "visible": true, "cells": [] }
+  ]
 }"#;
 
 /// `GET /editor` — the studio map editor canvas page (ticket #45).
@@ -151,9 +157,23 @@ pub async fn editor_page(State(studio): State<StudioState>, jar: CookieJar) -> R
     render::editor_page(STARTER_DOC).into_response()
 }
 
+/// The committed arctic tile sheet, embedded so the loopback studio serves it
+/// without a runtime asset dir (Decision 058). The editor canvas fetches it from
+/// `/tilesets/arctic.png` to draw the palette and the painted sprites.
+const ARCTIC_PNG: &[u8] = include_bytes!("../../../public/tilesets/arctic.png");
+
+/// `GET /tilesets/arctic.png` — the embedded arctic sheet, served as `image/png`.
+pub async fn arctic_sheet() -> Response {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        Bytes::from_static(ARCTIC_PNG),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{editor_page, validate, STARTER_DOC};
+    use super::{arctic_sheet, editor_page, validate, STARTER_DOC};
     use crate::StudioState;
     use axum::body::{to_bytes, Body, Bytes};
     use axum::extract::{FromRequestParts, State};
@@ -367,6 +387,24 @@ mod tests {
         assert!(html.contains(r#"id="result""#));
         assert!(html.contains(r#"<a href="/">"#));
         assert!(html.contains("Sketch Map")); // the embedded starter doc title
+    }
+
+    #[tokio::test]
+    async fn serves_the_arctic_sheet() {
+        // ticket #48: the studio serves the embedded sheet so the editor palette
+        // and painted sprites actually render (the studio has no runtime asset dir).
+        let res = arctic_sheet().await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get(header::CONTENT_TYPE)
+                .expect("content-type present"),
+            "image/png"
+        );
+        let body = to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        assert!(!body.is_empty(), "the sheet is served");
     }
 
     #[tokio::test]

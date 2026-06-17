@@ -1,0 +1,13 @@
+{
+  "name": "arctic",
+  "tileSize": 8,
+  "columns": 30,
+  "rows": 203,
+  "image": "arctic.png",
+  "tiles": [
+    { "name": "shadow_void", "x": 0, "y": 0 },
+    { "name": "stone_floor", "x": 8, "y": 0 },
+    { "name": "wall_face", "x": 16, "y": 0 },
+    { "name": "spawn_marker", "x": 24, "y": 0 }
+  ]
+}

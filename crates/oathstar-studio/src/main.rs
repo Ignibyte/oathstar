@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/logout", post(handlers::logout))
         .route("/editor", get(editor::editor_page))
         .route("/editor/maps/validate", post(editor::validate))
+        .route("/tilesets/arctic.png", get(editor::arctic_sheet))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(config.addr).await?;

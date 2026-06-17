@@ -13,6 +13,10 @@ import {
   editorCanvasSize,
   editorAriaLabel,
   formatValidateResult,
+  tileIndexToSourceRect,
+  canvasPointToCell,
+  paletteIndexAtPoint,
+  paintCell,
 } from "../crates/oathstar-studio/static/editor-canvas.js";
 
 /** A small MapDocument with sane defaults; override fields per test. */
@@ -176,4 +180,115 @@ test("formatValidateResult: ok:true summary (singular + plural) and the message/
   assert.equal(formatValidateResult(undefined).ok, false);
   // a non-strict ok (e.g. the string "true") is treated as a failure.
   assert.equal(formatValidateResult({ ok: "true" }).ok, false);
+});
+
+// ---- ticket #48: paint helpers ----
+
+test("tileIndexToSourceRect: row-major source rect on a 30-wide 8px sheet", () => {
+  assert.deepEqual(tileIndexToSourceRect(0, 30, 8), { sx: 0, sy: 0, size: 8 });
+  assert.deepEqual(tileIndexToSourceRect(29, 30, 8), { sx: 232, sy: 0, size: 8 });
+  assert.deepEqual(tileIndexToSourceRect(30, 30, 8), { sx: 0, sy: 8, size: 8 }); // wraps to row 1
+  assert.deepEqual(tileIndexToSourceRect(31, 30, 8), { sx: 8, sy: 8, size: 8 });
+});
+
+test("canvasPointToCell: floor inside the grid; null outside and at the far edges", () => {
+  assert.equal(canvasPointToCell(-1, 5, 10, 3, 2), null);
+  assert.equal(canvasPointToCell(5, -1, 10, 3, 2), null);
+  assert.deepEqual(canvasPointToCell(5, 5, 10, 3, 2), { x: 0, y: 0 });
+  assert.deepEqual(canvasPointToCell(25, 15, 10, 3, 2), { x: 2, y: 1 });
+  assert.equal(canvasPointToCell(30, 5, 10, 3, 2), null, "px == width*tile is outside");
+  assert.equal(canvasPointToCell(5, 20, 10, 3, 2), null, "py == height*tile is outside");
+  assert.deepEqual(canvasPointToCell(29, 19, 10, 3, 2), { x: 2, y: 1 }, "last pixel -> last cell");
+});
+
+test("paletteIndexAtPoint: row-major index; null past the columns or the tile count", () => {
+  // columns 4, tileSize 8, scale 2 -> 16px palette cells; 10 tiles (partial last row).
+  assert.equal(paletteIndexAtPoint(0, 0, 4, 8, 2, 10), 0);
+  assert.equal(paletteIndexAtPoint(20, 0, 4, 8, 2, 10), 1);
+  assert.equal(paletteIndexAtPoint(0, 20, 4, 8, 2, 10), 4);
+  assert.equal(paletteIndexAtPoint(40, 20, 4, 8, 2, 10), 6);
+  assert.equal(paletteIndexAtPoint(64, 0, 4, 8, 2, 10), null, "col 4 >= columns");
+  assert.equal(paletteIndexAtPoint(40, 32, 4, 8, 2, 10), null, "index 10 >= tileCount");
+  assert.equal(paletteIndexAtPoint(-1, 0, 4, 8, 2, 10), null);
+});
+
+test("paintCell: inserts, replaces in place, and never mutates the input", () => {
+  const d = {
+    width: 4,
+    height: 4,
+    floors: 1,
+    layers: [{ id: "ground", name: "Ground", kind: "tile", visible: true, cells: [] }],
+  };
+  const snapshot = JSON.stringify(d);
+
+  const painted = paintCell(d, "ground", { x: 1, y: 2, z: 0 }, { tileset: "arctic", index: 5 });
+  assert.equal(JSON.stringify(d), snapshot, "input doc is not mutated");
+  assert.deepEqual(painted.layers[0].cells, [{ x: 1, y: 2, z: 0, tileset: "arctic", index: 5 }]);
+
+  const repainted = paintCell(painted, "ground", { x: 1, y: 2, z: 0 }, { tileset: "arctic", index: 9 });
+  assert.deepEqual(
+    repainted.layers[0].cells,
+    [{ x: 1, y: 2, z: 0, tileset: "arctic", index: 9 }],
+    "same coordinate is replaced, not duplicated",
+  );
+
+  const two = paintCell(repainted, "ground", { x: 2, y: 2, z: 0 }, { tileset: "arctic", index: 1 });
+  assert.equal(two.layers[0].cells.length, 2, "a new coordinate appends");
+
+  const noop = paintCell(d, "missing", { x: 0, y: 0, z: 0 }, { tileset: "arctic", index: 0 });
+  assert.deepEqual(noop.layers[0].cells, [], "a missing layer is a no-op");
+});
+
+test("paintCell: a layer without a cells array gains the painted cell", () => {
+  const d = { layers: [{ id: "ground" }] };
+  const painted = paintCell(d, "ground", { x: 0, y: 0, z: 0 }, { tileset: "arctic", index: 3 });
+  assert.deepEqual(painted.layers[0].cells, [{ x: 0, y: 0, z: 0, tileset: "arctic", index: 3 }]);
+});
+
+test("editorDrawPlan: ops gain sprites[]; painted layer cells become sprite ops (z + tileset filtered)", () => {
+  const base = doc({ width: 3, height: 2 });
+  for (const op of editorDrawPlan(base, { z: 0, tilePixels: 10 }).ops) {
+    assert.deepEqual(op.sprites, [], "no tilesets/layers -> empty sprites");
+  }
+
+  const withPaint = doc({
+    width: 3,
+    height: 2,
+    tilesets: [{ id: "arctic", image: "arctic.png", tile_size: 8, columns: 30, rows: 203 }],
+    layers: [
+      {
+        id: "ground",
+        name: "Ground",
+        kind: "tile",
+        visible: true,
+        cells: [
+          { x: 1, y: 0, z: 0, tileset: "arctic", index: 31 },
+          { x: 2, y: 1, z: 1, tileset: "arctic", index: 0 }, // other z -> excluded
+          { x: 0, y: 0, z: 0, tileset: "ghost", index: 0 }, // unknown tileset -> skipped
+        ],
+      },
+    ],
+  });
+  const plan = editorDrawPlan(withPaint, { z: 0, tilePixels: 10 });
+  const at = (x, y) => plan.ops.find((o) => o.x === x * 10 && o.y === y * 10);
+  assert.deepEqual(at(1, 0).sprites, [{ sx: 8, sy: 8, sSize: 8, tileset: "arctic" }]);
+  assert.deepEqual(at(0, 0).sprites, [], "unknown tileset skipped");
+  assert.deepEqual(at(2, 1).sprites, [], "other-z cell excluded");
+});
+
+test("editorDrawPlan: overlapping layers stack bottom-first in the sprite list", () => {
+  const d = doc({
+    width: 2,
+    height: 1,
+    tilesets: [{ id: "arctic", image: "arctic.png", tile_size: 8, columns: 30, rows: 203 }],
+    layers: [
+      { id: "a", name: "A", kind: "tile", visible: true, cells: [{ x: 0, y: 0, z: 0, tileset: "arctic", index: 0 }] },
+      { id: "b", name: "B", kind: "tile", visible: true, cells: [{ x: 0, y: 0, z: 0, tileset: "arctic", index: 1 }] },
+    ],
+  });
+  const plan = editorDrawPlan(d, { z: 0, tilePixels: 10 });
+  assert.deepEqual(plan.ops[0].sprites, [
+    { sx: 0, sy: 0, sSize: 8, tileset: "arctic" },
+    { sx: 8, sy: 0, sSize: 8, tileset: "arctic" },
+  ]);
 });

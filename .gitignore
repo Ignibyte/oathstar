@@ -15,3 +15,8 @@ mutants.out.old/
 
 # local save slots (ticket #28) — player data, never source
 saves/
+
+# raw art packs (original/purchased tilesets + extracted working trees). The
+# committed, sliced tile sheets live under public/tilesets/; raw_assets/ is
+# scratch, never source.
+raw_assets/

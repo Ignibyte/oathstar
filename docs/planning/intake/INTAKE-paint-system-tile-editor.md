@@ -35,9 +35,9 @@ generalizes them.
 - **S1 (ticket #47, promoted):** document-model foundation — a tileset registry
   + multiple tile layers + validation; additive + serde-additive.
   Authoring-visual (validated, not yet materialized into the runtime world).
-- **S2:** render sprites + stacked layers on the editor canvas (extend
-  `editor-canvas.js` `editorDrawPlan`; load the sheet image).
-- **S3:** tileset palette panel + click/drag paint the active layer + erase.
+- **S2 + S3 (ticket #48, shipped):** render arctic sprites + stacked layers
+  on the editor canvas, a tileset palette panel, tile selection, and click/drag
+  paint of the active layer — the visible paint loop.
 - **S4:** save/load persistence (studio save endpoint + `oathstar-storage`).
 - **S5:** per-tile / per-layer / per-room metadata property panels.
 - **Later:** layers materialize into the runtime map (the per-room-sprites

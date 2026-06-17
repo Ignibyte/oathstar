@@ -318,5 +318,21 @@ pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model
 (`static/editor-canvas.js`, `node --test`-covered) plus a thin canvas/`fetch`
 glue kept as a server-side string — **mirroring** the #16 renderer (Decision
 050), not reusing it (the authoring document shape differs from the runtime
-snapshot). v1 is render + validate; tile-palette paint/erase (intake D-paint),
-the room inspector (E), and publish (F) are later slices.
+snapshot).
+
+**Paintable (ticket #48).** The `/editor` page now carries a **tileset palette**
+and a click/drag **paint loop**. The starter document registers the `arctic`
+tileset (8px, 30×203, embedded sheet) and an empty `ground` layer; the page
+serves the sheet itself at `GET /tilesets/arctic.png` (embedded via
+`include_bytes!` — the same no-runtime-asset-dir pattern as the studio's
+embedded CSS/JS since #45). The palette draws the
+sheet (a scrollable strip, not thousands of DOM nodes); clicking it selects an
+active `(tileset, index)`; clicking/dragging the map paints that tile onto the
+active layer's cell and repaints. The pure model gained `tileIndexToSourceRect`,
+`canvasPointToCell`, `paletteIndexAtPoint`, and an immutable `paintCell`, and
+`editorDrawPlan` now emits a `sprites` op per painted layer cell (blitted under
+the room/spawn overlay, `imageSmoothingEnabled=false`); the DOM/canvas/mouse/
+image-load glue stays the smoke-/review-verified seam. v1 paints one active
+layer with one tileset; the room inspector (E), per-tile/layer metadata (S5),
+undo/redo, multi-layer UI, save/load (S4), and runtime materialization (#38) are
+later slices.

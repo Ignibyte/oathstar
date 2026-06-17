@@ -62,9 +62,14 @@ pub fn dashboard_page(principal: &Principal) -> Html<String> {
 /// `<script type="module">`). It calls the module's exported pure functions and
 /// is verified by browser smoke, not `node --test` (it is never imported).
 const EDITOR_GLUE: &str = r#"
-const doc = JSON.parse(document.getElementById("map-doc").textContent);
+let doc = JSON.parse(document.getElementById("map-doc").textContent);
 const canvas = document.getElementById("map");
+const palette = document.getElementById("palette");
 const TILE = 24;
+const PALETTE_SCALE = 2;
+let active = null;
+const sheets = {};
+
 const size = editorCanvasSize(doc, { tilePixels: TILE, devicePixelRatio: window.devicePixelRatio });
 canvas.width = size.backingWidth;
 canvas.height = size.backingHeight;
@@ -73,19 +78,77 @@ canvas.style.height = size.cssHeight + "px";
 canvas.setAttribute("aria-label", editorAriaLabel(doc));
 const ctx = canvas.getContext("2d");
 ctx.scale(size.dpr, size.dpr);
+ctx.imageSmoothingEnabled = false;
 ctx.font = "14px ui-monospace, monospace";
 ctx.textBaseline = "middle";
 ctx.textAlign = "center";
-for (const op of editorDrawPlan(doc, { z: 0, tilePixels: TILE }).ops) {
-  ctx.fillStyle = op.fill;
-  ctx.fillRect(op.x, op.y, op.size, op.size);
-  ctx.strokeStyle = op.stroke;
-  ctx.strokeRect(op.x + 0.5, op.y + 0.5, op.size - 1, op.size - 1);
-  if (op.glyph) {
-    ctx.fillStyle = op.textColor;
-    ctx.fillText(op.glyph, op.x + op.size / 2, op.y + op.size / 2);
+
+function redraw() {
+  ctx.clearRect(0, 0, size.cssWidth, size.cssHeight);
+  for (const op of editorDrawPlan(doc, { z: 0, tilePixels: TILE }).ops) {
+    if (op.sprites.length) {
+      for (const s of op.sprites) {
+        const img = sheets[s.tileset];
+        if (img) {
+          ctx.drawImage(img, s.sx, s.sy, s.sSize, s.sSize, op.x, op.y, op.size, op.size);
+        }
+      }
+    } else {
+      ctx.fillStyle = op.fill;
+      ctx.fillRect(op.x, op.y, op.size, op.size);
+    }
+    ctx.strokeStyle = op.stroke;
+    ctx.strokeRect(op.x + 0.5, op.y + 0.5, op.size - 1, op.size - 1);
+    if (op.glyph) {
+      ctx.fillStyle = op.textColor;
+      ctx.fillText(op.glyph, op.x + op.size / 2, op.y + op.size / 2);
+    }
   }
 }
+
+for (const ts of (doc.tilesets || [])) {
+  const img = new Image();
+  img.onload = () => {
+    sheets[ts.id] = img;
+    redraw();
+    if (palette && doc.tilesets[0] && ts.id === doc.tilesets[0].id) {
+      palette.width = ts.columns * ts.tile_size * PALETTE_SCALE;
+      palette.height = ts.rows * ts.tile_size * PALETTE_SCALE;
+      const pctx = palette.getContext("2d");
+      pctx.imageSmoothingEnabled = false;
+      pctx.drawImage(img, 0, 0, palette.width, palette.height);
+    }
+  };
+  img.src = "/tilesets/" + ts.image;
+}
+redraw();
+
+if (palette) {
+  palette.addEventListener("click", (e) => {
+    const ts = doc.tilesets[0];
+    if (!ts) { return; }
+    const rect = palette.getBoundingClientRect();
+    const index = paletteIndexAtPoint(e.clientX - rect.left, e.clientY - rect.top, ts.columns, ts.tile_size, PALETTE_SCALE, ts.columns * ts.rows);
+    if (index !== null) {
+      active = { tileset: ts.id, index: index };
+      const ind = document.getElementById("active-tile");
+      if (ind) { ind.textContent = "Active tile: #" + index; }
+    }
+  });
+}
+
+function paintAt(e) {
+  if (!active) { return; }
+  const rect = canvas.getBoundingClientRect();
+  const cell = canvasPointToCell(e.clientX - rect.left, e.clientY - rect.top, TILE, doc.width, doc.height);
+  if (cell) {
+    doc = paintCell(doc, "ground", cell, active);
+    redraw();
+  }
+}
+canvas.addEventListener("mousedown", paintAt);
+canvas.addEventListener("mousemove", (e) => { if (e.buttons === 1) { paintAt(e); } });
+
 const result = document.getElementById("result");
 document.getElementById("validate").addEventListener("click", async () => {
   result.textContent = "Validating…";
@@ -130,8 +193,13 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
   <main class="editor-main">
     <section class="panel canvas-panel">
       <h2>Map editor</h2>
-      <p class="hint">A starter map. Press Validate to check it against the server.</p>
+      <p class="hint">Pick a tile, then click or drag on the map to paint. Validate checks it.</p>
       <canvas id="map" width="0" height="0"></canvas>
+    </section>
+    <section class="panel palette-panel">
+      <h2>Tiles</h2>
+      <p class="hint" id="active-tile">No tile selected</p>
+      <div class="palette-scroll"><canvas id="palette" width="0" height="0"></canvas></div>
     </section>
     <section class="panel controls">
       <button id="validate" type="button">Validate</button>
@@ -203,5 +271,13 @@ mod tests {
         assert!(html.contains("editorDrawPlan("));
         assert!(html.contains("editorCanvasSize("));
         assert!(html.contains(r#"fetch("/editor/maps/validate""#));
+        // ticket #48: the palette + paint wiring (pins the format! body against
+        // a blank-the-page / drop-a-call mutant).
+        assert!(html.contains(r#"id="palette""#));
+        assert!(html.contains("/tilesets/"));
+        assert!(html.contains("paletteIndexAtPoint("));
+        assert!(html.contains("canvasPointToCell("));
+        assert!(html.contains("paintCell("));
+        assert!(html.contains("tileIndexToSourceRect("));
     }
 }

@@ -74,6 +74,8 @@ export function editorCellKind(doc, x, y, z) {
  */
 export function editorDrawPlan(doc, { z = 0, tilePixels }) {
   const tile = tilePixels;
+  const tilesets = tilesetsById(doc);
+  const spritesByCell = layerSpritesByCell(doc, z, tilesets);
   const ops = [];
   for (let y = 0; y < doc.height; y += 1) {
     for (let x = 0; x < doc.width; x += 1) {
@@ -89,10 +91,58 @@ export function editorDrawPlan(doc, { z = 0, tilePixels }) {
         stroke: palette.stroke,
         textColor: palette.text,
         glyph: room ? room.glyph || "." : null,
+        // Painted layer tiles at this cell, bottom layer first (ticket #48); the
+        // seam blits these beneath the stroke/glyph, falling back to `fill` when
+        // the cell carries no sprite.
+        sprites: spritesByCell.get(`${x},${y}`) || [],
       });
     }
   }
   return { width: doc.width * tile, height: doc.height * tile, tile, ops };
+}
+
+/**
+ * Index the document's tileset registry by id (ticket #47 model). Pure.
+ *
+ * @param {object} doc a MapDocument
+ * @returns {Map<string, object>}
+ */
+function tilesetsById(doc) {
+  const map = new Map();
+  for (const ts of doc.tilesets || []) {
+    map.set(ts.id, ts);
+  }
+  return map;
+}
+
+/**
+ * Group the painted layer cells of plane `z` by `"x,y"` into their sprite source
+ * rects, bottom layer first. A cell whose tileset is not registered is skipped.
+ *
+ * @param {object} doc a MapDocument
+ * @param {number} z floor / z-plane
+ * @param {Map<string, object>} tilesets from {@link tilesetsById}
+ * @returns {Map<string, object[]>}
+ */
+function layerSpritesByCell(doc, z, tilesets) {
+  const byCell = new Map();
+  for (const layer of doc.layers || []) {
+    for (const cell of layer.cells || []) {
+      if (cell.z !== z) {
+        continue;
+      }
+      const tileset = tilesets.get(cell.tileset);
+      if (!tileset) {
+        continue;
+      }
+      const rect = tileIndexToSourceRect(cell.index, tileset.columns, tileset.tile_size);
+      const key = `${cell.x},${cell.y}`;
+      const list = byCell.get(key) || [];
+      list.push({ sx: rect.sx, sy: rect.sy, sSize: rect.size, tileset: cell.tileset });
+      byCell.set(key, list);
+    }
+  }
+  return byCell;
 }
 
 /**
@@ -162,4 +212,104 @@ export function formatValidateResult(resp) {
     headline: "Invalid map",
     detail: (resp && resp.message) || "validation failed",
   };
+}
+
+// ---- ticket #48: paint helpers (palette / point math / mutation) ----
+
+/**
+ * The source pixel rect of a tile `index` on its sheet — a `columns`-wide grid
+ * of `tileSize` tiles. `size` is the source tile edge. Pure.
+ *
+ * @param {number} index 0-based tile index
+ * @param {number} columns sheet width in tiles
+ * @param {number} tileSize source tile edge (px)
+ * @returns {{sx: number, sy: number, size: number}}
+ */
+export function tileIndexToSourceRect(index, columns, tileSize) {
+  return {
+    sx: (index % columns) * tileSize,
+    sy: Math.floor(index / columns) * tileSize,
+    size: tileSize,
+  };
+}
+
+/**
+ * The grid cell under a canvas point (CSS px), or null when the point lies
+ * outside the `width` x `height` grid. Pure.
+ *
+ * @param {number} px canvas-relative x (CSS px)
+ * @param {number} py canvas-relative y (CSS px)
+ * @param {number} tilePixels rendered cell edge (CSS px)
+ * @param {number} width grid width in cells
+ * @param {number} height grid height in cells
+ * @returns {{x: number, y: number} | null}
+ */
+export function canvasPointToCell(px, py, tilePixels, width, height) {
+  if (px < 0 || py < 0) {
+    return null;
+  }
+  const x = Math.floor(px / tilePixels);
+  const y = Math.floor(py / tilePixels);
+  if (x >= width || y >= height) {
+    return null;
+  }
+  return { x, y };
+}
+
+/**
+ * The palette tile index under a point — the palette draws the sheet as a
+ * `columns`-wide grid of `tileSize * scale` cells — or null outside the tiles.
+ * Pure.
+ *
+ * @param {number} px palette-relative x (CSS px)
+ * @param {number} py palette-relative y (CSS px)
+ * @param {number} columns sheet width in tiles
+ * @param {number} tileSize source tile edge (px)
+ * @param {number} scale palette zoom factor
+ * @param {number} tileCount total tiles on the sheet
+ * @returns {number | null}
+ */
+export function paletteIndexAtPoint(px, py, columns, tileSize, scale, tileCount) {
+  if (px < 0 || py < 0) {
+    return null;
+  }
+  const cell = tileSize * scale;
+  const col = Math.floor(px / cell);
+  if (col >= columns) {
+    return null;
+  }
+  const index = Math.floor(py / cell) * columns + col;
+  return index < tileCount ? index : null;
+}
+
+/**
+ * A copy of `doc` with `tileRef` painted onto layer `layerId` at `cell` — any
+ * existing tile at that coordinate on that layer is replaced (one tile per cell
+ * per layer). A missing layer leaves the document unchanged. Pure — `doc` is not
+ * mutated.
+ *
+ * @param {object} doc a MapDocument
+ * @param {string} layerId the target layer's id
+ * @param {{x: number, y: number, z: number}} cell the painted coordinate
+ * @param {{tileset: string, index: number}} tileRef the tile to place
+ * @returns {object} a new MapDocument
+ */
+export function paintCell(doc, layerId, cell, tileRef) {
+  const layers = (doc.layers || []).map((layer) => {
+    if (layer.id !== layerId) {
+      return layer;
+    }
+    const cells = (layer.cells || []).filter(
+      (c) => !(c.x === cell.x && c.y === cell.y && c.z === cell.z),
+    );
+    cells.push({
+      x: cell.x,
+      y: cell.y,
+      z: cell.z,
+      tileset: tileRef.tileset,
+      index: tileRef.index,
+    });
+    return { ...layer, cells };
+  });
+  return { ...doc, layers };
 }
