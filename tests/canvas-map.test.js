@@ -212,16 +212,16 @@ test("no game-engine dependency is declared (REQ-007)", () => {
 
 import { validateTileset, KIND_TILE_NAMES, tileRect } from "../src/client/tileset.js";
 
-function committedTileset() {
+function authorTileset() {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   const raw = JSON.parse(
     readFileSync(
-      join(root, "public", "tilesets", "oathstar-starter-32x32", "oathstar-starter-32x32.json"),
+      join(root, "tests", "fixtures", "tilesets", "sample-8px.json"),
       "utf8",
     ),
   );
   const result = validateTileset(raw);
-  assert.equal(result.ok, true, "the committed tileset validates");
+  assert.equal(result.ok, true, "the sample author tileset validates");
   return result.tileset;
 }
 
@@ -252,8 +252,8 @@ test("toDrawPlan without a tileset keeps the flat-color contract (REQ-003)", () 
 
 // T6 (REQ-002/003): with the real tileset every op carries its kind's sheet
 // rect — the exact field the seam blits — while the fallback fields remain.
-test("toDrawPlan with the committed tileset resolves a sprite rect per kind (REQ-002)", () => {
-  const tileset = committedTileset();
+test("toDrawPlan with the sample tileset resolves a sprite rect per kind (REQ-002)", () => {
+  const tileset = authorTileset();
   const model = {
     mode: "glyph",
     tilePixels: 32,
@@ -274,7 +274,7 @@ test("toDrawPlan with the committed tileset resolves a sprite rect per kind (REQ
   assert.deepEqual(blocked.sprite, tileRect(tileset, KIND_TILE_NAMES.blocked));
   assert.deepEqual(discovered.sprite, tileRect(tileset, KIND_TILE_NAMES.discovered));
   assert.deepEqual(empty.sprite, tileRect(tileset, KIND_TILE_NAMES.empty));
-  assert.equal(current.sprite.sSize, 32, "source tiles are the sheet's 32px");
+  assert.equal(current.sprite.sSize, 8, "source tiles are the sheet's 8px");
   assert.equal(current.size, 32, "dest tiles stay the configured tilePixels");
   // The fallback fields survive (the seam uses them until the image loads).
   assert.equal(current.fill, MAP_PALETTE.current.fill);
@@ -286,7 +286,7 @@ test("toDrawPlan with the committed tileset resolves a sprite rect per kind (REQ
 test("tileset rendering leaves glyph, text, and aria behavior unchanged (REQ-006)", () => {
   const model = toMapModel(stackedSnapshot());
   const flat = toDrawPlan(model);
-  const tiled = toDrawPlan(model, committedTileset());
+  const tiled = toDrawPlan(model, authorTileset());
   assert.equal(flat.glyphFontPx, tiled.glyphFontPx);
   assert.equal(flat.ops.length, tiled.ops.length);
   for (let i = 0; i < flat.ops.length; i += 1) {
@@ -365,7 +365,7 @@ test("marker flags leave tile, sprite, glyph, and text untouched (REQ-004)", () 
     ...base,
     cells: [cell({ x: 0, y: 0, discovered: true, hasHostiles: true, hasItems: true })],
   };
-  const tileset = committedTileset();
+  const tileset = authorTileset();
   const plain = toDrawPlan(base, tileset);
   const marked = toDrawPlan(flagged, tileset);
   const { markers: _p, ...plainRest } = plain.ops[0];

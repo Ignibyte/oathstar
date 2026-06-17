@@ -1,10 +1,10 @@
 //! The Oathstar-native map document model.
 //!
-//! A renderer-agnostic authoring document on a 16×16-pixel source grid that the
+//! A renderer-agnostic authoring document on a source-tile grid that the
 //! studio editor writes and the server [`validate`](MapDocument::validate)s and
 //! [`materialize`](MapDocument::materialize)s into engine-compatible
 //! [`WorldDefinition`] data. The document is the authoring artifact, not the
-//! runtime map snapshot; tile geometry is expressed in 16×16 source units,
+//! runtime map snapshot; tile geometry is expressed in source-tile units,
 //! independent of any client render scale.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,8 +16,11 @@ use oathstar_core::{
 };
 use serde::{Deserialize, Serialize};
 
-/// The only source tile size this version supports — 16×16-pixel tiles.
-pub const SUPPORTED_TILE_SIZE: u32 = 16;
+/// The source tile sizes (in pixels) a map document may declare.
+///
+/// The author's tile sheet is drawn at one of these — the art unit only; how
+/// large a cell renders is a separate client knob (Decision 059).
+pub const SUPPORTED_TILE_SIZES: [u32; 3] = [8, 16, 32];
 
 /// Title given to an ordinary room cell that does not override it.
 const DEFAULT_ROOM_TITLE: &str = "Unnamed Room";
@@ -26,7 +29,7 @@ const DEFAULT_ROOM_DESCRIPTION: &str = "An unremarkable area.";
 /// Map glyph used when a room cell does not specify one.
 const DEFAULT_ROOM_GLYPH: char = '.';
 
-/// A tile-grid coordinate, in 16×16 source-tile units (never pixels).
+/// A tile-grid coordinate, in source-tile units (never pixels).
 ///
 /// Derives a total order so coordinate-keyed maps iterate deterministically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -144,7 +147,7 @@ pub struct MapDocument {
     pub id: String,
     /// Human-facing map title.
     pub title: String,
-    /// Source tile size in pixels — must equal [`SUPPORTED_TILE_SIZE`].
+    /// Source tile size in pixels — must be one of [`SUPPORTED_TILE_SIZES`].
     pub tile_size: u32,
     /// Grid width in tiles.
     pub width: u32,
@@ -215,7 +218,7 @@ impl fmt::Display for RefKind {
 /// the author at it. Mirrors the engine's hand-rolled error style.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum MapValidationError {
-    /// `tile_size` is not [`SUPPORTED_TILE_SIZE`].
+    /// `tile_size` is not one of [`SUPPORTED_TILE_SIZES`].
     UnsupportedTileSize {
         /// The unsupported size found.
         found: u32,
@@ -313,7 +316,7 @@ impl fmt::Display for MapValidationError {
             Self::UnsupportedTileSize { found } => {
                 write!(
                     f,
-                    "tile size {found} is unsupported (expected {SUPPORTED_TILE_SIZE})"
+                    "tile size {found} is unsupported (expected one of {SUPPORTED_TILE_SIZES:?})"
                 )
             }
             Self::CellOutOfBounds { cell } => write!(f, "cell {cell} is out of bounds"),
@@ -407,7 +410,7 @@ impl MapDocument {
     /// Validate the document against `catalog`, returning the resolved start room
     /// id used by [`materialize`](Self::materialize).
     fn check(&self, catalog: &ContentCatalog) -> Result<String, MapValidationError> {
-        if self.tile_size != SUPPORTED_TILE_SIZE {
+        if !SUPPORTED_TILE_SIZES.contains(&self.tile_size) {
             return Err(MapValidationError::UnsupportedTileSize {
                 found: self.tile_size,
             });
@@ -655,7 +658,7 @@ fn check_refs(
 mod tests {
     use super::{
         Cell, ContentCatalog, MapDocument, MapValidationError, RefKind, RoomCell, TerrainCell,
-        TerrainDef, SUPPORTED_TILE_SIZE,
+        TerrainDef, SUPPORTED_TILE_SIZES,
     };
     use oathstar_core::{
         Engine, Entity, EntityKind, Item, RegionDefinition, SubregionDefinition,
@@ -817,26 +820,37 @@ mod tests {
         assert!(world.items.contains_key("key"));
     }
 
-    // ---- REQ-002: 16x16 source unit ----
+    // ---- REQ-002: supported source tile sizes ----
 
     #[test]
-    fn supported_tile_size_is_sixteen() {
-        assert_eq!(SUPPORTED_TILE_SIZE, 16);
+    fn supported_tile_sizes_are_8_16_32() {
+        assert_eq!(SUPPORTED_TILE_SIZES, [8, 16, 32]);
     }
 
     #[test]
-    fn tile_size_sixteen_validates() {
-        assert_eq!(valid_doc().validate(&empty_catalog()), Ok(()));
+    fn every_supported_tile_size_validates() {
+        for size in SUPPORTED_TILE_SIZES {
+            let mut doc = valid_doc();
+            doc.tile_size = size;
+            assert_eq!(
+                doc.validate(&empty_catalog()),
+                Ok(()),
+                "tile_size {size} should validate"
+            );
+        }
     }
 
     #[test]
-    fn wrong_tile_size_is_refused() {
-        let mut doc = valid_doc();
-        doc.tile_size = 32;
-        assert_eq!(
-            doc.validate(&empty_catalog()),
-            Err(MapValidationError::UnsupportedTileSize { found: 32 })
-        );
+    fn unsupported_tile_sizes_are_refused() {
+        for size in [0_u32, 7, 24, 64] {
+            let mut doc = valid_doc();
+            doc.tile_size = size;
+            assert_eq!(
+                doc.validate(&empty_catalog()),
+                Err(MapValidationError::UnsupportedTileSize { found: size }),
+                "tile_size {size} should be refused"
+            );
+        }
     }
 
     // ---- REQ-003: deterministic, engine-compatible materialization ----
@@ -1279,7 +1293,7 @@ mod tests {
     fn validate_rejects_an_invalid_document() {
         // validate() (not materialize) on a bad doc must surface the error.
         let mut doc = valid_doc();
-        doc.tile_size = 8;
+        doc.tile_size = 7;
         assert!(doc.validate(&empty_catalog()).is_err());
     }
 
@@ -1355,8 +1369,8 @@ mod tests {
         let cell = Cell { x: 1, y: 2, z: 3 };
         let cases = [
             (
-                MapValidationError::UnsupportedTileSize { found: 32 },
-                "tile size 32 is unsupported (expected 16)",
+                MapValidationError::UnsupportedTileSize { found: 7 },
+                "tile size 7 is unsupported (expected one of [8, 16, 32])",
             ),
             (
                 MapValidationError::CellOutOfBounds { cell },

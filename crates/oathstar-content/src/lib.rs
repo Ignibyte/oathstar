@@ -10,7 +10,7 @@ use serde::Deserialize;
 mod map_document;
 pub use map_document::{
     Cell, ContentCatalog, MapDocument, MapValidationError, RefKind, RoomCell, TerrainCell,
-    TerrainDef, SUPPORTED_TILE_SIZE,
+    TerrainDef, SUPPORTED_TILE_SIZES,
 };
 
 const BEGINNER_MODULE: &str = include_str!("../../../modules/beginner/module.toml");

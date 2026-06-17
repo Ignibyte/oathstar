@@ -1,0 +1,13 @@
+{
+  "name": "sample-author-8px",
+  "tileSize": 8,
+  "columns": 2,
+  "rows": 2,
+  "image": "sample-author-8px.png",
+  "tiles": [
+    { "name": "shadow_void", "x": 0, "y": 0 },
+    { "name": "stone_floor", "x": 8, "y": 0 },
+    { "name": "wall_face", "x": 0, "y": 8 },
+    { "name": "spawn_marker", "x": 8, "y": 8 }
+  ]
+}

@@ -175,7 +175,7 @@ mod tests {
 
     /// A well-formed document that fails validation (unsupported tile size).
     const BAD_TILE_DOC: &str = r#"{
-        "id":"m","title":"M","tile_size":32,"width":4,"height":4,"floors":1,
+        "id":"m","title":"M","tile_size":7,"width":4,"height":4,"floors":1,
         "terrain_palette":{},"terrain":[],"regions":{},"rooms":[],"spawn":null
     }"#;
 
@@ -321,11 +321,11 @@ mod tests {
             body["message"]
                 .as_str()
                 .expect("message is a string")
-                .contains("tile size 32 is unsupported"),
+                .contains("tile size 7 is unsupported"),
             "message must name the offender: {}",
             body["message"]
         );
-        assert_eq!(body["error"]["UnsupportedTileSize"]["found"], 32);
+        assert_eq!(body["error"]["UnsupportedTileSize"]["found"], 7);
     }
 
     #[tokio::test]

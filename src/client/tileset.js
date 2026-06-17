@@ -1,14 +1,13 @@
-// Tileset metadata model (ticket #32). Pure and DOM-free: this module parses
-// and validates the generated tileset JSON (the engine-friendly twin of the
-// Tiled .tsx — see public/tilesets/*/README.md) and resolves tile names to
-// source pixel rects on the sheet. Image loading and drawImage live in the
-// browser seam (client-app.js); everything decision-bearing is testable under
-// `node --test`.
+// Tileset metadata model. Pure and DOM-free: this module parses and validates
+// an author-provided tile-sheet descriptor (see docs/tileset-contract.md) and
+// resolves tile names to source pixel rects on the sheet. Image loading and
+// drawImage live in the browser seam (client-app.js); everything
+// decision-bearing is testable under `node --test`.
 
-// Map-cell kind -> tile NAME on the sheet. Names are the generator's stable
-// contract (ids may reshuffle on regeneration; names should not), and future
-// per-tile metadata (descriptions, region affinity — see the tileset-region
-// intake doc) extends by name without touching this table's consumers.
+// Map-cell kind -> tile NAME on the sheet. Names are the author sheet's stable
+// contract (see docs/tileset-contract.md): cells resolve art by name, so a new
+// sheet under the same names is a drop-in swap. Future per-tile metadata
+// extends by name without touching this table's consumers.
 export const KIND_TILE_NAMES = Object.freeze({
   empty: "shadow_void",
   discovered: "stone_floor",

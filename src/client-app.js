@@ -37,21 +37,40 @@ const API_BASE = resolveApiBase();
 // canvas/sprite renderer can change tile size / mode without a protocol change.
 const mapRenderConfig = { ...DEFAULT_MAP_CONFIG };
 
-// Tileset state (ticket #32). Static assets, served by the page origin (vite
-// `public/`), not the game API — so no API_BASE. Tile rendering is an
-// enhancement: until BOTH the validated metadata and the sheet image are
-// ready, drawMapCanvas keeps the flat-color draw, and any failure leaves that
-// fallback in place for the session (warn once, never throw — REQ-003).
-const TILESET_DIR = "/tilesets/oathstar-starter-32x32";
-const TILESET_JSON_URL = `${TILESET_DIR}/oathstar-starter-32x32.json`;
+// Tileset state. Author tile sheets are static assets served by the page origin
+// (vite `public/`), not the game API — so no API_BASE. Tile rendering is an
+// enhancement over the flat-color fallback (the "missing-art skin"): until BOTH
+// the validated metadata and the sheet image are ready, drawMapCanvas keeps the
+// flat-color draw, and any failure leaves that fallback in place for the session
+// (warn once, never throw). See docs/tileset-contract.md for the sheet contract.
+
+// The author tile-sheet descriptor URL, or null for "no sheet yet" (the map
+// renders the flat-color fallback). Point the client at an author sheet by
+// baking VITE_OATHSTAR_TILESET to its `.json` URL; the sheet image is resolved
+// alongside it. Single source — no other code names a tileset path.
+function resolveAuthorTilesetUrl() {
+  try {
+    if (import.meta && import.meta.env && import.meta.env.VITE_OATHSTAR_TILESET) {
+      return import.meta.env.VITE_OATHSTAR_TILESET;
+    }
+  } catch (_err) {
+    // import.meta.env is absent outside a bundler — no author sheet.
+  }
+  return null;
+}
+
+const AUTHOR_TILESET_URL = resolveAuthorTilesetUrl();
 let tilesetData = null;
 let tilesetImage = null;
 let lastMapModel = null;
 
 async function loadTileset() {
+  if (!AUTHOR_TILESET_URL) {
+    return; // no author sheet yet — the map keeps the flat-color fallback
+  }
   let validated;
   try {
-    const response = await fetch(TILESET_JSON_URL);
+    const response = await fetch(AUTHOR_TILESET_URL);
     if (!response.ok) {
       console.warn(`tileset metadata unavailable (${response.status}); map keeps flat colors`);
       return;
@@ -78,7 +97,9 @@ async function loadTileset() {
   image.onerror = () => {
     console.warn("tileset sheet image failed to load; map keeps flat colors");
   };
-  image.src = `${TILESET_DIR}/${validated.tileset.image}`;
+  // The sheet image is named relative to its descriptor URL's directory.
+  const base = AUTHOR_TILESET_URL.slice(0, AUTHOR_TILESET_URL.lastIndexOf("/") + 1);
+  image.src = `${base}${validated.tileset.image}`;
 }
 
 const el = {
