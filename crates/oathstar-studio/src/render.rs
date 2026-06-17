@@ -440,4 +440,14 @@ mod tests {
         assert!(html.contains(r#"<a href="/editor">Maps</a>"#)); // Maps not active
         assert!(html.contains(r#"class="studio-nav""#));
     }
+
+    #[test]
+    fn pages_reference_the_ui_kit_assets() {
+        // ticket #50: the embedded STUDIO_CSS wires the fantasy frame + button
+        // sprites, so every authenticated page references the served /ui assets.
+        // Assert the specific url() forms (the CSS embeds them) — not a bare token.
+        let html = dashboard_page(&owner_principal()).0;
+        assert!(html.contains(r#"url("/ui/panel-frame.png")"#));
+        assert!(html.contains(r#"url("/ui/button.png")"#));
+    }
 }

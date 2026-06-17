@@ -19,6 +19,7 @@ mod editor;
 mod handlers;
 mod render;
 mod sections;
+mod ui;
 
 use config::StudioConfig;
 
@@ -55,6 +56,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/editor", get(editor::editor_page))
         .route("/editor/maps/validate", post(editor::validate))
         .route("/tilesets/arctic.png", get(editor::arctic_sheet))
+        .route("/ui/panel-frame.png", get(ui::panel_frame))
+        .route("/ui/button.png", get(ui::button))
         .route("/regions", get(sections::regions))
         .route("/items", get(sections::items))
         .route("/enemies", get(sections::enemies))

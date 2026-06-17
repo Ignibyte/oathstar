@@ -345,3 +345,10 @@ section; the other four are Editor-gated "Coming soon" stub routes (HTTP 200, no
 item/enemy/settings editors slot into, and that the fantasy UI kit (#50) re-skins
 — the first slice of the pre-tilemap studio-admin program
 (`INTAKE-studio-admin-and-world-model-program`).
+
+**Themed (ticket #50, slice 1).** The studio now wears the mini-medieval fantasy
+UI kit: a nine-slice wooden **panel frame** (`border-image` on every `.panel` +
+the nav header) and a themed gold **button**, served from `/ui/panel-frame.png`
+and `/ui/button.png` (embedded via `include_bytes!`, the same pattern as the
+arctic sheet). The crops are committed under `public/ui/`. The game-client re-skin
+and the rest of the kit (icons, portraits, bars, banners) are later #50 slices.

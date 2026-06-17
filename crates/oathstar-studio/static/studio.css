@@ -55,13 +55,6 @@ button {
 
 /* dashboard */
 body.dashboard { padding: 1.25rem; }
-.dashboard header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--line);
-}
 .dashboard main { display: grid; gap: 1rem; margin-top: 1rem; }
 .who { color: var(--muted); }
 .panel {
@@ -76,15 +69,6 @@ body.dashboard { padding: 1.25rem; }
 
 /* editor (ticket #45) */
 body.editor { padding: 1.25rem; }
-.editor header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--line);
-}
-.crumbs a { color: var(--brass); }
 .editor-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -139,8 +123,7 @@ canvas#palette {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--line);
+  padding: 0.35rem 0.7rem;
 }
 .studio-nav {
   display: flex;
@@ -162,4 +145,23 @@ canvas#palette {
 .studio-nav a[aria-current="page"] {
   color: var(--brass);
   border-bottom: 2px solid var(--brass);
+}
+
+/* fantasy UI kit theme (ticket #50) — mini-medieval frame + button sprites,
+   served from /ui/*.png, applied as nine-slice border-images over the dark base. */
+.panel,
+.studio-header {
+  border: 14px solid transparent;
+  border-image: url("/ui/panel-frame.png") 7 repeat;
+  border-radius: 0;
+  image-rendering: pixelated;
+}
+button {
+  border: 5px solid transparent;
+  border-image: url("/ui/button.png") 4 repeat;
+  border-radius: 0;
+  background-color: #c8843a;
+  color: #2a1a0a;
+  font-weight: 700;
+  image-rendering: pixelated;
 }
