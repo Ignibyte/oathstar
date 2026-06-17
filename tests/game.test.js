@@ -1,6 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createGame } from "../src/engine.js";
+import { directionAliases, directionLabels } from "../src/world.js";
+
+// ---- RT-2 (REQ-001, ticket #52): directions are cardinal-only — up/down retired ----
+
+test("direction vocabulary is cardinal-only: no up/down/u/d (#52)", () => {
+  for (const token of ["up", "down", "u", "d"]) {
+    assert.equal(
+      directionAliases[token],
+      undefined,
+      `'${token}' must not be a direction alias`
+    );
+  }
+  for (const dir of ["up", "down"]) {
+    assert.equal(
+      directionLabels[dir],
+      undefined,
+      `'${dir}' must not have a direction label`
+    );
+  }
+  assert.deepEqual(
+    Object.keys(directionLabels).sort(),
+    ["east", "north", "south", "west"],
+    "directionLabels resolves exactly the four cardinals"
+  );
+});
+
+test("'up' is not a movement direction and does not move the player (#52)", () => {
+  const game = createGame({ rng: () => 0.5 });
+  game.intro();
+  const outcome = game.submit("up");
+  assert.equal(
+    outcome.view.room.id,
+    "starfallGate",
+    "'up' is not a direction, so the player stays put"
+  );
+});
 
 test("starts at Starfall Gate and can take the lantern", () => {
   const game = createGame({ rng: () => 0.5 });

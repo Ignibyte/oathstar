@@ -8,16 +8,21 @@ actual tile grid, not freeform room rectangles.
 
 The world map should use a square grid.
 
-Supported directions:
+Supported directions (cardinal only):
 
 - North
 - South
 - East
 - West
-- Up
-- Down
 
 Avoid diagonal directions such as northwest, northeast, southwest, and southeast for the core game. Diagonals can make navigation more overwhelming and less MUD-readable.
+
+**Movement is 2D (ticket #52, amends Decision 025).** Up/down were retired:
+vertical traversal is expressed as cardinal movement plus **warps**. A warp is a
+cardinal exit whose target room lies in a different region or sub-region — the
+engine moves the player there and narrates the crossing (`"You enter <name>."`).
+The `z` coordinate is retained only for tile-**layer** visual stacking (#47/#48),
+never for movement or spatial awareness.
 
 ## Room Metadata
 
@@ -29,7 +34,7 @@ Room metadata can include:
 - Subregion
 - X coordinate
 - Y coordinate
-- Z coordinate or level
+- Z coordinate (tile-layer visuals only; not movement — ticket #52)
 - Exits
 - Passable/collision flag
 - Visibility/discovery state
@@ -52,7 +57,7 @@ passable = true
 [exits]
 north = "north_gate"
 east = "market_lane"
-up = "bell_tower"
+west = "old_road"   # a cardinal exit into another region/sub-region is a "warp"
 ```
 
 ## Rendering Direction
@@ -63,7 +68,7 @@ First version:
 - Current room marker
 - Discovered room markers
 - Region/subregion labels
-- Basic up/down indication
+- Region/sub-region transition cues (warps)
 
 Later:
 
@@ -212,7 +217,7 @@ Example payload shape:
       "exits": {
         "north": "north_gate",
         "east": "market_lane",
-        "up": "bell_tower"
+        "west": "old_road"
       }
     }
   ]
@@ -245,7 +250,7 @@ server-authoritative MUD/grid surface.
 
 - Keep navigation readable.
 - Avoid diagonal bloat.
-- Support up/down for vertical spaces.
+- Movement is 2D cardinal-only; cross-region cardinal exits ("warps") replace vertical traversal.
 - Let room metadata define exits.
 - Support passable/non-passable map cells.
 - Keep the backend renderer-agnostic.
@@ -271,8 +276,9 @@ Shape:
 - `rooms`: a `Vec` of room cells, each a stable `id` with optional
   `title` / `description` / `glyph` overrides (an *ordinary* room takes engine
   defaults; a *special* room overrides them), a required `region` (+ optional
-  `subregion`), `combat_enabled`, `exits` (direction → room id; `up`/`down` are
-  stairs), and entity / item / fixture reference ids.
+  `subregion`), `combat_enabled`, `exits` (cardinal direction → room id; an exit
+  whose target is in a different region/sub-region is a **warp**), and entity /
+  item / fixture reference ids.
 - `spawn`: the start cell (must land on a room cell).
 - `tilesets` + `layers` (additive — slice 1 of the paint editor): a registry of
   tile sheets (`{ id, image, tile_size, columns, rows }`, sliced into tiles with

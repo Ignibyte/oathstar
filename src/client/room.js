@@ -9,15 +9,14 @@
 
 export const DEFAULT_ROOM_DISPLAY_LIMIT = 160;
 
-// Pad layout order: up / north on top, west·east flanking a centre gap, then
-// south / down below — the directional pad in docs/ui-design.md "Room And Exits".
+// Pad layout order: north on top, west·east flanking a centre gap, south below —
+// the cardinal directional pad in docs/ui-design.md "Room And Exits" (up/down were
+// retired with the 2D world model, ticket #52).
 const CANONICAL_DIRECTIONS = [
-  { dir: "up", label: "U" },
   { dir: "north", label: "N" },
   { dir: "west", label: "W" },
   { dir: "east", label: "E" },
   { dir: "south", label: "S" },
-  { dir: "down", label: "D" },
 ];
 
 function capitalize(word) {
@@ -89,9 +88,9 @@ export function toRoomDisplay(snapshot, opts = {}) {
 }
 
 /**
- * Build the directional Exit Pad model: the six canonical directions in pad
+ * Build the directional Exit Pad model: the four cardinal directions in pad
  * order, each marked available iff the room has that exit. Enabled controls send
- * the same canonical command (`north`, `up`, …) the text prompt would.
+ * the same canonical command (`north`, `west`, …) the text prompt would.
  *
  * @param {object} snapshot the `/state` snapshot
  * @returns {{directions: Array, availableCount: number}}

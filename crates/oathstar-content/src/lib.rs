@@ -195,6 +195,74 @@ mod tests {
         assert!(world.rooms.contains_key("bell_eater_roost"));
     }
 
+    // RT-4 (REQ-003, ticket #52): the migrated beginner world is 2D — every room
+    // sits on the z=0 plane and no room carries an up/down exit key (the former
+    // vertical traversal is now cardinal exits + warps).
+    #[test]
+    fn beginner_world_is_two_dimensional() {
+        let world = load_beginner_world().expect("beginner module should load");
+        for (id, room) in &world.rooms {
+            assert_eq!(room.z, 0, "room '{id}' must be on the z=0 plane (2D)");
+            assert!(
+                !room.exits.contains_key("up") && !room.exits.contains_key("down"),
+                "room '{id}' must have no up/down exit (cardinal-only)"
+            );
+        }
+    }
+
+    // RT-6 (REQ-005, ticket #52): a successful load is a materialize+validate (the
+    // loader runs the core validator), and the former vertical tower climb is now a
+    // straight cardinal run, with the two warps crossing a region boundary
+    // (ashen_road -> tower_foot) and a sub-region boundary (tower_landing ->
+    // bell_eater_roost).
+    #[test]
+    fn beginner_tower_climbs_north_via_cardinal_warps() {
+        let world = load_beginner_world().expect("beginner module should load");
+        let climb = [
+            "hollowmere_square",
+            "north_gate",
+            "ashen_road",
+            "tower_foot",
+            "tower_landing",
+            "bell_eater_roost",
+        ];
+        for (from, to) in climb.iter().zip(climb.iter().skip(1)) {
+            let room = world
+                .rooms
+                .get(*from)
+                .unwrap_or_else(|| panic!("room '{from}' should exist"));
+            assert_eq!(
+                room.exits.get("north").map(String::as_str),
+                Some(*to),
+                "'{from}' should reach '{to}' going north"
+            );
+        }
+
+        let room = |id: &str| {
+            world
+                .rooms
+                .get(id)
+                .unwrap_or_else(|| panic!("room '{id}' should exist"))
+        };
+        // Region warp: ashen_road and tower_foot are in different regions.
+        assert_ne!(
+            room("ashen_road").region,
+            room("tower_foot").region,
+            "ashen_road -> tower_foot crosses a region boundary (warp)"
+        );
+        // Sub-region warp: same region, different sub-region.
+        assert_eq!(
+            room("tower_landing").region,
+            room("bell_eater_roost").region,
+            "tower_landing and bell_eater_roost share a region"
+        );
+        assert_ne!(
+            room("tower_landing").subregion,
+            room("bell_eater_roost").subregion,
+            "tower_landing -> bell_eater_roost crosses a sub-region boundary (warp)"
+        );
+    }
+
     #[test]
     fn load_rejects_duplicate_room_id() {
         let module = "id = \"m\"\nname = \"M\"\nstart_room_id = \"dup\"\n";

@@ -22,7 +22,7 @@ function sampleSnapshot(overrides = {}) {
       region: "hollowmere",
       subregion: "center",
       description: "A quiet square.",
-      exits: { north: "north_gate", up: "bell_tower" },
+      exits: { north: "north_gate", west: "bell_tower" },
       x: 0,
       y: 0,
       z: 0,
@@ -170,7 +170,7 @@ test("room.toRoomDisplay separates main/full and summarizes long text", () => {
   assert.equal(short.truncated, false);
   assert.equal(short.main, short.full);
   assert.equal(short.mediaHint, null);
-  assert.deepEqual(short.exits.map((exit) => exit.direction), ["north", "up"]);
+  assert.deepEqual(short.exits.map((exit) => exit.direction), ["north", "west"]);
   assert.equal(short.exits[0].command, "north");
 
   // long text WITH a sentence boundary before the limit → clean first sentence.
@@ -224,19 +224,19 @@ test("room.toRoomDisplay separates main/full and summarizes long text", () => {
   assert.ok(DEFAULT_ROOM_DISPLAY_LIMIT > 0);
 });
 
-// TR2 (REQ-003, REQ-004): the Exit Pad has the six canonical directions, each
+// TR2 (REQ-003, REQ-004): the Exit Pad has the four cardinal directions, each
 // available iff the room has that exit, sending the canonical command.
-test("room.toExitPad exposes six canonical directions with availability", () => {
-  const pad = toExitPad(sampleSnapshot()); // exits: north, up
+test("room.toExitPad exposes four canonical directions with availability", () => {
+  const pad = toExitPad(sampleSnapshot()); // exits: north, west
   assert.deepEqual(
     pad.directions.map((entry) => entry.dir),
-    ["up", "north", "west", "east", "south", "down"],
+    ["north", "west", "east", "south"],
   );
   const byDir = Object.fromEntries(pad.directions.map((entry) => [entry.dir, entry]));
   assert.equal(byDir.north.available, true);
-  assert.equal(byDir.up.available, true);
+  assert.equal(byDir.west.available, true);
   assert.equal(byDir.south.available, false);
-  assert.equal(byDir.west.available, false);
+  assert.equal(byDir.east.available, false);
   assert.equal(byDir.north.command, "north");
   assert.equal(pad.availableCount, 2);
 
@@ -405,10 +405,10 @@ test("map.toMapModel renders only the current room's z-plane (stacked rooms)", (
 // T9 (REQ-003/REQ-004): the Intent helper EXCLUDES movement commands (those live
 // on the Exit Pad now); it still offers contextual + non-movement vocabulary.
 // Typed movement is unaffected — it goes through the command input, not Intent.
-const MOVEMENT_COMMANDS = ["north", "south", "east", "west", "up", "down"];
+const MOVEMENT_COMMANDS = ["north", "south", "east", "west"];
 
 test("intent.suggestCommands excludes movement, keeps contextual + vocab", () => {
-  const snap = sampleSnapshot(); // room exits {north, up}
+  const snap = sampleSnapshot(); // room exits {north, west}
   const all = suggestCommands(snap, "");
 
   assert.ok(

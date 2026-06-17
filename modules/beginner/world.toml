@@ -61,7 +61,7 @@ greeting = "Mara sets down her ledger. \"Wax and wicks, oathbearer. Mind the pud
 
 [entities.dialogue.oath]
 offer = "Mara's jaw tightens. \"You hear how quiet the square is? The Bell-Eater stole the bell's clapper, and Hollowmere hasn't rung since — no call to prayer, no warning, no welcome. Someone has to swear to set it right. Will you?\" (You could now swear the oath of the Hollow Bell.)"
-sworn = "Mara nods toward the empty bell-frame. \"You've sworn it. The Bell-Eater roosts up the old tower — north, then up. Bring back our voice.\""
+sworn = "Mara nods toward the empty bell-frame. \"You've sworn it. The Bell-Eater roosts atop the old tower — north, ever north. Bring back our voice.\""
 fulfilled = "Mara almost smiles. \"The bell rang at dawn. You kept your word, oathbearer — Hollowmere won't forget it.\""
 
 [[items]]

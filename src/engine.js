@@ -119,7 +119,7 @@ export function createGame(options = {}) {
   function move(direction) {
     const room = getCurrentRoom(state);
     if (!directionAliases[direction] && !Object.values(directionAliases).includes(direction)) {
-      return [{ type: "system", text: "Choose a direction: north, south, east, west, up, or down." }];
+      return [{ type: "system", text: "Choose a direction: north, south, east, or west." }];
     }
 
     const canonical = directionAliases[direction] ?? direction;

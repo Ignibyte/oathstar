@@ -1172,7 +1172,7 @@ Revisit when:
 
 ## Decision 025: The Map Uses A Square Grid With Cardinal Directions Plus Up/Down
 
-Status: Locked
+Status: Amended (ticket #52, 2026-06-17) — up/down retired in favour of 2D cardinal movement + region warps; see the Amendment below.
 
 Date: 2026-06-05
 
@@ -1184,8 +1184,6 @@ Supported core directions:
 - South
 - East
 - West
-- Up
-- Down
 
 Diagonal directions are not part of the core navigation model.
 
@@ -1207,6 +1205,10 @@ Revisit when:
 - The minimap renderer is implemented.
 - Sprite/tile rendering becomes active work.
 - World modules need non-grid spaces.
+
+Amendment (ticket #52, 2026-06-17):
+
+Up and Down are retired from the navigation model. Movement and rooms are now 2D (cardinal N/S/E/W only). Vertical or cross-area traversal is expressed as a region warp — a cardinal exit whose target room lies in a different region or sub-region; the engine moves the player and narrates entering the new region/sub-region. The `z` coordinate is retained for tile-layer visual stacking only (the paint editor, tickets #47/#48), not for movement. The original up/down rationale is superseded: vertical spaces are now authored as cardinally-connected rooms with warps at region boundaries (e.g. the Old Bell Tower climbs northward, entered from the Ashen Road as a region warp).
 
 ## Decision 026: The Implementation Uses A Cargo Workspace
 

@@ -18,8 +18,6 @@ pub enum Direction {
     South,
     East,
     West,
-    Up,
-    Down,
 }
 
 impl Direction {
@@ -31,8 +29,6 @@ impl Direction {
             "south" | "s" => Some(Self::South),
             "east" | "e" => Some(Self::East),
             "west" | "w" => Some(Self::West),
-            "up" | "u" => Some(Self::Up),
-            "down" | "d" => Some(Self::Down),
             _ => None,
         }
     }
@@ -45,8 +41,6 @@ impl Direction {
             Self::South => "south",
             Self::East => "east",
             Self::West => "west",
-            Self::Up => "up",
-            Self::Down => "down",
         }
     }
 }
@@ -336,13 +330,25 @@ mod tests {
             ("e", Direction::East),
             ("west", Direction::West),
             ("w", Direction::West),
-            ("up", Direction::Up),
-            ("u", Direction::Up),
-            ("down", Direction::Down),
-            ("d", Direction::Down),
         ];
         for (token, expected) in cases {
             assert_eq!(parse(token), Command::Move(expected), "token: {token}");
+        }
+    }
+
+    // RT-1 (REQ-001, ticket #52): the retired vertical tokens no longer parse to a
+    // Move — `up`/`u`/`down`/`d` are Unknown. Pins the removal so re-adding an
+    // Up/Down arm to `from_token` (or its alias) fails here.
+    #[test]
+    fn retired_up_down_tokens_do_not_parse_to_move() {
+        for token in ["up", "u", "down", "d"] {
+            assert_eq!(
+                parse(token),
+                Command::Unknown {
+                    input: token.to_string()
+                },
+                "'{token}' must not parse to a movement command"
+            );
         }
     }
 
@@ -351,7 +357,7 @@ mod tests {
     fn direction_verbs_are_case_insensitive() {
         assert_eq!(parse("N"), Command::Move(Direction::North));
         assert_eq!(parse("NORTH"), Command::Move(Direction::North));
-        assert_eq!(parse("Up"), Command::Move(Direction::Up));
+        assert_eq!(parse("WEST"), Command::Move(Direction::West));
     }
 
     // P2: `go <dir>` with exactly one direction token → Move (case-insensitive).
@@ -359,7 +365,7 @@ mod tests {
     fn go_with_one_direction_moves() {
         assert_eq!(parse("go east"), Command::Move(Direction::East));
         assert_eq!(parse("go N"), Command::Move(Direction::North));
-        assert_eq!(parse("GO down"), Command::Move(Direction::Down));
+        assert_eq!(parse("GO west"), Command::Move(Direction::West));
     }
 
     // P2 (inspect carry-forward): `go` alone / non-direction / trailing tokens
@@ -487,8 +493,6 @@ mod tests {
         assert_eq!(Direction::South.as_str(), "south");
         assert_eq!(Direction::East.as_str(), "east");
         assert_eq!(Direction::West.as_str(), "west");
-        assert_eq!(Direction::Up.as_str(), "up");
-        assert_eq!(Direction::Down.as_str(), "down");
     }
 
     // ---- ticket #7: swear / confront verbs ----

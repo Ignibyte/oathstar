@@ -14,7 +14,7 @@ items = ["wax_stub"]
 [rooms.exits]
 north = "north_gate"
 east = "candle_shop"
-up = "bell_frame"
+west = "bell_frame"
 
 [[rooms]]
 id = "candle_shop"
@@ -38,14 +38,14 @@ title = "Silent Bell Frame"
 region = "hollowmere"
 subregion = "town"
 description = "The bell hangs above the square, whole but voiceless. Its clapper is missing."
-x = 0
+x = -1
 y = 0
-z = 1
+z = 0
 glyph = "^"
 passable = true
 
 [rooms.exits]
-down = "hollowmere_square"
+east = "hollowmere_square"
 
 [[rooms]]
 id = "north_gate"
@@ -98,7 +98,7 @@ passable = true
 
 [rooms.exits]
 south = "ashen_road"
-up = "tower_landing"
+north = "tower_landing"
 
 [[rooms]]
 id = "tower_landing"
@@ -107,14 +107,14 @@ region = "old_bell_tower"
 subregion = "tower"
 description = "A cramped landing creaks underfoot. Broken ropes sway overhead like hanged questions."
 x = 0
-y = -3
-z = 1
+y = -4
+z = 0
 glyph = "T"
 passable = true
 
 [rooms.exits]
-down = "tower_foot"
-up = "bell_eater_roost"
+south = "tower_foot"
+north = "bell_eater_roost"
 
 # Ticket #29: the description stays state-neutral — it describes the place,
 # not the occupant, because room text is static and the Bell-Eater is REMOVED
@@ -126,11 +126,11 @@ region = "old_bell_tower"
 subregion = "boss"
 description = "The roofless chamber smells of copper and wet feathers. Broken bell-metal is heaped in a nest against the far wall."
 x = 0
-y = -3
-z = 2
+y = -5
+z = 0
 glyph = "B"
 passable = true
 entities = ["bell_eater"]
 
 [rooms.exits]
-down = "tower_landing"
+south = "tower_landing"

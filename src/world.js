@@ -6,20 +6,14 @@ export const directionAliases = {
   e: "east",
   east: "east",
   w: "west",
-  west: "west",
-  u: "up",
-  up: "up",
-  d: "down",
-  down: "down"
+  west: "west"
 };
 
 export const directionLabels = {
   north: "North",
   south: "South",
   east: "East",
-  west: "West",
-  up: "Up",
-  down: "Down"
+  west: "West"
 };
 
 export const world = {

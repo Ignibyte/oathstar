@@ -624,7 +624,7 @@ mod tests {
             OathStatus::Sworn
         );
 
-        for step in ["north", "north", "north", "up", "up"] {
+        for step in ["north", "north", "north", "north", "north"] {
             let moved = command(State(app.clone()), req(step)).await;
             assert!(moved.0.accepted, "move {step} accepted");
         }
@@ -767,7 +767,7 @@ mod tests {
 
         // The loop closes at the oath-giver: walk back and hear Mara's
         // fulfilled line (ticket #19's dialogue selection, post-recovery).
-        for step in ["down", "down", "south", "south", "south"] {
+        for step in ["south", "south", "south", "south", "south"] {
             let moved = command(State(app.clone()), req(step)).await;
             assert!(moved.0.accepted, "move {step} accepted");
         }
@@ -1356,10 +1356,14 @@ mod tests {
             "5 xp stays below the first threshold — no premature level"
         );
 
-        for step in ["north", "up", "up"] {
+        for step in ["north", "north", "north"] {
             let moved = command(State(app.clone()), req(step)).await;
             assert!(moved.0.accepted, "move {step} accepted");
         }
+        // Re-subscribe before the boss fight so its combat drain starts fresh: the
+        // climb now buffers region/sub-region warp narration (ticket #52) that this
+        // test never consumes, which would otherwise lag the burst-draining receiver.
+        rx = app.events.subscribe();
         assert!(
             command(State(app.clone()), req("confront"))
                 .await
@@ -1429,7 +1433,7 @@ mod tests {
             "the strike fells the stray: {kinds:?}"
         );
 
-        for step in ["north", "up", "up"] {
+        for step in ["north", "north", "north"] {
             let moved = command(State(app.clone()), req(step)).await;
             assert!(moved.0.accepted, "move {step} accepted");
         }
@@ -1499,7 +1503,7 @@ mod tests {
                 .accepted
         );
         assert!(command(State(app.clone()), req("swear")).await.0.accepted);
-        for step in ["north", "north", "north", "up", "up"] {
+        for step in ["north", "north", "north", "north", "north"] {
             let moved = command(State(app.clone()), req(step)).await;
             assert!(moved.0.accepted, "move {step} accepted");
         }
@@ -1793,7 +1797,7 @@ mod tests {
         );
 
         // The boss falls in two strike-6 blows instead of three.
-        for step in ["west", "north", "north", "north", "up", "up"] {
+        for step in ["west", "north", "north", "north", "north", "north"] {
             played(&app, step).await;
         }
         let opened = played(&app, "confront").await;
@@ -1822,7 +1826,7 @@ mod tests {
 
         // Back to Mara for the coat; wear it over the blade.
         for step in [
-            "down", "down", "south", "south", "south", "east", "buy coat",
+            "south", "south", "south", "south", "south", "east", "buy coat",
         ] {
             played(&app, step).await;
         }

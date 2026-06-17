@@ -114,7 +114,7 @@ pub struct RoomCell {
     /// Whether combat may start here.
     #[serde(default)]
     pub combat_enabled: bool,
-    /// Exits by direction name (`"north"`…`"down"`) to a target room id.
+    /// Exits by direction name (`"north"`…`"west"`) to a target room id.
     #[serde(default)]
     pub exits: BTreeMap<String, String>,
     /// Ids of entities placed in this room (validated against the catalog).

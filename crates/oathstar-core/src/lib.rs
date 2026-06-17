@@ -1469,7 +1469,7 @@ impl Engine {
                 events.push(self.log(
                     EventChannel::System,
                     OutputComponent::SystemMessage,
-                    "Try: look, north, south, east, west, up, down, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory, rest, shop, buy, sell, equip, unequip.",
+                    "Try: look, north, south, east, west, swear, confront, attack, flee, guard, power strike, talk, take, drop, inventory, rest, shop, buy, sell, equip, unequip.",
                 ));
             }
             Command::Look { target: None } => {
@@ -2524,6 +2524,27 @@ impl Engine {
             )];
         }
 
+        // A cardinal exit that crosses a region or sub-region boundary is a warp
+        // (ticket #52): narrate entering the new region/sub-region by name. Resolve
+        // the name now (immutable world borrow) so the later `self.log` is clean.
+        let transition = if next_room.region != room.region {
+            Some(
+                self.world
+                    .regions
+                    .get(&next_room.region)
+                    .map_or_else(|| next_room.region.clone(), |r| r.name.clone()),
+            )
+        } else if next_room.subregion != room.subregion {
+            next_room.subregion.as_ref().map(|sub| {
+                self.world
+                    .subregions
+                    .get(sub)
+                    .map_or_else(|| sub.clone(), |s| s.name.clone())
+            })
+        } else {
+            None
+        };
+
         // Leaving the encounter room breaks the fight off as a flee (ticket
         // #24): combat now advances on real-time pulses, so a lingering
         // encounter would keep striking the player from rooms away every
@@ -2536,6 +2557,14 @@ impl Engine {
 
         self.state.current_room_id = next_room.id.clone();
         self.state.discovered_rooms.insert(next_room.id.clone());
+
+        if let Some(name) = transition {
+            events.push(self.log(
+                EventChannel::Room,
+                OutputComponent::NarrativeMessage,
+                format!("You enter {name}."),
+            ));
+        }
 
         events.push(self.event(
             EventChannel::Room,
@@ -3667,6 +3696,173 @@ mod tests {
         assert_eq!(
             response.snapshot.current_room_id, "a",
             "a malformed bare direction does not move the player"
+        );
+    }
+
+    // ---- RT-3 (REQ-002, ticket #52): a cross-boundary cardinal exit warps and
+    // narrates the region/sub-region entered. ----
+
+    // A world with two regions (r1, r2) and two sub-regions (s1, s2 — both under
+    // r1). The `home` room has a same-region/same-subregion neighbour (`sib`), a
+    // cross-subregion neighbour (`deep`), and a cross-region neighbour (`across`).
+    // Display names differ from ids so the assertions pin the registry *name*
+    // lookup rather than the raw-id fallback.
+    fn warp_world() -> WorldDefinition {
+        let mut home = room_with(
+            "home",
+            true,
+            BTreeMap::from([
+                ("east".to_string(), "across".to_string()),
+                ("north".to_string(), "sib".to_string()),
+                ("south".to_string(), "deep".to_string()),
+            ]),
+        );
+        home.region = "r1".to_string();
+        home.subregion = Some("s1".to_string());
+
+        let mut across = room_with(
+            "across",
+            true,
+            BTreeMap::from([("west".to_string(), "home".to_string())]),
+        );
+        across.region = "r2".to_string();
+        across.subregion = None;
+
+        let mut sib = room_with(
+            "sib",
+            true,
+            BTreeMap::from([("south".to_string(), "home".to_string())]),
+        );
+        sib.region = "r1".to_string();
+        sib.subregion = Some("s1".to_string());
+
+        let mut deep = room_with(
+            "deep",
+            true,
+            BTreeMap::from([("north".to_string(), "home".to_string())]),
+        );
+        deep.region = "r1".to_string();
+        deep.subregion = Some("s2".to_string());
+
+        let rooms = BTreeMap::from([
+            ("home".to_string(), home),
+            ("across".to_string(), across),
+            ("sib".to_string(), sib),
+            ("deep".to_string(), deep),
+        ]);
+        let regions = BTreeMap::from([
+            (
+                "r1".to_string(),
+                RegionDefinition {
+                    id: "r1".to_string(),
+                    name: "Home Region".to_string(),
+                },
+            ),
+            (
+                "r2".to_string(),
+                RegionDefinition {
+                    id: "r2".to_string(),
+                    name: "Far Region".to_string(),
+                },
+            ),
+        ]);
+        let subregions = BTreeMap::from([
+            (
+                "s1".to_string(),
+                SubregionDefinition {
+                    id: "s1".to_string(),
+                    name: "Home Sub".to_string(),
+                    region: "r1".to_string(),
+                },
+            ),
+            (
+                "s2".to_string(),
+                SubregionDefinition {
+                    id: "s2".to_string(),
+                    name: "The Deep".to_string(),
+                    region: "r1".to_string(),
+                },
+            ),
+        ]);
+
+        WorldDefinition {
+            id: "w".to_string(),
+            title: "W".to_string(),
+            start_room_id: "home".to_string(),
+            rooms,
+            regions,
+            subregions,
+            entities: BTreeMap::new(),
+            items: BTreeMap::new(),
+            oaths: BTreeMap::new(),
+            oath_id: None,
+        }
+    }
+
+    // The warp narration ("You enter <name>.") carried by a response, if any.
+    fn entered(response: &CommandResponse) -> Option<String> {
+        response.events.iter().find_map(|e| match &e.kind {
+            GameEventKind::LogMessage {
+                component: OutputComponent::NarrativeMessage,
+                text,
+            } if text.starts_with("You enter ") => Some(text.clone()),
+            _ => None,
+        })
+    }
+
+    // RT-3a: a cardinal exit crossing a REGION boundary warps and narrates the
+    // region's display name. Kills the `region != region` -> `==` mutant
+    // (move_direction): under `==`, a differing-region move enters neither branch,
+    // emits no narration, and this assertion fails.
+    #[test]
+    fn warp_across_region_narrates_region_name() {
+        let mut engine = Engine::try_new(warp_world()).expect("valid warp world");
+        let response = engine.handle_command(cmd("east"));
+        assert_eq!(
+            response.snapshot.current_room_id, "across",
+            "the warp moves the player across the region boundary"
+        );
+        assert_eq!(
+            entered(&response).as_deref(),
+            Some("You enter Far Region."),
+            "crossing a region boundary narrates the region's display name"
+        );
+    }
+
+    // RT-3b: a cardinal exit crossing a SUB-REGION boundary (same region) warps and
+    // narrates the sub-region's display name. Kills the `subregion != subregion` ->
+    // `==` mutant (move_direction): under `==`, a differing-subregion move emits no
+    // narration and this assertion fails.
+    #[test]
+    fn warp_across_subregion_narrates_subregion_name() {
+        let mut engine = Engine::try_new(warp_world()).expect("valid warp world");
+        let response = engine.handle_command(cmd("south"));
+        assert_eq!(
+            response.snapshot.current_room_id, "deep",
+            "the warp moves the player across the sub-region boundary"
+        );
+        assert_eq!(
+            entered(&response).as_deref(),
+            Some("You enter The Deep."),
+            "crossing a sub-region boundary narrates the sub-region's display name"
+        );
+    }
+
+    // RT-3c: a move WITHIN the same region and sub-region narrates no transition.
+    // This negative kills BOTH `==` mutants: under either `==`, an equal-region or
+    // equal-subregion move would spuriously narrate.
+    #[test]
+    fn move_within_region_and_subregion_does_not_narrate() {
+        let mut engine = Engine::try_new(warp_world()).expect("valid warp world");
+        let response = engine.handle_command(cmd("north"));
+        assert_eq!(
+            response.snapshot.current_room_id, "sib",
+            "the move within the region still happens"
+        );
+        assert_eq!(
+            entered(&response),
+            None,
+            "a move within the same region and sub-region narrates no transition"
         );
     }
 
