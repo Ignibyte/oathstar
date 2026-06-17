@@ -132,3 +132,34 @@ canvas#palette {
   cursor: crosshair;
 }
 #active-tile { color: var(--brass); }
+
+/* studio navigation shell (ticket #49) */
+.studio-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.studio-nav {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.1rem;
+}
+.studio-nav .brand {
+  margin-right: 0.5rem;
+  color: var(--brass);
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.studio-nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.studio-nav a:hover { color: var(--ink); }
+.studio-nav a[aria-current="page"] {
+  color: var(--brass);
+  border-bottom: 2px solid var(--brass);
+}

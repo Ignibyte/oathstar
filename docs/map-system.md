@@ -336,3 +336,12 @@ image-load glue stays the smoke-/review-verified seam. v1 paints one active
 layer with one tileset; the room inspector (E), per-tile/layer metadata (S5),
 undo/redo, multi-layer UI, save/load (S4), and runtime materialization (#38) are
 later slices.
+
+**Inside a nav shell (ticket #49).** The map editor is no longer a standalone
+page — every authenticated studio page now carries a persistent navigation
+(**Maps · Regions · Items · Enemies · Game Settings**). `/editor` is the **Maps**
+section; the other four are Editor-gated "Coming soon" stub routes (HTTP 200, not
+404). This is the shell the region & sub-region dashboard (#51) and the future
+item/enemy/settings editors slot into, and that the fantasy UI kit (#50) re-skins
+— the first slice of the pre-tilemap studio-admin program
+(`INTAKE-studio-admin-and-world-model-program`).

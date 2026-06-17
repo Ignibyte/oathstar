@@ -1,12 +1,13 @@
 ---
 title: TICKET-49-studio-nav-shell
-status: open
+status: closed
 ticket: 7a030671-ba5a-4a08-b257-aadb69528115
 ticket_number: 49
 type: feature
 created: 2026-06-17
+closed: 2026-06-17
 intake: docs/planning/intake/INTAKE-studio-admin-and-world-model-program.md
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/completed/WORK-studio-nav-shell-v1.spec.md
 ---
 
 # TICKET-49-studio-nav-shell

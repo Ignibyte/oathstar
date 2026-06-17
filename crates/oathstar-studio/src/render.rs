@@ -1,3 +1,5 @@
+use core::fmt::Write as _;
+
 use axum::response::Html;
 use oathstar_auth::Principal;
 
@@ -31,6 +33,99 @@ pub fn login_page(error: Option<&str>) -> Html<String> {
     ))
 }
 
+/// The studio's top-level sections — the persistent navigation shell (ticket #49).
+///
+/// `Maps` is the live map editor; the rest are stub sections until their tickets
+/// land (#51 regions, then items / enemies / settings).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NavSection {
+    Maps,
+    Regions,
+    Items,
+    Enemies,
+    Settings,
+}
+
+impl NavSection {
+    /// The label shown in the navigation.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Maps => "Maps",
+            Self::Regions => "Regions",
+            Self::Items => "Items",
+            Self::Enemies => "Enemies",
+            Self::Settings => "Game Settings",
+        }
+    }
+
+    /// The route this section links to.
+    const fn href(self) -> &'static str {
+        match self {
+            Self::Maps => "/editor",
+            Self::Regions => "/regions",
+            Self::Items => "/items",
+            Self::Enemies => "/enemies",
+            Self::Settings => "/settings",
+        }
+    }
+}
+
+/// Every section, in navigation order.
+const SECTIONS: [NavSection; 5] = [
+    NavSection::Maps,
+    NavSection::Regions,
+    NavSection::Items,
+    NavSection::Enemies,
+    NavSection::Settings,
+];
+
+/// The persistent studio header shared by every authenticated page: the brand
+/// (home link), the section navigation with `active` marked `aria-current`, and
+/// the sign-out control — so the studio reads as one multi-section admin.
+fn studio_header(active: Option<NavSection>) -> String {
+    let mut links = String::new();
+    for section in SECTIONS {
+        let current = if Some(section) == active {
+            r#" aria-current="page""#
+        } else {
+            ""
+        };
+        let _ = write!(
+            links,
+            r#"<a href="{href}"{current}>{label}</a>"#,
+            href = section.href(),
+            label = section.label(),
+        );
+    }
+    format!(
+        r#"<header class="studio-header">
+    <nav class="studio-nav"><a class="brand" href="/">Oathstar Studio</a>{links}</nav>
+    <form method="post" action="/logout"><button type="submit">Sign out</button></form>
+  </header>"#
+    )
+}
+
+/// Render an Editor-gated section stub — the shared header with `section` active
+/// and a "Coming soon" panel. One renderer backs every not-yet-built section
+/// (Regions / Items / Enemies / Game Settings, ticket #49).
+pub fn section_stub_page(section: NavSection) -> Html<String> {
+    Html(format!(
+        r#"<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oathstar Studio — {label}</title><style>{STUDIO_CSS}</style></head>
+<body class="dashboard">
+  {header}
+  <main>
+    <section class="panel"><h2>{label}</h2><p class="soon">Coming soon.</p></section>
+  </main>
+</body>
+</html>"#,
+        label = section.label(),
+        header = studio_header(Some(section)),
+    ))
+}
+
 /// Render the authenticated dashboard shell for `principal`.
 ///
 /// `principal` is server-constructed (the owner) in v1; when a real user store
@@ -42,10 +137,7 @@ pub fn dashboard_page(principal: &Principal) -> Html<String> {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oathstar Studio</title><style>{STUDIO_CSS}</style></head>
 <body class="dashboard">
-  <header>
-    <h1>Oathstar Studio</h1>
-    <form method="post" action="/logout"><button type="submit">Sign out</button></form>
-  </header>
+  {header}
   <main>
     <p class="who">Signed in as <strong>{name}</strong>.</p>
     <section class="panel"><h2>World management</h2><p class="soon">Coming soon.</p></section>
@@ -53,7 +145,8 @@ pub fn dashboard_page(principal: &Principal) -> Html<String> {
   </main>
 </body>
 </html>"#,
-        name = principal.name
+        name = principal.name,
+        header = studio_header(None),
     ))
 }
 
@@ -222,11 +315,7 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oathstar Studio — Map editor</title><style>{STUDIO_CSS}</style></head>
 <body class="editor">
-  <header>
-    <h1>Oathstar Studio</h1>
-    <nav class="crumbs"><a href="/">Dashboard</a></nav>
-    <form method="post" action="/logout"><button type="submit">Sign out</button></form>
-  </header>
+  {header}
   <main class="editor-main">
     <div class="editor-left">
       <section class="panel canvas-panel">
@@ -250,12 +339,13 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
 </body>
 </html>"#,
         editor_js = include_str!("../static/editor-canvas.js"),
+        header = studio_header(Some(NavSection::Maps)),
     ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{dashboard_page, editor_page, login_page};
+    use super::{dashboard_page, editor_page, login_page, section_stub_page, NavSection};
     use oathstar_auth::owner_principal;
 
     #[test]
@@ -285,6 +375,19 @@ mod tests {
         assert!(html.contains("Owner")); // principal.name, server-constructed
         assert!(html.contains("Map editor"));
         assert!(html.contains(".panel")); // embedded CSS marker
+                                          // ticket #49: the persistent nav with all five sections; the dashboard is
+                                          // "home", so nothing is marked active.
+        assert!(html.contains(r#"class="studio-nav""#));
+        assert!(html.contains(r#"href="/editor""#)); // Maps
+        assert!(html.contains(r#"href="/regions""#));
+        assert!(html.contains(r#"href="/items""#));
+        assert!(html.contains(r#"href="/enemies""#));
+        assert!(html.contains(r#"href="/settings""#));
+        assert!(html.contains(">Game Settings<"));
+        // home marks no active section — the nav links carry no `aria-current`
+        // (the string also appears in the embedded CSS selector, so assert the
+        // Maps link is in its inactive form rather than scanning the whole page).
+        assert!(html.contains(r#"<a href="/editor">Maps</a>"#));
     }
 
     #[test]
@@ -318,5 +421,23 @@ mod tests {
         assert!(html.contains("canvasPointToCell("));
         assert!(html.contains("paintCell("));
         assert!(html.contains("tileIndexToSourceRect("));
+        // ticket #49: the editor is the Maps section — the nav is present with
+        // Maps marked active and the other sections linked.
+        assert!(html.contains(r#"class="studio-nav""#));
+        assert!(html.contains(r#"<a href="/editor" aria-current="page">Maps</a>"#));
+        assert!(html.contains(r#"href="/regions""#));
+        assert!(html.contains(r#"href="/""#)); // the brand home link
+    }
+
+    #[test]
+    fn section_stub_page_shows_coming_soon_and_active_nav() {
+        // ticket #49 / REQ-003 + REQ-005: a stub names its section, says "Coming
+        // soon", marks that section active, and leaves the others inactive.
+        let html = section_stub_page(NavSection::Regions).0;
+        assert!(html.contains("<h2>Regions</h2>"));
+        assert!(html.contains("Coming soon."));
+        assert!(html.contains(r#"<a href="/regions" aria-current="page">Regions</a>"#));
+        assert!(html.contains(r#"<a href="/editor">Maps</a>"#)); // Maps not active
+        assert!(html.contains(r#"class="studio-nav""#));
     }
 }

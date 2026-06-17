@@ -385,7 +385,7 @@ mod tests {
         assert!(html.contains(r#"id="map-doc""#));
         assert!(html.contains(r#"id="validate""#));
         assert!(html.contains(r#"id="result""#));
-        assert!(html.contains(r#"<a href="/">"#));
+        assert!(html.contains(r#"href="/""#)); // the studio nav's brand home link (#49)
         assert!(html.contains("Sketch Map")); // the embedded starter doc title
     }
 

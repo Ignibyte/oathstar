@@ -18,6 +18,7 @@ mod config;
 mod editor;
 mod handlers;
 mod render;
+mod sections;
 
 use config::StudioConfig;
 
@@ -54,6 +55,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/editor", get(editor::editor_page))
         .route("/editor/maps/validate", post(editor::validate))
         .route("/tilesets/arctic.png", get(editor::arctic_sheet))
+        .route("/regions", get(sections::regions))
+        .route("/items", get(sections::items))
+        .route("/enemies", get(sections::enemies))
+        .route("/settings", get(sections::settings))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
