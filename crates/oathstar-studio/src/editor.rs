@@ -93,16 +93,16 @@ pub async fn validate(State(studio): State<StudioState>, jar: CookieJar, body: B
 }
 
 /// A ref-free, valid starter [`MapDocument`] (JSON) the editor opens with — a
-/// 6×3 walled sketch: a floor corridor (rooms `atrium` and `hall`, `spawn` on
-/// `atrium`) ringed by walls, with an empty right-hand column. Ref-free, so it
-/// validates against any catalog; embedded verbatim into the page and sent by
-/// the Validate control.
+/// 16×12 paint canvas with a small walled sketch in the top-left corner (a floor
+/// corridor: rooms `atrium` and `hall`, `spawn` on `atrium`); the rest of the
+/// grid is empty and paintable. Ref-free, so it validates against any catalog;
+/// embedded verbatim into the page and sent by the Validate control.
 const STARTER_DOC: &str = r#"{
   "id": "sketch-map",
   "title": "Sketch Map",
   "tile_size": 16,
-  "width": 6,
-  "height": 3,
+  "width": 16,
+  "height": 12,
   "floors": 1,
   "terrain_palette": {
     "floor": { "tile": "stone_floor", "passable": true },

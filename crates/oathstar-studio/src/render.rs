@@ -65,8 +65,9 @@ const EDITOR_GLUE: &str = r#"
 let doc = JSON.parse(document.getElementById("map-doc").textContent);
 const canvas = document.getElementById("map");
 const palette = document.getElementById("palette");
-const TILE = 24;
+const TILE = 40;
 const PALETTE_SCALE = 2;
+const Z = 0;
 let active = null;
 const sheets = {};
 
@@ -79,13 +80,29 @@ canvas.setAttribute("aria-label", editorAriaLabel(doc));
 const ctx = canvas.getContext("2d");
 ctx.scale(size.dpr, size.dpr);
 ctx.imageSmoothingEnabled = false;
-ctx.font = "14px ui-monospace, monospace";
+ctx.font = "18px ui-monospace, monospace";
 ctx.textBaseline = "middle";
 ctx.textAlign = "center";
 
+// A uniform tile grid over every cell so each tile is delineated (#48 fix 4).
+function drawGrid() {
+  ctx.strokeStyle = "rgba(160, 170, 180, 0.45)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let gx = 0; gx <= doc.width; gx += 1) {
+    ctx.moveTo(gx * TILE + 0.5, 0);
+    ctx.lineTo(gx * TILE + 0.5, doc.height * TILE);
+  }
+  for (let gy = 0; gy <= doc.height; gy += 1) {
+    ctx.moveTo(0, gy * TILE + 0.5);
+    ctx.lineTo(doc.width * TILE, gy * TILE + 0.5);
+  }
+  ctx.stroke();
+}
+
 function redraw() {
   ctx.clearRect(0, 0, size.cssWidth, size.cssHeight);
-  for (const op of editorDrawPlan(doc, { z: 0, tilePixels: TILE }).ops) {
+  for (const op of editorDrawPlan(doc, { z: Z, tilePixels: TILE }).ops) {
     if (op.sprites.length) {
       for (const s of op.sprites) {
         const img = sheets[s.tileset];
@@ -97,12 +114,30 @@ function redraw() {
       ctx.fillStyle = op.fill;
       ctx.fillRect(op.x, op.y, op.size, op.size);
     }
-    ctx.strokeStyle = op.stroke;
-    ctx.strokeRect(op.x + 0.5, op.y + 0.5, op.size - 1, op.size - 1);
     if (op.glyph) {
       ctx.fillStyle = op.textColor;
       ctx.fillText(op.glyph, op.x + op.size / 2, op.y + op.size / 2);
     }
+  }
+  drawGrid();
+}
+
+// Draw the active tileset sheet into the palette, outlining the selected tile.
+function drawPalette() {
+  const ts = doc.tilesets && doc.tilesets[0];
+  const img = ts && sheets[ts.id];
+  if (!palette || !ts || !img) { return; }
+  const pctx = palette.getContext("2d");
+  pctx.imageSmoothingEnabled = false;
+  pctx.clearRect(0, 0, palette.width, palette.height);
+  pctx.drawImage(img, 0, 0, palette.width, palette.height);
+  if (active && active.tileset === ts.id) {
+    const pcell = ts.tile_size * PALETTE_SCALE;
+    const col = active.index % ts.columns;
+    const row = Math.floor(active.index / ts.columns);
+    pctx.strokeStyle = "rgb(229, 197, 111)";
+    pctx.lineWidth = 2;
+    pctx.strokeRect(col * pcell + 1, row * pcell + 1, pcell - 2, pcell - 2);
   }
 }
 
@@ -114,9 +149,7 @@ for (const ts of (doc.tilesets || [])) {
     if (palette && doc.tilesets[0] && ts.id === doc.tilesets[0].id) {
       palette.width = ts.columns * ts.tile_size * PALETTE_SCALE;
       palette.height = ts.rows * ts.tile_size * PALETTE_SCALE;
-      const pctx = palette.getContext("2d");
-      pctx.imageSmoothingEnabled = false;
-      pctx.drawImage(img, 0, 0, palette.width, palette.height);
+      drawPalette();
     }
   };
   img.src = "/tilesets/" + ts.image;
@@ -133,16 +166,20 @@ if (palette) {
       active = { tileset: ts.id, index: index };
       const ind = document.getElementById("active-tile");
       if (ind) { ind.textContent = "Active tile: #" + index; }
+      drawPalette();
     }
   });
 }
 
+// Paint the active tile onto the "ground" layer at the clicked cell. The cell
+// MUST carry the active z-plane (Z): editorDrawPlan filters layer cells by z, so
+// a cell with z === undefined is silently dropped and never drawn (#48 fix 2).
 function paintAt(e) {
   if (!active) { return; }
   const rect = canvas.getBoundingClientRect();
   const cell = canvasPointToCell(e.clientX - rect.left, e.clientY - rect.top, TILE, doc.width, doc.height);
   if (cell) {
-    doc = paintCell(doc, "ground", cell, active);
+    doc = paintCell(doc, "ground", { x: cell.x, y: cell.y, z: Z }, active);
     redraw();
   }
 }
@@ -191,19 +228,21 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
     <form method="post" action="/logout"><button type="submit">Sign out</button></form>
   </header>
   <main class="editor-main">
-    <section class="panel canvas-panel">
-      <h2>Map editor</h2>
-      <p class="hint">Pick a tile, then click or drag on the map to paint. Validate checks it.</p>
-      <canvas id="map" width="0" height="0"></canvas>
-    </section>
+    <div class="editor-left">
+      <section class="panel canvas-panel">
+        <h2>Map editor</h2>
+        <p class="hint">Pick a tile, then click or drag on the map to paint. Validate checks it.</p>
+        <div class="map-scroll"><canvas id="map" width="0" height="0"></canvas></div>
+      </section>
+      <section class="panel controls">
+        <button id="validate" type="button">Validate</button>
+        <pre id="result" aria-live="polite"></pre>
+      </section>
+    </div>
     <section class="panel palette-panel">
       <h2>Tiles</h2>
       <p class="hint" id="active-tile">No tile selected</p>
       <div class="palette-scroll"><canvas id="palette" width="0" height="0"></canvas></div>
-    </section>
-    <section class="panel controls">
-      <button id="validate" type="button">Validate</button>
-      <pre id="result" aria-live="polite"></pre>
     </section>
   </main>
   <script type="application/json" id="map-doc">{doc_json}</script>

@@ -85,7 +85,16 @@ body.editor { padding: 1.25rem; }
   border-bottom: 1px solid var(--line);
 }
 .crumbs a { color: var(--brass); }
-.editor-main { display: grid; gap: 1rem; margin-top: 1rem; }
+.editor-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+  align-items: start;
+}
+.editor-left { display: grid; gap: 1rem; min-width: 0; align-content: start; }
+.map-scroll { overflow: auto; max-height: 78vh; }
+@media (max-width: 760px) { .editor-main { grid-template-columns: 1fr; } }
 .hint { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.85rem; }
 canvas#map {
   display: block;
@@ -111,7 +120,7 @@ canvas#map {
 /* paint palette (ticket #48) */
 canvas#map { cursor: crosshair; }
 .palette-scroll {
-  max-height: 60vh;
+  max-height: 78vh;
   overflow: auto;
   background: #0c1014;
   border: 1px solid var(--line);
