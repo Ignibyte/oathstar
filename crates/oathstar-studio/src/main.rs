@@ -12,7 +12,7 @@ use axum::{
     Router,
 };
 use oathstar_auth::SessionStore;
-use oathstar_content::ContentCatalog;
+use oathstar_content::{ContentCatalog, WorldDefinition};
 
 mod config;
 mod editor;
@@ -29,6 +29,7 @@ struct StudioState {
     sessions: SessionStore,
     owner_secret: Option<String>,
     catalog: Arc<ContentCatalog>,
+    world: Arc<WorldDefinition>,
 }
 
 #[tokio::main]
@@ -44,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
         sessions: SessionStore::new(),
         owner_secret: config.owner_secret,
         catalog: Arc::new(oathstar_content::beginner_catalog()?),
+        world: Arc::new(oathstar_content::load_beginner_world()?),
     };
 
     let app = Router::new()

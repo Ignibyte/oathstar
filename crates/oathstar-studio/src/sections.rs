@@ -1,8 +1,7 @@
-//! The studio's section routes (ticket #49) — the not-yet-built admin sections.
-//!
-//! Each is Editor-gated like the dashboard and serves a "Coming soon" stub (HTTP
-//! 200, never a 404) so the navigation shell is navigable end to end. The real
-//! editors land in later tickets (#51 regions, then items / enemies / settings).
+//! The studio's section routes (ticket #49). `regions` is the read-only region &
+//! sub-region dashboard (ticket #51); `items` / `enemies` / `settings` are still
+//! Editor-gated "Coming soon" stubs (HTTP 200, never a 404) until their tickets
+//! land. All are gated like the dashboard.
 
 use axum::{
     extract::State,
@@ -33,9 +32,13 @@ fn gated_section(jar: &CookieJar, studio: &StudioState, section: NavSection) -> 
     )
 }
 
-/// `GET /regions` — the region & sub-region dashboard (stub; ticket #51).
+/// `GET /regions` — the read-only region & sub-region dashboard (ticket #51): the
+/// regions and sub-regions of the loaded world, behind the Editor gate.
 pub async fn regions(State(studio): State<StudioState>, jar: CookieJar) -> Response {
-    gated_section(&jar, &studio, NavSection::Regions)
+    editor_gate(&jar, &studio.sessions).map_or_else(
+        || Redirect::to("/login").into_response(),
+        |_principal| render::regions_page(&studio.world).into_response(),
+    )
 }
 
 /// `GET /items` — the item editor (stub).
@@ -62,7 +65,7 @@ mod tests {
     use axum::http::{header, Request, StatusCode};
     use axum_extra::extract::cookie::CookieJar;
     use oathstar_auth::{owner_principal, AuthRole, Principal, SessionStore, SESSION_COOKIE};
-    use oathstar_content::ContentCatalog;
+    use oathstar_content::{load_beginner_world, ContentCatalog};
     use std::sync::Arc;
 
     fn studio() -> StudioState {
@@ -70,6 +73,7 @@ mod tests {
             sessions: SessionStore::new(),
             owner_secret: Some("pw".to_owned()),
             catalog: Arc::new(ContentCatalog::default()),
+            world: Arc::new(load_beginner_world().expect("the beginner world loads")),
         }
     }
 
@@ -148,10 +152,38 @@ mod tests {
         };
     }
 
-    gate_tests!(regions_is_gated_stub, regions, "Regions");
     gate_tests!(items_is_gated_stub, items, "Items");
     gate_tests!(enemies_is_gated_stub, enemies, "Enemies");
     gate_tests!(settings_is_gated_stub, settings, "Game Settings");
+
+    #[tokio::test]
+    async fn regions_serves_the_dashboard_and_is_gated() {
+        // ticket #51: `regions` renders the real read-only dashboard, not a stub —
+        // an Editor sees a real region; a Player AND an anonymous caller are both
+        // redirected to /login (PR-claude-gated-page-role-mutant-001).
+        let state = studio();
+        let id = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let res = regions(State(state), jar(Some(&cookie_header(&id))).await).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = body_of(res).await;
+        assert!(body.contains("Hollowmere"), "lists a real region");
+        assert!(!body.contains("Coming soon."), "not the stub");
+
+        let state = studio();
+        let pid = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Player]));
+        let res = regions(State(state), jar(Some(&cookie_header(&pid))).await).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(location(&res), "/login");
+
+        let state = studio();
+        let res = regions(State(state), jar(None).await).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(location(&res), "/login");
+    }
 
     #[tokio::test]
     async fn an_owner_session_reaches_a_section() {

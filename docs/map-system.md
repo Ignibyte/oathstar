@@ -352,3 +352,10 @@ the nav header) and a themed gold **button**, served from `/ui/panel-frame.png`
 and `/ui/button.png` (embedded via `include_bytes!`, the same pattern as the
 arctic sheet). The crops are committed under `public/ui/`. The game-client re-skin
 and the rest of the kit (icons, portraits, bars, banners) are later #50 slices.
+
+**Regions dashboard (ticket #51, slice 1).** The nav's **Regions** section is now a
+**read-only** dashboard: it loads the world at startup
+(`StudioState.world: Arc<WorldDefinition>`) and lists each region with its
+sub-regions nested beneath it and a room count for each, every sub-region linking
+to the editor. Editing region/sub-region attributes + persistence (`#51b`) and
+per-sub-region map identity + create/delete (`#51c`) are later slices.

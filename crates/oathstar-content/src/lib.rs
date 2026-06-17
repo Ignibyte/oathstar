@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context};
 use oathstar_core::{
     Entity, Item, OathDefinition, RegionDefinition, RoomDefinition, SubregionDefinition,
-    WorldDefinition,
 };
 use serde::Deserialize;
 
@@ -12,6 +11,9 @@ pub use map_document::{
     Cell, ContentCatalog, MapDocument, MapValidationError, RefKind, RoomCell, TerrainCell,
     TerrainDef, SUPPORTED_TILE_SIZES,
 };
+// `load_beginner_world`/`materialize` already return one, so callers must be able
+// to name the type.
+pub use oathstar_core::WorldDefinition;
 
 const BEGINNER_MODULE: &str = include_str!("../../../modules/beginner/module.toml");
 const BEGINNER_ROOMS: &str = include_str!("../../../modules/beginner/rooms.toml");

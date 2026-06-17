@@ -73,6 +73,9 @@ mod tests {
             sessions: SessionStore::new(),
             owner_secret: secret.map(str::to_owned),
             catalog: std::sync::Arc::new(oathstar_content::ContentCatalog::default()),
+            world: std::sync::Arc::new(
+                oathstar_content::load_beginner_world().expect("the beginner world loads"),
+            ),
         }
     }
 

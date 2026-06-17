@@ -1,7 +1,9 @@
 use core::fmt::Write as _;
+use std::collections::BTreeMap;
 
 use axum::response::Html;
 use oathstar_auth::Principal;
+use oathstar_content::WorldDefinition;
 
 const STUDIO_CSS: &str = include_str!("../static/studio.css");
 
@@ -123,6 +125,58 @@ pub fn section_stub_page(section: NavSection) -> Html<String> {
 </html>"#,
         label = section.label(),
         header = studio_header(Some(section)),
+    ))
+}
+
+/// Room tallies per region id and per sub-region id, in one pass over the world's
+/// rooms (ticket #51). The borrowed `&str` keys are valid while `world` lives.
+fn room_counts(world: &WorldDefinition) -> (BTreeMap<&str, usize>, BTreeMap<&str, usize>) {
+    let mut regions: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut subregions: BTreeMap<&str, usize> = BTreeMap::new();
+    for room in world.rooms.values() {
+        *regions.entry(room.region.as_str()).or_default() += 1;
+        if let Some(sub) = &room.subregion {
+            *subregions.entry(sub.as_str()).or_default() += 1;
+        }
+    }
+    (regions, subregions)
+}
+
+/// Render the read-only region & sub-region dashboard (ticket #51): each region is
+/// a framed panel with its room count and a nested list of its sub-regions, each
+/// linking to the editor. Region/sub-region names are server-controlled world
+/// content (the committed module), not request input — so no escaping this slice.
+pub fn regions_page(world: &WorldDefinition) -> Html<String> {
+    let (region_rooms, subregion_rooms) = room_counts(world);
+    let mut body = String::new();
+    for region in world.regions.values() {
+        let rc = region_rooms.get(region.id.as_str()).copied().unwrap_or(0);
+        let _ = write!(
+            body,
+            r#"<section class="panel"><h2>{name}</h2><p class="who">{rc} rooms</p><ul>"#,
+            name = region.name,
+        );
+        for sub in world.subregions.values().filter(|s| s.region == region.id) {
+            let sc = subregion_rooms.get(sub.id.as_str()).copied().unwrap_or(0);
+            let _ = write!(
+                body,
+                r#"<li>{name} — {sc} rooms <a href="/editor">Open in editor</a></li>"#,
+                name = sub.name,
+            );
+        }
+        let _ = write!(body, "</ul></section>");
+    }
+    Html(format!(
+        r#"<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oathstar Studio — Regions</title><style>{STUDIO_CSS}</style></head>
+<body class="dashboard">
+  {header}
+  <main>{body}</main>
+</body>
+</html>"#,
+        header = studio_header(Some(NavSection::Regions)),
     ))
 }
 
@@ -345,7 +399,9 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{dashboard_page, editor_page, login_page, section_stub_page, NavSection};
+    use super::{
+        dashboard_page, editor_page, login_page, regions_page, section_stub_page, NavSection,
+    };
     use oathstar_auth::owner_principal;
 
     #[test]
@@ -449,5 +505,71 @@ mod tests {
         let html = dashboard_page(&owner_principal()).0;
         assert!(html.contains(r#"url("/ui/panel-frame.png")"#));
         assert!(html.contains(r#"url("/ui/button.png")"#));
+    }
+
+    #[test]
+    fn regions_page_lists_regions_subregions_counts_and_links() {
+        // ticket #51 / REQ-001/002/003/005: the dashboard lists every region with
+        // its sub-regions, a room count each, an editor link per sub-region, and
+        // marks Regions active. Uses the real beginner world (3 regions, 5 subs).
+        use oathstar_content::load_beginner_world;
+        let world = load_beginner_world().expect("the beginner world loads");
+        let html = regions_page(&world).0;
+        for name in [
+            "Hollowmere",
+            "The Ashen Road",
+            "The Old Bell Tower",
+            "Hollowmere Town",
+            "Town Wall",
+            "Roadside Wilds",
+            "Bell Tower",
+            "Bell Eater's Roost",
+        ] {
+            assert!(html.contains(name), "lists {name}");
+        }
+        assert!(html.contains(r#"<a href="/editor">Open in editor</a>"#));
+        assert!(html.contains(r#"<a href="/regions" aria-current="page">Regions</a>"#));
+        // REQ-002: Hollowmere's room count, computed independently here, must appear
+        // in its panel header — pins room_counts against a `+=`/grouping mutant.
+        let hollowmere = world
+            .rooms
+            .values()
+            .filter(|r| r.region == "hollowmere")
+            .count();
+        assert!(
+            html.contains(&format!(
+                r#"<h2>Hollowmere</h2><p class="who">{hollowmere} rooms</p>"#
+            )),
+            "Hollowmere shows its room count"
+        );
+        // REQ-001 (nesting) + REQ-002 (sub-region count): scope the assertions to the
+        // Hollowmere panel so a sub-region's own count AND its placement under the
+        // correct parent are pinned — kills the `room_counts` sub-region `+=` mutant
+        // and the `s.region == region.id` filter mutant.
+        let town = world
+            .rooms
+            .values()
+            .filter(|r| r.subregion.as_deref() == Some("town"))
+            .count();
+        let after_hollowmere = &html[html
+            .find("<h2>Hollowmere</h2>")
+            .expect("the Hollowmere panel is present")..];
+        let hollowmere_panel = &after_hollowmere[..after_hollowmere
+            .find("</section>")
+            .expect("the Hollowmere panel closes")];
+        assert!(
+            hollowmere_panel.contains(&format!(
+                r#"<li>Hollowmere Town — {town} rooms <a href="/editor">Open in editor</a></li>"#
+            )),
+            "Hollowmere Town shows its room count inside the Hollowmere panel"
+        );
+        assert!(
+            hollowmere_panel.contains("Town Wall"),
+            "Town Wall nests under Hollowmere"
+        );
+        assert!(
+            !hollowmere_panel.contains("Roadside Wilds"),
+            "Roadside Wilds belongs to The Ashen Road, not Hollowmere"
+        );
     }
 }
