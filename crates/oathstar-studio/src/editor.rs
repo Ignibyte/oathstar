@@ -6,14 +6,15 @@
 
 use axum::{
     body::Bytes,
-    extract::State,
+    extract::{Path, State},
     http::{header, StatusCode},
     response::{IntoResponse, Redirect, Response},
     Json,
 };
 use axum_extra::extract::cookie::CookieJar;
-use oathstar_auth::{principal_from_cookie, require_role, AuthRole};
+use oathstar_auth::{principal_from_cookie, require_role, AuthRole, SessionStore};
 use oathstar_content::{MapDocument, MapValidationError};
+use oathstar_storage::{validate_save_slot_name, SaveStore};
 use serde::Serialize;
 
 use crate::{render, StudioState};
@@ -38,6 +39,20 @@ struct Failure {
     error: Option<MapValidationError>,
 }
 
+/// A successful map save — the id under which the document was persisted.
+#[derive(Serialize)]
+struct Saved {
+    ok: bool,
+    id: String,
+}
+
+/// The ids of all persisted map documents.
+#[derive(Serialize)]
+struct MapList {
+    ok: bool,
+    maps: Vec<String>,
+}
+
 /// A refusal response with the given status and message (no typed error).
 fn refuse(status: StatusCode, message: &str) -> Response {
     (
@@ -51,6 +66,19 @@ fn refuse(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
+/// The refusal [`Response`] for a request that is not an authorized Editor:
+/// `Some(401)` when there is no session, `Some(403)` for a non-editor, or `None`
+/// when the cookie resolves to a principal that grants the Editor role.
+fn editor_refusal(jar: &CookieJar, sessions: &SessionStore) -> Option<Response> {
+    let Some(principal) = principal_from_cookie(jar, sessions) else {
+        return Some(refuse(StatusCode::UNAUTHORIZED, "authentication required"));
+    };
+    if require_role(&principal, AuthRole::Editor).is_err() {
+        return Some(refuse(StatusCode::FORBIDDEN, "editor role required"));
+    }
+    None
+}
+
 /// `POST /editor/maps/validate` — validate + materialize a posted map document.
 ///
 /// Gated to the Editor role (an Owner session grants it). Answers `200 {ok:true,
@@ -58,11 +86,8 @@ fn refuse(status: StatusCode, message: &str) -> Response {
 /// fails validation, and `401`/`403`/`400` (typed JSON) for a missing session, a
 /// non-editor, or a malformed body.
 pub async fn validate(State(studio): State<StudioState>, jar: CookieJar, body: Bytes) -> Response {
-    let Some(principal) = principal_from_cookie(&jar, &studio.sessions) else {
-        return refuse(StatusCode::UNAUTHORIZED, "authentication required");
-    };
-    if require_role(&principal, AuthRole::Editor).is_err() {
-        return refuse(StatusCode::FORBIDDEN, "editor role required");
+    if let Some(refusal) = editor_refusal(&jar, &studio.sessions) {
+        return refusal;
     }
 
     let Ok(document) = serde_json::from_slice::<MapDocument>(&body) else {
@@ -90,6 +115,76 @@ pub async fn validate(State(studio): State<StudioState>, jar: CookieJar, body: B
         )
             .into_response(),
     }
+}
+
+/// `POST /editor/maps` — persist a posted map document under its own id.
+///
+/// Gated to the Editor role. The document's `id` is the storage slot and must
+/// pass [`validate_save_slot_name`] (`400` otherwise). Drafts are allowed — the
+/// document is NOT required to materialize (use `/editor/maps/validate` for that
+/// feedback). Answers `200 {ok:true, id}` on success.
+pub async fn save_map(State(studio): State<StudioState>, jar: CookieJar, body: Bytes) -> Response {
+    if let Some(refusal) = editor_refusal(&jar, &studio.sessions) {
+        return refusal;
+    }
+    let Ok(document) = serde_json::from_slice::<MapDocument>(&body) else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "request body is not a valid map document",
+        );
+    };
+    if validate_save_slot_name(&document.id).is_err() {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "map id is not a valid storage name",
+        );
+    }
+    if studio.maps.write_json(&document.id, &document).is_err() {
+        return refuse(StatusCode::INTERNAL_SERVER_ERROR, "failed to save map");
+    }
+    Json(Saved {
+        ok: true,
+        id: document.id,
+    })
+    .into_response()
+}
+
+/// `GET /editor/maps` — list the ids of all persisted map documents.
+///
+/// Gated to the Editor role. Answers `200 {ok:true, maps:[…]}`.
+pub async fn list_maps(State(studio): State<StudioState>, jar: CookieJar) -> Response {
+    if let Some(refusal) = editor_refusal(&jar, &studio.sessions) {
+        return refusal;
+    }
+    studio.maps.list().map_or_else(
+        |_| refuse(StatusCode::INTERNAL_SERVER_ERROR, "failed to list maps"),
+        |maps| Json(MapList { ok: true, maps }).into_response(),
+    )
+}
+
+/// `GET /editor/maps/{id}` — return a persisted map document for reopening.
+///
+/// Gated to the Editor role. The `id` must pass [`validate_save_slot_name`]
+/// (`400` otherwise). Answers `200` with the document JSON, or `404` when no map
+/// is stored under that id.
+pub async fn load_map(
+    State(studio): State<StudioState>,
+    jar: CookieJar,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(refusal) = editor_refusal(&jar, &studio.sessions) {
+        return refusal;
+    }
+    if validate_save_slot_name(&id).is_err() {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "map id is not a valid storage name",
+        );
+    }
+    studio.maps.read_json::<MapDocument>(&id).map_or_else(
+        |_| refuse(StatusCode::NOT_FOUND, "map not found"),
+        |document| Json(document).into_response(),
+    )
 }
 
 /// A ref-free, valid starter [`MapDocument`] (JSON) the editor opens with — a
@@ -173,7 +268,7 @@ pub async fn arctic_sheet() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{arctic_sheet, editor_page, validate, STARTER_DOC};
+    use super::{arctic_sheet, editor_page, list_maps, load_map, save_map, validate, STARTER_DOC};
     use crate::StudioState;
     use axum::body::{to_bytes, Body, Bytes};
     use axum::extract::{FromRequestParts, State};
@@ -200,6 +295,13 @@ mod tests {
     }"#;
 
     fn studio() -> StudioState {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        // A unique, freshly-emptied maps dir per call so save/list/load tests
+        // never collide or see stale entries from a prior run.
+        static MAPS_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
+        let seq = MAPS_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let maps_dir = std::env::temp_dir().join(format!("oathstar-studio-test-maps-{seq}"));
+        let _ = std::fs::remove_dir_all(&maps_dir);
         StudioState {
             sessions: SessionStore::new(),
             owner_secret: Some("pw".to_owned()),
@@ -207,6 +309,7 @@ mod tests {
             world: Arc::new(
                 oathstar_content::load_beginner_world().expect("the beginner world loads"),
             ),
+            maps: oathstar_storage::FileSaveStore::new(maps_dir),
         }
     }
 
@@ -247,6 +350,184 @@ mod tests {
             .expect("the body collects");
         let value = serde_json::from_slice(&bytes).expect("a JSON body");
         (status, value)
+    }
+
+    /// Collect a handler `Response` into `(status, json body)`.
+    async fn decode(response: axum::response::Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("the body collects");
+        (status, serde_json::from_slice(&bytes).expect("a JSON body"))
+    }
+
+    async fn call_save(
+        state: StudioState,
+        cookie: Option<String>,
+        body: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let jar = jar(cookie.as_deref()).await;
+        decode(save_map(State(state), jar, Bytes::from(body.to_owned())).await).await
+    }
+
+    async fn call_list(
+        state: StudioState,
+        cookie: Option<String>,
+    ) -> (StatusCode, serde_json::Value) {
+        let jar = jar(cookie.as_deref()).await;
+        decode(list_maps(State(state), jar).await).await
+    }
+
+    async fn call_load(
+        state: StudioState,
+        cookie: Option<String>,
+        id: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let jar = jar(cookie.as_deref()).await;
+        decode(load_map(State(state), jar, axum::extract::Path(id.to_owned())).await).await
+    }
+
+    /// A studio whose maps store root is a regular FILE, so every store op fails —
+    /// exercises the 500 paths.
+    fn studio_with_maps_as_file(tag: &str) -> StudioState {
+        let file = std::env::temp_dir().join(format!("oathstar-studio-test-maps-file-{tag}"));
+        std::fs::remove_dir_all(&file).ok();
+        std::fs::write(&file, b"not a directory").expect("seed a file");
+        let mut state = studio();
+        state.maps = oathstar_storage::FileSaveStore::new(file);
+        state
+    }
+
+    #[tokio::test]
+    async fn save_list_load_round_trips_for_an_editor() {
+        let state = studio();
+        let session = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let cookie = cookie_header(&session);
+
+        let (status, body) = call_save(state.clone(), Some(cookie.clone()), VALID_DOC).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["id"], "m");
+
+        let (status, body) = call_list(state.clone(), Some(cookie.clone())).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["maps"], serde_json::json!(["m"]));
+
+        let (status, body) = call_load(state, Some(cookie), "m").await;
+        assert_eq!(status, StatusCode::OK);
+        let loaded: MapDocument = serde_json::from_value(body).expect("load returns a document");
+        let expected: MapDocument = serde_json::from_str(VALID_DOC).expect("VALID_DOC parses");
+        assert_eq!(loaded, expected, "load returns the saved document");
+    }
+
+    #[tokio::test]
+    async fn map_endpoints_refuse_an_anonymous_caller() {
+        assert_eq!(
+            call_save(studio(), None, VALID_DOC).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(call_list(studio(), None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            call_load(studio(), None, "m").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn map_endpoints_refuse_a_non_editor() {
+        let with_player = || {
+            let state = studio();
+            let session = state
+                .sessions
+                .create_session(principal(vec![AuthRole::Player]));
+            let cookie = cookie_header(&session);
+            (state, cookie)
+        };
+        let (state, cookie) = with_player();
+        assert_eq!(
+            call_save(state, Some(cookie), VALID_DOC).await.0,
+            StatusCode::FORBIDDEN
+        );
+        let (state, cookie) = with_player();
+        assert_eq!(
+            call_list(state, Some(cookie)).await.0,
+            StatusCode::FORBIDDEN
+        );
+        let (state, cookie) = with_player();
+        assert_eq!(
+            call_load(state, Some(cookie), "m").await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn save_rejects_a_malformed_body() {
+        let state = studio();
+        let session = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let (status, body) = call_save(state, Some(cookie_header(&session)), "{not json").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["message"], "request body is not a valid map document");
+    }
+
+    #[tokio::test]
+    async fn save_rejects_a_path_unsafe_id() {
+        let bad = VALID_DOC.replacen(r#""id":"m""#, r#""id":"../escape""#, 1);
+        let state = studio();
+        let session = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let (status, body) = call_save(state, Some(cookie_header(&session)), &bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["message"], "map id is not a valid storage name");
+    }
+
+    #[tokio::test]
+    async fn load_a_missing_map_is_not_found() {
+        let state = studio();
+        let session = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let (status, body) = call_load(state, Some(cookie_header(&session)), "absent").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["message"], "map not found");
+    }
+
+    #[tokio::test]
+    async fn load_rejects_a_path_unsafe_id() {
+        let state = studio();
+        let session = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let (status, body) = call_load(state, Some(cookie_header(&session)), "../escape").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["message"], "map id is not a valid storage name");
+    }
+
+    #[tokio::test]
+    async fn save_reports_a_storage_failure() {
+        let state = studio_with_maps_as_file("save");
+        let session = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let (status, body) = call_save(state, Some(cookie_header(&session)), VALID_DOC).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["message"], "failed to save map");
+    }
+
+    #[tokio::test]
+    async fn list_reports_a_storage_failure() {
+        let state = studio_with_maps_as_file("list");
+        let session = state
+            .sessions
+            .create_session(principal(vec![AuthRole::Editor]));
+        let (status, body) = call_list(state, Some(cookie_header(&session))).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["message"], "failed to list maps");
     }
 
     /// Call `editor_page` (the GET page handler) with an optional session cookie.

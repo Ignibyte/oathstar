@@ -74,6 +74,10 @@ mod tests {
             owner_secret: Some("pw".to_owned()),
             catalog: Arc::new(ContentCatalog::default()),
             world: Arc::new(load_beginner_world().expect("the beginner world loads")),
+            // These tests never touch the maps store; a never-written placeholder.
+            maps: oathstar_storage::FileSaveStore::new(
+                std::env::temp_dir().join("oathstar-studio-test-unused"),
+            ),
         }
     }
 

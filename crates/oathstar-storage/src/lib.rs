@@ -137,6 +137,45 @@ impl FileSaveStore {
         &self.root
     }
 
+    /// List the ids of all saved slots in the store, sorted ascending.
+    ///
+    /// Reads the store root for `<id>.json` files and strips the extension,
+    /// keeping only ids that pass [`validate_save_slot_name`] — a hand-planted
+    /// file with a malformed name is ignored rather than surfaced. Temp files
+    /// (`*.json.tmp`) and any non-`.json` entry are skipped. A missing root is
+    /// not an error: an empty store lists nothing.
+    ///
+    /// # Errors
+    /// Returns an error if the root exists but cannot be read.
+    pub fn list(&self) -> anyhow::Result<Vec<String>> {
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to read store directory {}", self.root.display())
+                })
+            }
+        };
+        let mut ids = Vec::new();
+        // `flatten` drops any entry that fails to read (best-effort listing);
+        // `to_string_lossy` plus the slot-name re-validation below reject any
+        // non-UTF-8 or otherwise unusable name.
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            // `strip_suffix` skips `*.json.tmp` (ends in `.tmp`) and non-json files.
+            let Some(id) = name.strip_suffix(".json") else {
+                continue;
+            };
+            if validate_save_slot_name(id).is_ok() {
+                ids.push(id.to_owned());
+            }
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
     fn path_for(&self, name: &str) -> Result<PathBuf, SaveSlotError> {
         validate_save_slot_name(name)?;
         Ok(self.root.join(format!("{name}.json")))
@@ -234,6 +273,67 @@ mod tests {
     fn root_returns_configured_path() {
         let store = FileSaveStore::new(scratch_dir("root"));
         assert_eq!(store.root(), scratch_dir("root").as_path());
+    }
+
+    #[test]
+    fn list_missing_root_is_empty() {
+        let store = FileSaveStore::new(scratch_dir("list-missing"));
+        std::fs::remove_dir_all(store.root()).ok();
+        assert!(
+            store
+                .list()
+                .expect("listing a missing store is ok")
+                .is_empty(),
+            "a missing store root lists nothing"
+        );
+    }
+
+    #[test]
+    fn list_on_a_non_directory_root_is_err() {
+        let file = scratch_dir("list-as-file");
+        std::fs::remove_dir_all(&file).ok();
+        std::fs::remove_file(&file).ok();
+        std::fs::write(&file, b"not a directory").expect("seed a regular file");
+        let store = FileSaveStore::new(&file);
+        assert!(store.list().is_err(), "listing a non-directory root errors");
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn list_returns_sorted_ids_skipping_tmp_and_malformed() {
+        let dir = scratch_dir("list-contents");
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FileSaveStore::new(&dir);
+        // Two valid saves, written out of order to prove the result is sorted.
+        store
+            .write_json(
+                "zeta",
+                &Hero {
+                    name: "Z".to_string(),
+                    level: 1,
+                },
+            )
+            .expect("write zeta");
+        store
+            .write_json(
+                "alpha",
+                &Hero {
+                    name: "A".to_string(),
+                    level: 2,
+                },
+            )
+            .expect("write alpha");
+        // A leftover temp file, a non-json file, and a json file whose stripped
+        // name fails validation — all must be skipped.
+        std::fs::write(dir.join("draft.json.tmp"), b"{}").expect("seed tmp");
+        std::fs::write(dir.join("notes.txt"), b"x").expect("seed txt");
+        std::fs::write(dir.join("bad..name.json"), b"{}").expect("seed bad");
+        assert_eq!(
+            store.list().expect("list ok"),
+            vec!["alpha".to_string(), "zeta".to_string()],
+            "only valid ids, sorted, temp/non-json/malformed skipped"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

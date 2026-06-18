@@ -76,6 +76,10 @@ mod tests {
             world: std::sync::Arc::new(
                 oathstar_content::load_beginner_world().expect("the beginner world loads"),
             ),
+            // These tests never touch the maps store; a never-written placeholder.
+            maps: oathstar_storage::FileSaveStore::new(
+                std::env::temp_dir().join("oathstar-studio-test-unused"),
+            ),
         }
     }
 

@@ -92,7 +92,11 @@ impl SaveLoadResponse {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let world = oathstar_content::load_beginner_world()?;
+    // Opt into an authored world via `OATHSTAR_WORLD` (a path to a saved map
+    // document). With none, the baked beginner world loads; a configured-but-invalid
+    // world is a loud startup error, not a silent fallback to beginner.
+    let authored = authored_world_path(std::env::var("OATHSTAR_WORLD").ok());
+    let world = oathstar_content::load_startup_world(authored.as_deref())?;
     let mut engine = Engine::try_new(world)?;
     // Emit the opening scene once, up front, and keep it to seed each new
     // subscriber. begin() does not move the player, so /state stays consistent.
@@ -361,12 +365,30 @@ fn event_to_json(event: &GameEvent) -> Option<String> {
     serde_json::to_string(event).ok()
 }
 
+/// The authored-world path from a raw `OATHSTAR_WORLD` value: `None` when unset or
+/// blank (a set-but-empty var is treated as unset), otherwise the path. Split out
+/// of `main` so the blank-≠-unset rule is unit-testable.
+fn authored_world_path(raw: Option<String>) -> Option<std::path::PathBuf> {
+    raw.filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use oathstar_protocol::{
         CombatOutcome, EventChannel, GameEventKind, OathStatus, OutputComponent,
     };
+
+    #[test]
+    fn authored_world_path_treats_blank_as_unset() {
+        assert_eq!(authored_world_path(None), None);
+        assert_eq!(authored_world_path(Some(String::new())), None);
+        assert_eq!(
+            authored_world_path(Some("worlds/x.json".to_owned())),
+            Some(std::path::PathBuf::from("worlds/x.json"))
+        );
+    }
 
     #[tokio::test]
     async fn root_serves_the_status_line() {

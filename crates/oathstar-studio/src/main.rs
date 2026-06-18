@@ -13,6 +13,7 @@ use axum::{
 };
 use oathstar_auth::SessionStore;
 use oathstar_content::{ContentCatalog, WorldDefinition};
+use oathstar_storage::FileSaveStore;
 
 mod config;
 mod editor;
@@ -30,6 +31,8 @@ struct StudioState {
     owner_secret: Option<String>,
     catalog: Arc<ContentCatalog>,
     world: Arc<WorldDefinition>,
+    /// Persistent store for authored map documents (root: `OATHSTAR_MAPS_DIR`).
+    maps: FileSaveStore,
 }
 
 #[tokio::main]
@@ -41,11 +44,15 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Authored map documents persist here (loopback, owner-owned).
+    let maps_dir = resolve_maps_dir(std::env::var("OATHSTAR_MAPS_DIR").ok());
+
     let state = StudioState {
         sessions: SessionStore::new(),
         owner_secret: config.owner_secret,
         catalog: Arc::new(oathstar_content::beginner_catalog()?),
         world: Arc::new(oathstar_content::load_beginner_world()?),
+        maps: FileSaveStore::new(maps_dir),
     };
 
     let app = Router::new()
@@ -57,6 +64,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/logout", post(handlers::logout))
         .route("/editor", get(editor::editor_page))
         .route("/editor/maps/validate", post(editor::validate))
+        .route(
+            "/editor/maps",
+            post(editor::save_map).get(editor::list_maps),
+        )
+        .route("/editor/maps/{id}", get(editor::load_map))
         .route("/tilesets/arctic.png", get(editor::arctic_sheet))
         .route("/ui/panel-frame.png", get(ui::panel_frame))
         .route("/ui/button.png", get(ui::button))
@@ -71,4 +83,24 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// The maps-store root from a raw `OATHSTAR_MAPS_DIR` value: the value when set and
+/// non-blank (a set-but-empty var is treated as unset), otherwise `maps`. Split out
+/// of `main` so the blank-≠-unset rule is unit-testable.
+fn resolve_maps_dir(raw: Option<String>) -> String {
+    raw.filter(|dir| !dir.is_empty())
+        .unwrap_or_else(|| "maps".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_maps_dir;
+
+    #[test]
+    fn resolve_maps_dir_treats_blank_as_unset() {
+        assert_eq!(resolve_maps_dir(None), "maps");
+        assert_eq!(resolve_maps_dir(Some(String::new())), "maps");
+        assert_eq!(resolve_maps_dir(Some("custom".to_owned())), "custom");
+    }
 }

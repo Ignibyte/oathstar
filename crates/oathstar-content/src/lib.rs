@@ -1,4 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{bail, Context};
 use oathstar_core::{
@@ -180,6 +184,118 @@ fn load_world_from_toml(
     Ok(world)
 }
 
+/// Why loading an authored world from a [`MapDocument`] file failed.
+///
+/// The file is untrusted input, so each failure mode is a typed variant rather
+/// than a panic: the path could not be read, its bytes were not a valid
+/// `MapDocument`, or the document could not materialize into a valid world.
+#[derive(Debug)]
+pub enum AuthoredWorldError {
+    /// The authored-world file could not be read.
+    Read {
+        /// The path that could not be read.
+        path: PathBuf,
+        /// The underlying IO error.
+        source: std::io::Error,
+    },
+    /// The file's bytes were not a valid `MapDocument` JSON.
+    Parse {
+        /// The path whose contents failed to parse.
+        path: PathBuf,
+        /// The underlying JSON error.
+        source: serde_json::Error,
+    },
+    /// The document parsed but did not materialize into a valid world.
+    Materialize {
+        /// The path whose document failed to materialize.
+        path: PathBuf,
+        /// The underlying validation error.
+        source: MapValidationError,
+    },
+}
+
+impl std::fmt::Display for AuthoredWorldError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Read { path, .. } => {
+                write!(f, "failed to read authored world file {}", path.display())
+            }
+            Self::Parse { path, .. } => write!(
+                f,
+                "authored world file {} is not a valid map document",
+                path.display()
+            ),
+            Self::Materialize { path, .. } => write!(
+                f,
+                "authored world file {} did not materialize into a valid world",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AuthoredWorldError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Read { source, .. } => Some(source),
+            Self::Parse { source, .. } => Some(source),
+            Self::Materialize { source, .. } => Some(source),
+        }
+    }
+}
+
+/// Load an authored world from a [`MapDocument`] JSON file on disk.
+///
+/// The file is treated as untrusted input: it is read, parsed as a
+/// `MapDocument`, then materialized against `catalog` into a validated
+/// [`WorldDefinition`]. Every failure is a typed [`AuthoredWorldError`] — there
+/// are no panics on the input path.
+///
+/// # Errors
+/// Returns [`AuthoredWorldError`] if the file cannot be read, is not valid
+/// `MapDocument` JSON, or does not materialize into a valid world.
+pub fn load_authored_world(
+    path: &Path,
+    catalog: &ContentCatalog,
+) -> Result<WorldDefinition, AuthoredWorldError> {
+    let json = fs::read_to_string(path).map_err(|source| AuthoredWorldError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let document: MapDocument =
+        serde_json::from_str(&json).map_err(|source| AuthoredWorldError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    document
+        .materialize(catalog)
+        .map_err(|source| AuthoredWorldError::Materialize {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+/// Select and load the world the game should start with.
+///
+/// With no `authored` path the baked beginner world loads unchanged. With a
+/// path, the authored `MapDocument` there is loaded and materialized against the
+/// beginner catalog (entity/item authoring is a later slice). A configured but
+/// invalid authored world is a loud error — the caller does NOT silently fall
+/// back to the beginner world.
+///
+/// # Errors
+/// Returns an error if the beginner world fails to load, or if a configured
+/// authored world cannot be read, parsed, or materialized.
+pub fn load_startup_world(authored: Option<&Path>) -> anyhow::Result<WorldDefinition> {
+    match authored {
+        None => load_beginner_world(),
+        Some(path) => {
+            let catalog = beginner_catalog()?;
+            load_authored_world(path, &catalog).map_err(anyhow::Error::new)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +309,95 @@ mod tests {
         let world = load_beginner_world().expect("beginner module should load");
         assert_eq!(world.start_room_id, "hollowmere_square");
         assert!(world.rooms.contains_key("bell_eater_roost"));
+    }
+
+    // A valid, reference-free map document (two rooms, spawn on `alpha`) that
+    // materializes against any catalog.
+    const AUTHORED_DOC: &str = r#"{
+        "id":"authored","title":"Authored","tile_size":16,"width":4,"height":4,"floors":1,
+        "terrain_palette":{"floor":{"tile":"f","passable":true}},
+        "terrain":[{"x":0,"y":0,"z":0,"terrain":"floor"},{"x":1,"y":0,"z":0,"terrain":"floor"}],
+        "regions":{"reg":{"id":"reg","name":"Reg"}},
+        "rooms":[{"x":0,"y":0,"z":0,"id":"alpha","region":"reg"},{"x":1,"y":0,"z":0,"id":"beta","region":"reg"}],
+        "spawn":{"x":0,"y":0,"z":0}
+    }"#;
+
+    // Parses as a `MapDocument` but fails to materialize (unsupported tile size).
+    const UNMATERIALIZABLE_DOC: &str = r#"{
+        "id":"bad","title":"Bad","tile_size":7,"width":4,"height":4,"floors":1,
+        "terrain_palette":{},"terrain":[],"regions":{},"rooms":[],"spawn":null
+    }"#;
+
+    fn write_fixture(tag: &str, contents: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("oathstar-content-test-{tag}.json"));
+        fs::write(&path, contents).expect("write fixture");
+        path
+    }
+
+    #[test]
+    fn load_authored_world_materializes_a_valid_document() {
+        let path = write_fixture("valid", AUTHORED_DOC);
+        let catalog = beginner_catalog().expect("catalog loads");
+        let world = load_authored_world(&path, &catalog).expect("authored world loads");
+        assert_eq!(world.start_room_id, "alpha");
+        assert!(world.rooms.contains_key("beta"));
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn load_authored_world_missing_file_is_read_error() {
+        let path = std::env::temp_dir().join("oathstar-content-test-absent.json");
+        fs::remove_file(&path).ok();
+        let catalog = beginner_catalog().expect("catalog loads");
+        let error = load_authored_world(&path, &catalog).expect_err("a missing file errors");
+        assert!(matches!(error, AuthoredWorldError::Read { .. }));
+        assert!(!error.to_string().is_empty(), "Read has a message");
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "Read wraps a source"
+        );
+    }
+
+    #[test]
+    fn load_authored_world_malformed_json_is_parse_error() {
+        let path = write_fixture("malformed", "{not json");
+        let catalog = beginner_catalog().expect("catalog loads");
+        let error = load_authored_world(&path, &catalog).expect_err("malformed JSON errors");
+        assert!(matches!(error, AuthoredWorldError::Parse { .. }));
+        assert!(!error.to_string().is_empty(), "Parse has a message");
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "Parse wraps a source"
+        );
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn load_authored_world_unmaterializable_is_materialize_error() {
+        let path = write_fixture("unmaterializable", UNMATERIALIZABLE_DOC);
+        let catalog = beginner_catalog().expect("catalog loads");
+        let error = load_authored_world(&path, &catalog).expect_err("an invalid doc errors");
+        assert!(matches!(error, AuthoredWorldError::Materialize { .. }));
+        assert!(!error.to_string().is_empty(), "Materialize has a message");
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "Materialize wraps a source"
+        );
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn load_startup_world_none_loads_beginner() {
+        let world = load_startup_world(None).expect("beginner loads");
+        assert_eq!(world.start_room_id, "hollowmere_square");
+    }
+
+    #[test]
+    fn load_startup_world_some_loads_the_authored_world() {
+        let path = write_fixture("startup", AUTHORED_DOC);
+        let world = load_startup_world(Some(&path)).expect("authored loads");
+        assert_eq!(world.start_room_id, "alpha");
+        fs::remove_file(&path).ok();
     }
 
     // RT-4 (REQ-003, ticket #52): the migrated beginner world is 2D — every room

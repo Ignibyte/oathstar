@@ -210,6 +210,20 @@ pub fn dashboard_page(principal: &Principal) -> Html<String> {
 /// is verified by browser smoke, not `node --test` (it is never imported).
 const EDITOR_GLUE: &str = r#"
 let doc = JSON.parse(document.getElementById("map-doc").textContent);
+// Reopen a saved map when the page is opened as `/editor?map=<id>`: fetch the
+// persisted document and use it in place of the embedded starter. Any failure
+// (missing map, network error) silently keeps the starter doc.
+const savedMapId = new URLSearchParams(window.location.search).get("map");
+if (savedMapId) {
+  try {
+    const response = await fetch("/editor/maps/" + encodeURIComponent(savedMapId));
+    if (response.ok) {
+      doc = await response.json();
+    }
+  } catch (_error) {
+    /* keep the embedded starter document */
+  }
+}
 const canvas = document.getElementById("map");
 const palette = document.getElementById("palette");
 const TILE = 40;
