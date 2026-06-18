@@ -150,6 +150,22 @@ fn escape_html(input: &str) -> String {
     out
 }
 
+/// Percent-encode `input` for a URL query value: RFC 3986 unreserved bytes
+/// (`A-Za-z0-9` and `-._~`) pass through; every other byte (incl. non-ASCII, as its
+/// UTF-8 bytes) becomes `%XX`. Sub-region ids are free author text, so the deep-link
+/// query value goes through this before it reaches the `href`.
+fn url_query_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for &byte in input.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
+}
+
 /// A persisted authored map, summarized for the regions dashboard list.
 pub struct MapSummary {
     /// The storage slot / map id (the `/regions/{id}` target).
@@ -248,10 +264,11 @@ pub fn region_editor_page(map_id: &str, doc: &MapDocument, error: Option<&str>) 
             let sid = escape_html(&sub.id);
             let sname = escape_html(&sub.name);
             let sdesc = escape_html(&sub.description);
+            let senc = url_query_encode(&sub.id);
             let srooms = subregion_rooms.get(sub.id.as_str()).copied().unwrap_or(0);
             let _ = write!(
                 body,
-                r#"<li><span>{sname} — {srooms} rooms</span>
+                r#"<li><span>{sname} — {srooms} rooms</span> <a class="cta" href="/editor?map={map_id}&subregion={senc}">Open in editor</a>
 <form method="post" action="/regions/{map_id}/subregion" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="{sid}"><label>Name <input name="name" value="{sname}" aria-label="Name for sub-region {sname}"></label> <label>Description <textarea name="description" aria-label="Description for sub-region {sname}">{sdesc}</textarea></label> <button type="submit">Save</button></form>
 <form method="post" action="/regions/{map_id}/subregion" class="delete"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{sid}"><button type="submit">Delete</button></form></li>"#,
             );
@@ -325,6 +342,9 @@ let doc = JSON.parse(document.getElementById("map-doc").textContent);
 // persisted document and use it in place of the embedded starter. Any failure
 // (missing map, network error) silently keeps the starter doc.
 const savedMapId = new URLSearchParams(window.location.search).get("map");
+// The sub-region to highlight, from `/editor?subregion=<id>` (#51c). Passed to the
+// pure draw model, which flags that sub-region's room cells as focused.
+const focusSubregion = new URLSearchParams(window.location.search).get("subregion");
 if (savedMapId) {
   try {
     const response = await fetch("/editor/maps/" + encodeURIComponent(savedMapId));
@@ -374,7 +394,7 @@ function drawGrid() {
 
 function redraw() {
   ctx.clearRect(0, 0, size.cssWidth, size.cssHeight);
-  for (const op of editorDrawPlan(doc, { z: Z, tilePixels: TILE }).ops) {
+  for (const op of editorDrawPlan(doc, { z: Z, tilePixels: TILE, focusSubregion }).ops) {
     if (op.sprites.length) {
       for (const s of op.sprites) {
         const img = sheets[s.tileset];
@@ -389,6 +409,11 @@ function redraw() {
     if (op.glyph) {
       ctx.fillStyle = op.textColor;
       ctx.fillText(op.glyph, op.x + op.size / 2, op.y + op.size / 2);
+    }
+    if (op.focused) {
+      ctx.strokeStyle = "rgb(229, 197, 111)";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(op.x + 1.5, op.y + 1.5, op.size - 3, op.size - 3);
     }
   }
   drawGrid();
@@ -779,5 +804,42 @@ mod tests {
             !html.contains("/regions/internal/"),
             "actions must not use doc.id"
         );
+    }
+
+    // ---- #51c: sub-region → tile-editor deep link + focus ----
+
+    #[test]
+    fn region_editor_page_links_each_subregion_into_the_editor() {
+        // REQ-001: each sub-region row links to the tile editor for its map, the
+        // sub-region id percent-encoded in the query (a space → %20).
+        let doc: oathstar_content::MapDocument = serde_json::from_str(
+            r#"{"id":"m","title":"T","tile_size":16,"width":1,"height":1,"floors":1,
+            "regions":{"reg":{"id":"reg","name":"Region"}},
+            "subregions":{"a b":{"id":"a b","name":"Vale","region":"reg"}}}"#,
+        )
+        .expect("fixture parses");
+        let html = super::region_editor_page("m", &doc, None).0;
+        assert!(html
+            .contains(r#"<a class="cta" href="/editor?map=m&subregion=a%20b">Open in editor</a>"#));
+    }
+
+    #[test]
+    fn url_query_encode_keeps_unreserved_and_encodes_the_rest() {
+        // REQ-001 helper: RFC-3986 unreserved pass through; everything else → %XX
+        // (uppercase); non-ASCII as its UTF-8 bytes.
+        assert_eq!(super::url_query_encode("Az09-._~"), "Az09-._~");
+        assert_eq!(super::url_query_encode("a b&c=d"), "a%20b%26c%3Dd");
+        assert_eq!(super::url_query_encode("é"), "%C3%A9");
+        assert_eq!(super::url_query_encode(""), "");
+    }
+
+    #[test]
+    fn editor_page_wires_the_subregion_focus() {
+        // REQ-004: the glue reads `?subregion=`, passes `focusSubregion` to the draw
+        // model, and outlines focused cells.
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains(r#"new URLSearchParams(window.location.search).get("subregion")"#));
+        assert!(html.contains("editorDrawPlan(doc, { z: Z, tilePixels: TILE, focusSubregion })"));
+        assert!(html.contains("if (op.focused) {"));
     }
 }

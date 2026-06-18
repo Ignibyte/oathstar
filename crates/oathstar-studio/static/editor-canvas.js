@@ -69,10 +69,10 @@ export function editorCellKind(doc, x, y, z) {
  * a glyph (an authored room sits under the spawn marker).
  *
  * @param {object} doc a MapDocument
- * @param {{z?: number, tilePixels: number}} opts
+ * @param {{z?: number, tilePixels: number, focusSubregion?: (string|null)}} opts
  * @returns {{width: number, height: number, tile: number, ops: object[]}}
  */
-export function editorDrawPlan(doc, { z = 0, tilePixels }) {
+export function editorDrawPlan(doc, { z = 0, tilePixels, focusSubregion = null }) {
   const tile = tilePixels;
   const tilesets = tilesetsById(doc);
   const spritesByCell = layerSpritesByCell(doc, z, tilesets);
@@ -91,6 +91,10 @@ export function editorDrawPlan(doc, { z = 0, tilePixels }) {
         stroke: palette.stroke,
         textColor: palette.text,
         glyph: room ? room.glyph || "." : null,
+        // Whether this room is in the focused sub-region (#51c) — set when the editor
+        // is opened via `/editor?subregion=<id>` from the regions dashboard; the seam
+        // outlines focused cells. Non-room cells and a null/unmatched focus stay false.
+        focused: room !== null && focusSubregion != null && room.subregion === focusSubregion,
         // Painted layer tiles at this cell, bottom layer first (ticket #48); the
         // seam blits these beneath the stroke/glyph, falling back to `fill` when
         // the cell carries no sprite.

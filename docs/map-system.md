@@ -376,6 +376,11 @@ it with authored-document CRUD over `id` / `name` / parent (retiring the
 sub-regions — a serde-additive `String` on the core `RegionDefinition`/`SubregionDefinition`
 (default-empty, `skip_serializing_if` so existing data stays byte-clean) that rides
 `materialize()`'s region clone into the runtime world unchanged, edited via a name-input +
-escaped description-`<textarea>` per row (the `rename` op became a combined `edit`). Richer
-region attributes (a coarse standing-default per `region-standing.md`) and per-sub-region
-map identity remain later slices; the baked seed is purged after replacement.
+escaped description-`<textarea>` per row (the `rename` op became a combined `edit`); slice 4
+(#51c) added a per-sub-region **"Open in editor" deep link** — each sub-region row links to
+its map's tile editor (`/editor?map=<map>&subregion=<id>`, the id percent-encoded), and the
+editor **highlights that sub-region's rooms** on the canvas (`editorDrawPlan`'s `focused`
+flag, read from `?subregion=`). **With slice 4, ticket #51 is complete** (list, CRUD,
+descriptions, editor link). A coarse standing-default (per `region-standing.md`) and the
+multi-map "one map per sub-region" architecture are separate future directions; the baked
+seed is purged after replacement.

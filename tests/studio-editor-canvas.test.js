@@ -292,3 +292,30 @@ test("editorDrawPlan: overlapping layers stack bottom-first in the sprite list",
     { sx: 8, sy: 0, sSize: 8, tileset: "arctic" },
   ]);
 });
+
+test("editorDrawPlan: focusSubregion flags only the focused sub-region's room cells (#51c)", () => {
+  const d = doc({
+    rooms: [
+      { x: 0, y: 0, z: 0, id: "a", region: "reg", subregion: "vale" },
+      { x: 1, y: 0, z: 0, id: "b", region: "reg", subregion: "other" },
+      { x: 2, y: 0, z: 0, id: "c", region: "reg" },
+    ],
+  });
+  const ops = editorDrawPlan(d, { z: 0, tilePixels: 10, focusSubregion: "vale" }).ops;
+  assert.equal(ops[0].focused, true); // (0,0) room in the focused sub-region
+  assert.equal(ops[1].focused, false); // (1,0) room in another sub-region
+  assert.equal(ops[2].focused, false); // (2,0) room with no subregion
+  assert.equal(ops[3].focused, false); // (0,1) a non-room cell
+});
+
+test("editorDrawPlan: no / unknown focusSubregion leaves every cell unfocused (#51c)", () => {
+  const d = doc({
+    rooms: [{ x: 0, y: 0, z: 0, id: "a", region: "reg", subregion: "vale" }],
+  });
+  for (const op of editorDrawPlan(d, { z: 0, tilePixels: 10 }).ops) {
+    assert.equal(op.focused, false); // default: no focus
+  }
+  for (const op of editorDrawPlan(d, { z: 0, tilePixels: 10, focusSubregion: "ghost" }).ops) {
+    assert.equal(op.focused, false); // an unknown sub-region matches nothing
+  }
+});
