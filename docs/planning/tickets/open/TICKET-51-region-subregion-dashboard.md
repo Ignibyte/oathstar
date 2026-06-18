@@ -6,7 +6,7 @@ ticket_number: 51
 type: feature
 created: 2026-06-17
 intake: docs/planning/intake/INTAKE-studio-admin-and-world-model-program.md
-pipeline_spec:
+pipeline_spec: docs/planning/pipeline/active/WORK-region-subregion-authoring-v1.spec.md
 ---
 
 # TICKET-51-region-subregion-dashboard

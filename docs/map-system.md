@@ -359,9 +359,18 @@ and `/ui/button.png` (embedded via `include_bytes!`, the same pattern as the
 arctic sheet). The crops are committed under `public/ui/`. The game-client re-skin
 and the rest of the kit (icons, portraits, bars, banners) are later #50 slices.
 
-**Regions dashboard (ticket #51, slice 1).** The nav's **Regions** section is now a
-**read-only** dashboard: it loads the world at startup
-(`StudioState.world: Arc<WorldDefinition>`) and lists each region with its
-sub-regions nested beneath it and a room count for each, every sub-region linking
-to the editor. Editing region/sub-region attributes + persistence (`#51b`) and
-per-sub-region map identity + create/delete (`#51c`) are later slices.
+**Regions dashboard + authoring (ticket #51).** The nav's **Regions** section manages
+the regions and sub-regions of the **persisted authored maps** (the S1 store), not the
+baked world. `GET /regions` lists the saved maps (each with region / sub-region counts);
+`GET /regions/{id}` is a per-map editor that lists each region — with its nested
+sub-regions and room counts — beside Editor-gated **create / rename / delete** forms for
+both (`POST /regions/{id}/region` and `…/subregion`, op-dispatched). Every mutation runs
+through the content edit seam (the region methods on `MapDocument`): targeted referential
+checks give a precise refusal (duplicate id, unknown parent region, a still-referenced
+delete), then the whole document must still `materialize()` before it is persisted — a
+break is refused and the stored document left untouched. Author-supplied ids/names are
+HTML-escaped, and form actions key off the storage slot the page was loaded under (not
+the document's own `id`). Slice 1 shipped the read-only baked-world view; slice 2 (this)
+replaced it with authored-document CRUD over `id` / `name` / parent — retiring the
+`StudioState.world` field. Richer region attributes (descriptions, standing defaults) and
+per-sub-region map identity remain later slices; the baked seed is purged after replacement.

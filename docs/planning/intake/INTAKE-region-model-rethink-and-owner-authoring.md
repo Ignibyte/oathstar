@@ -135,8 +135,9 @@ it), not the data shape. Suggested sequence — purge LAST, per owner:
 This is a **living program intake** (S1–S5); it is promoted slice-by-slice and
 its top-level `status:` stays `candidate` until the program completes.
 
-- **S1 — PROMOTED (2026-06-17):** forge #53 (`9d39d561-de36-494a-93b5-cb2b7ce81698`),
-  pipeline `docs/planning/pipeline/active/WORK-persist-authored-worlds-v1.spec.md`,
-  ticket doc `docs/planning/tickets/open/TICKET-53-persist-authored-worlds.md`.
-- **S2–S5:** not yet promoted (region/sub-region CRUD UI; map visuals; model
-  enrichment; content reset + purge).
+- **S1 — SHIPPED (2026-06-17):** forge #53 (`9d39d561-…`) done; committed `c1f96cd`,
+  pushed; pipeline archived to `completed/`.
+- **S2 — PROMOTED (2026-06-17):** forge #51 (`341c0863-…`, the dashboard ticket's
+  CRUD continuation), pipeline
+  `docs/planning/pipeline/active/WORK-region-subregion-authoring-v1.spec.md`.
+- **S3–S5:** not yet promoted (map visuals; model enrichment; content reset + purge).

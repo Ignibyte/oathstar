@@ -15,6 +15,8 @@ pub use map_document::{
     Cell, ContentCatalog, MapDocument, MapValidationError, RefKind, RoomCell, TerrainCell,
     TerrainDef, SUPPORTED_TILE_SIZES,
 };
+mod map_edit;
+pub use map_edit::RegionEditError;
 // `load_beginner_world`/`materialize` already return one, so callers must be able
 // to name the type.
 pub use oathstar_core::WorldDefinition;
