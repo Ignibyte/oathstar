@@ -363,14 +363,19 @@ and the rest of the kit (icons, portraits, bars, banners) are later #50 slices.
 the regions and sub-regions of the **persisted authored maps** (the S1 store), not the
 baked world. `GET /regions` lists the saved maps (each with region / sub-region counts);
 `GET /regions/{id}` is a per-map editor that lists each region — with its nested
-sub-regions and room counts — beside Editor-gated **create / rename / delete** forms for
+sub-regions and room counts — beside Editor-gated **create / edit / delete** forms for
 both (`POST /regions/{id}/region` and `…/subregion`, op-dispatched). Every mutation runs
 through the content edit seam (the region methods on `MapDocument`): targeted referential
 checks give a precise refusal (duplicate id, unknown parent region, a still-referenced
 delete), then the whole document must still `materialize()` before it is persisted — a
 break is refused and the stored document left untouched. Author-supplied ids/names are
 HTML-escaped, and form actions key off the storage slot the page was loaded under (not
-the document's own `id`). Slice 1 shipped the read-only baked-world view; slice 2 (this)
-replaced it with authored-document CRUD over `id` / `name` / parent — retiring the
-`StudioState.world` field. Richer region attributes (descriptions, standing defaults) and
-per-sub-region map identity remain later slices; the baked seed is purged after replacement.
+the document's own `id`). Slice 1 shipped the read-only baked-world view; slice 2 replaced
+it with authored-document CRUD over `id` / `name` / parent (retiring the
+`StudioState.world` field); slice 3 added an editable **`description`** to regions and
+sub-regions — a serde-additive `String` on the core `RegionDefinition`/`SubregionDefinition`
+(default-empty, `skip_serializing_if` so existing data stays byte-clean) that rides
+`materialize()`'s region clone into the runtime world unchanged, edited via a name-input +
+escaped description-`<textarea>` per row (the `rename` op became a combined `edit`). Richer
+region attributes (a coarse standing-default per `region-standing.md`) and per-sub-region
+map identity remain later slices; the baked seed is purged after replacement.

@@ -142,7 +142,8 @@ impl MapDocument {
         Ok(self)
     }
 
-    /// Add a region with `id` and `name`.
+    /// Add a region with `id`, `name`, and `description` (the description may be
+    /// empty; it is trimmed).
     ///
     /// # Errors
     /// [`RegionEditError::BlankField`] for a blank `id`/`name`,
@@ -152,6 +153,7 @@ impl MapDocument {
         &self,
         id: &str,
         name: &str,
+        description: &str,
         catalog: &ContentCatalog,
     ) -> Result<Self, RegionEditError> {
         let id = non_blank(id, "id")?;
@@ -165,20 +167,23 @@ impl MapDocument {
             RegionDefinition {
                 id: id.to_owned(),
                 name: name.to_owned(),
+                description: description.trim().to_owned(),
             },
         );
         edited.finish(catalog)
     }
 
-    /// Rename region `id` to `name`.
+    /// Update region `id`'s `name` and `description` (the description may be empty;
+    /// it is trimmed). The id is unchanged.
     ///
     /// # Errors
     /// [`RegionEditError::BlankField`], [`RegionEditError::UnknownRegion`] when no
     /// such region exists, or [`RegionEditError::WouldBreakWorld`].
-    pub fn rename_region(
+    pub fn update_region(
         &self,
         id: &str,
         name: &str,
+        description: &str,
         catalog: &ContentCatalog,
     ) -> Result<Self, RegionEditError> {
         let id = non_blank(id, "id")?;
@@ -188,6 +193,7 @@ impl MapDocument {
             return Err(RegionEditError::UnknownRegion { id: id.to_owned() });
         };
         region.name = name.to_owned();
+        region.description = description.trim().to_owned();
         edited.finish(catalog)
     }
 
@@ -223,7 +229,8 @@ impl MapDocument {
         edited.finish(catalog)
     }
 
-    /// Add a sub-region with `id` and `name` under parent region `region`.
+    /// Add a sub-region with `id`, `name`, and `description` under parent region
+    /// `region` (the description may be empty; it is trimmed).
     ///
     /// # Errors
     /// [`RegionEditError::BlankField`], [`RegionEditError::DuplicateSubregionId`],
@@ -234,6 +241,7 @@ impl MapDocument {
         id: &str,
         name: &str,
         region: &str,
+        description: &str,
         catalog: &ContentCatalog,
     ) -> Result<Self, RegionEditError> {
         let id = non_blank(id, "id")?;
@@ -255,20 +263,23 @@ impl MapDocument {
                 id: id.to_owned(),
                 name: name.to_owned(),
                 region: region.to_owned(),
+                description: description.trim().to_owned(),
             },
         );
         edited.finish(catalog)
     }
 
-    /// Rename sub-region `id` to `name`.
+    /// Update sub-region `id`'s `name` and `description` (the description may be
+    /// empty; it is trimmed). The id and parent region are unchanged.
     ///
     /// # Errors
     /// [`RegionEditError::BlankField`], [`RegionEditError::UnknownSubregion`], or
     /// [`RegionEditError::WouldBreakWorld`].
-    pub fn rename_subregion(
+    pub fn update_subregion(
         &self,
         id: &str,
         name: &str,
+        description: &str,
         catalog: &ContentCatalog,
     ) -> Result<Self, RegionEditError> {
         let id = non_blank(id, "id")?;
@@ -278,6 +289,7 @@ impl MapDocument {
             return Err(RegionEditError::UnknownSubregion { id: id.to_owned() });
         };
         sub.name = name.to_owned();
+        sub.description = description.trim().to_owned();
         edited.finish(catalog)
     }
 
@@ -331,6 +343,7 @@ mod tests {
             RegionDefinition {
                 id: id.to_owned(),
                 name: name.to_owned(),
+                description: String::new(),
             },
         )
     }
@@ -342,6 +355,7 @@ mod tests {
                 id: id.to_owned(),
                 name: name.to_owned(),
                 region: parent.to_owned(),
+                description: String::new(),
             },
         )
     }
@@ -408,7 +422,7 @@ mod tests {
     fn create_region_adds_with_id_and_name() {
         let base = base_doc();
         let edited = base
-            .create_region("forest", "Forest", &cat())
+            .create_region("forest", "Forest", "", &cat())
             .expect("creates");
         let added = edited.regions.get("forest").expect("region added");
         assert_eq!(added.id, "forest");
@@ -422,7 +436,9 @@ mod tests {
 
     #[test]
     fn create_region_refuses_a_duplicate_id() {
-        let err = base_doc().create_region("reg", "Dup", &cat()).unwrap_err();
+        let err = base_doc()
+            .create_region("reg", "Dup", "", &cat())
+            .unwrap_err();
         assert_eq!(
             err,
             RegionEditError::DuplicateRegionId {
@@ -436,7 +452,7 @@ mod tests {
     #[test]
     fn create_subregion_adds_under_a_valid_parent() {
         let edited = base_doc()
-            .create_subregion("vale", "Vale", "reg", &cat())
+            .create_subregion("vale", "Vale", "reg", "", &cat())
             .expect("creates");
         let sub = edited.subregions.get("vale").expect("subregion added");
         assert_eq!(sub.id, "vale");
@@ -447,7 +463,7 @@ mod tests {
     #[test]
     fn create_subregion_refuses_an_unknown_parent() {
         let err = base_doc()
-            .create_subregion("vale", "Vale", "ghost", &cat())
+            .create_subregion("vale", "Vale", "ghost", "", &cat())
             .unwrap_err();
         assert_eq!(
             err,
@@ -463,7 +479,7 @@ mod tests {
         let mut base = base_doc();
         base.subregions.extend([subregion("vale", "Vale", "reg")]);
         let err = base
-            .create_subregion("vale", "Other", "reg", &cat())
+            .create_subregion("vale", "Other", "reg", "", &cat())
             .unwrap_err();
         assert_eq!(
             err,
@@ -478,7 +494,7 @@ mod tests {
     #[test]
     fn rename_region_updates_the_name_and_keeps_the_id() {
         let edited = base_doc()
-            .rename_region("reg", "Renamed", &cat())
+            .update_region("reg", "Renamed", "", &cat())
             .expect("renames");
         let region = edited.regions.get("reg").expect("region");
         assert_eq!(region.name, "Renamed");
@@ -487,7 +503,9 @@ mod tests {
 
     #[test]
     fn rename_region_refuses_unknown() {
-        let err = base_doc().rename_region("ghost", "X", &cat()).unwrap_err();
+        let err = base_doc()
+            .update_region("ghost", "X", "", &cat())
+            .unwrap_err();
         assert_eq!(
             err,
             RegionEditError::UnknownRegion {
@@ -501,7 +519,7 @@ mod tests {
         let mut base = base_doc();
         base.subregions.extend([subregion("vale", "Vale", "reg")]);
         let edited = base
-            .rename_subregion("vale", "Glen", &cat())
+            .update_subregion("vale", "Glen", "", &cat())
             .expect("renames");
         assert_eq!(edited.subregions.get("vale").expect("sub").name, "Glen");
     }
@@ -509,7 +527,7 @@ mod tests {
     #[test]
     fn rename_subregion_refuses_unknown() {
         let err = base_doc()
-            .rename_subregion("ghost", "X", &cat())
+            .update_subregion("ghost", "X", "", &cat())
             .unwrap_err();
         assert_eq!(
             err,
@@ -614,7 +632,9 @@ mod tests {
         // refused by the materialize net rather than persisted.
         let mut base = base_doc();
         base.spawn = None;
-        let err = base.create_region("forest", "Forest", &cat()).unwrap_err();
+        let err = base
+            .create_region("forest", "Forest", "", &cat())
+            .unwrap_err();
         assert!(
             matches!(err, RegionEditError::WouldBreakWorld(_)),
             "got {err:?}"
@@ -625,27 +645,27 @@ mod tests {
     fn blank_fields_are_refused_by_name() {
         let c = cat();
         assert_eq!(
-            base_doc().create_region("", "X", &c).unwrap_err(),
+            base_doc().create_region("", "X", "", &c).unwrap_err(),
             RegionEditError::BlankField {
                 field: "id".to_owned()
             }
         );
         assert_eq!(
-            base_doc().create_region("   ", "X", &c).unwrap_err(),
+            base_doc().create_region("   ", "X", "", &c).unwrap_err(),
             RegionEditError::BlankField {
                 field: "id".to_owned()
             },
             "whitespace-only is blank after trimming"
         );
         assert_eq!(
-            base_doc().create_region("ok", "", &c).unwrap_err(),
+            base_doc().create_region("ok", "", "", &c).unwrap_err(),
             RegionEditError::BlankField {
                 field: "name".to_owned()
             }
         );
         assert_eq!(
             base_doc()
-                .create_subregion("s", "S", "   ", &c)
+                .create_subregion("s", "S", "   ", "", &c)
                 .unwrap_err(),
             RegionEditError::BlankField {
                 field: "region".to_owned()
@@ -657,7 +677,7 @@ mod tests {
     fn non_blank_trims_and_keeps_the_trimmed_value() {
         assert_eq!(non_blank("  forest  ", "id"), Ok("forest"));
         let edited = base_doc()
-            .create_region("  forest  ", "  Forest  ", &cat())
+            .create_region("  forest  ", "  Forest  ", "", &cat())
             .expect("creates");
         let added = edited.regions.get("forest").expect("trimmed id is the key");
         assert_eq!(added.id, "forest");
@@ -735,5 +755,108 @@ mod tests {
         assert!(RegionEditError::UnknownRegion { id: "x".to_owned() }
             .source()
             .is_none());
+    }
+
+    // ---- description authoring (REQ-001..004) ----
+
+    #[test]
+    fn create_region_stores_a_trimmed_description() {
+        let edited = base_doc()
+            .create_region("zone", "Zone", "  A misty hollow.  ", &cat())
+            .expect("creates");
+        let added = edited.regions.get("zone").expect("region added");
+        assert_eq!(added.description, "A misty hollow.");
+        assert_eq!(added.name, "Zone");
+    }
+
+    #[test]
+    fn create_subregion_stores_a_description() {
+        let edited = base_doc()
+            .create_subregion("vale", "Vale", "reg", "A green dale.", &cat())
+            .expect("creates");
+        let sub = edited.subregions.get("vale").expect("subregion added");
+        assert_eq!(sub.description, "A green dale.");
+        assert_eq!(sub.region, "reg");
+    }
+
+    #[test]
+    fn update_region_sets_the_description_and_keeps_id_when_name_unchanged() {
+        // REQ-002: editing the description (resubmitting the same name) leaves id +
+        // name unchanged.
+        let edited = base_doc()
+            .update_region("reg", "Region", "Now described.", &cat())
+            .expect("updates");
+        let region = edited.regions.get("reg").expect("region");
+        assert_eq!(region.description, "Now described.");
+        assert_eq!(region.name, "Region");
+        assert_eq!(region.id, "reg");
+    }
+
+    #[test]
+    fn update_region_can_change_both_name_and_description() {
+        let edited = base_doc()
+            .update_region("reg", "Renamed", "And described.", &cat())
+            .expect("updates");
+        let region = edited.regions.get("reg").expect("region");
+        assert_eq!(region.name, "Renamed");
+        assert_eq!(region.description, "And described.");
+    }
+
+    #[test]
+    fn update_subregion_sets_the_description_and_keeps_parent() {
+        let mut base = base_doc();
+        base.subregions.extend([subregion("vale", "Vale", "reg")]);
+        let edited = base
+            .update_subregion("vale", "Vale", "A described dale.", &cat())
+            .expect("updates");
+        let sub = edited.subregions.get("vale").expect("sub");
+        assert_eq!(sub.description, "A described dale.");
+        assert_eq!(sub.region, "reg");
+        assert_eq!(sub.name, "Vale");
+    }
+
+    #[test]
+    fn materialize_carries_descriptions_into_the_world() {
+        // REQ-004: a described region + sub-region survive materialize unchanged.
+        let mut base = base_doc();
+        base.subregions.extend([subregion("vale", "Vale", "reg")]);
+        let edited = base
+            .create_region("zone", "Zone", "Zone desc.", &cat())
+            .expect("creates region")
+            .update_subregion("vale", "Vale", "Vale desc.", &cat())
+            .expect("describes sub");
+        let world = edited.materialize(&cat()).expect("materializes");
+        assert_eq!(
+            world.regions.get("zone").expect("zone").description,
+            "Zone desc."
+        );
+        assert_eq!(
+            world.subregions.get("vale").expect("vale").description,
+            "Vale desc."
+        );
+    }
+
+    #[test]
+    fn region_def_description_is_serde_additive() {
+        // REQ-003: absent description defaults to empty; empty is skip-serialized
+        // (byte-clean backward compat); a populated description round-trips.
+        let no_desc: RegionDefinition =
+            serde_json::from_str(r#"{"id":"a","name":"A"}"#).expect("deserializes");
+        assert_eq!(no_desc.description, "");
+        assert_eq!(
+            serde_json::to_string(&no_desc).expect("serializes"),
+            r#"{"id":"a","name":"A"}"#
+        );
+        let described = RegionDefinition {
+            id: "b".to_owned(),
+            name: "B".to_owned(),
+            description: "Desc".to_owned(),
+        };
+        let json = serde_json::to_string(&described).expect("serializes");
+        assert!(json.contains(r#""description":"Desc""#));
+        assert_eq!(
+            serde_json::from_str::<RegionDefinition>(&json).expect("round-trips"),
+            described
+        );
     }
 }

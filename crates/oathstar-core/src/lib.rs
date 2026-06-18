@@ -75,6 +75,10 @@ pub struct RoomDefinition {
 pub struct RegionDefinition {
     pub id: String,
     pub name: String,
+    /// Author-facing description; empty when unset. Serde-additive so existing
+    /// region data without it stays valid.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
 }
 
 /// A subregion within a [`RegionDefinition`]. Rooms may reference a subregion by
@@ -84,6 +88,10 @@ pub struct SubregionDefinition {
     pub id: String,
     pub name: String,
     pub region: String,
+    /// Author-facing description; empty when unset. Serde-additive so existing
+    /// sub-region data without it stays valid.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
 }
 
 /// What kind of thing an [`Entity`] is. Actors are person/creature-like (NPCs and
@@ -3576,6 +3584,7 @@ mod tests {
             RegionDefinition {
                 id: "test".to_string(),
                 name: "Test".to_string(),
+                description: String::new(),
             },
         );
 
@@ -3756,6 +3765,7 @@ mod tests {
                 RegionDefinition {
                     id: "r1".to_string(),
                     name: "Home Region".to_string(),
+                    description: String::new(),
                 },
             ),
             (
@@ -3763,6 +3773,7 @@ mod tests {
                 RegionDefinition {
                     id: "r2".to_string(),
                     name: "Far Region".to_string(),
+                    description: String::new(),
                 },
             ),
         ]);
@@ -3773,6 +3784,7 @@ mod tests {
                     id: "s1".to_string(),
                     name: "Home Sub".to_string(),
                     region: "r1".to_string(),
+                    description: String::new(),
                 },
             ),
             (
@@ -3781,6 +3793,7 @@ mod tests {
                     id: "s2".to_string(),
                     name: "The Deep".to_string(),
                     region: "r1".to_string(),
+                    description: String::new(),
                 },
             ),
         ]);
@@ -3963,6 +3976,7 @@ mod tests {
                     RegionDefinition {
                         id: room.region.clone(),
                         name: room.region.clone(),
+                        description: String::new(),
                     },
                 )
             })
@@ -3987,6 +4001,7 @@ mod tests {
         RegionDefinition {
             id: id.to_string(),
             name: id.to_string(),
+            description: String::new(),
         }
     }
 
@@ -3995,6 +4010,7 @@ mod tests {
             id: id.to_string(),
             name: id.to_string(),
             region: parent_region.to_string(),
+            description: String::new(),
         }
     }
 
@@ -7935,6 +7951,7 @@ mod tests {
                     id: id.to_string(),
                     name: id.to_string(),
                     region: region.to_string(),
+                    description: String::new(),
                 },
             );
         }
@@ -8238,6 +8255,7 @@ mod tests {
                 id: "district".to_string(),
                 name: "District".to_string(),
                 region: "r".to_string(),
+                description: String::new(),
             },
         );
         world
