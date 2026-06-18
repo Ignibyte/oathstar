@@ -306,9 +306,6 @@ mod tests {
             sessions: SessionStore::new(),
             owner_secret: Some("pw".to_owned()),
             catalog: Arc::new(ContentCatalog::default()),
-            world: Arc::new(
-                oathstar_content::load_beginner_world().expect("the beginner world loads"),
-            ),
             maps: oathstar_storage::FileSaveStore::new(maps_dir),
         }
     }

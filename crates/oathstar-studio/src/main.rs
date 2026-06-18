@@ -12,12 +12,13 @@ use axum::{
     Router,
 };
 use oathstar_auth::SessionStore;
-use oathstar_content::{ContentCatalog, WorldDefinition};
+use oathstar_content::ContentCatalog;
 use oathstar_storage::FileSaveStore;
 
 mod config;
 mod editor;
 mod handlers;
+mod regions;
 mod render;
 mod sections;
 mod ui;
@@ -30,7 +31,6 @@ struct StudioState {
     sessions: SessionStore,
     owner_secret: Option<String>,
     catalog: Arc<ContentCatalog>,
-    world: Arc<WorldDefinition>,
     /// Persistent store for authored map documents (root: `OATHSTAR_MAPS_DIR`).
     maps: FileSaveStore,
 }
@@ -51,7 +51,6 @@ async fn main() -> anyhow::Result<()> {
         sessions: SessionStore::new(),
         owner_secret: config.owner_secret,
         catalog: Arc::new(oathstar_content::beginner_catalog()?),
-        world: Arc::new(oathstar_content::load_beginner_world()?),
         maps: FileSaveStore::new(maps_dir),
     };
 
@@ -72,7 +71,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/tilesets/arctic.png", get(editor::arctic_sheet))
         .route("/ui/panel-frame.png", get(ui::panel_frame))
         .route("/ui/button.png", get(ui::button))
-        .route("/regions", get(sections::regions))
+        .route("/regions", get(regions::regions))
+        .route("/regions/{id}", get(regions::region_editor))
+        .route("/regions/{id}/region", post(regions::edit_region))
+        .route("/regions/{id}/subregion", post(regions::edit_subregion))
         .route("/items", get(sections::items))
         .route("/enemies", get(sections::enemies))
         .route("/settings", get(sections::settings))

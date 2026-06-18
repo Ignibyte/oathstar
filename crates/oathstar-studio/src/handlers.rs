@@ -73,9 +73,6 @@ mod tests {
             sessions: SessionStore::new(),
             owner_secret: secret.map(str::to_owned),
             catalog: std::sync::Arc::new(oathstar_content::ContentCatalog::default()),
-            world: std::sync::Arc::new(
-                oathstar_content::load_beginner_world().expect("the beginner world loads"),
-            ),
             // These tests never touch the maps store; a never-written placeholder.
             maps: oathstar_storage::FileSaveStore::new(
                 std::env::temp_dir().join("oathstar-studio-test-unused"),
