@@ -25,8 +25,8 @@ use crate::{
     StudioState,
 };
 
-/// A region create / rename / delete form. `op` selects the operation; `name` is
-/// unused by `delete`.
+/// A region create / edit / delete form. `op` selects the operation; `name` and
+/// `description` are unused by `delete`.
 #[derive(Deserialize)]
 pub struct RegionForm {
     op: String,
@@ -34,10 +34,12 @@ pub struct RegionForm {
     id: String,
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    description: String,
 }
 
-/// A sub-region create / rename / delete form. `region` (the parent) is used by
-/// `create` only.
+/// A sub-region create / edit / delete form. `region` (the parent) is used by
+/// `create` only; `description` is unused by `delete`.
 #[derive(Deserialize)]
 pub struct SubregionForm {
     op: String,
@@ -47,6 +49,8 @@ pub struct SubregionForm {
     name: String,
     #[serde(default)]
     region: String,
+    #[serde(default)]
+    description: String,
 }
 
 /// Summarize every persisted authored map for the dashboard list. Unreadable or
@@ -155,8 +159,8 @@ pub async fn edit_region(
         Err(refusal) => return refusal.into_response(),
     };
     let result = match form.op.as_str() {
-        "create" => doc.create_region(&form.id, &form.name, &studio.catalog),
-        "rename" => doc.rename_region(&form.id, &form.name, &studio.catalog),
+        "create" => doc.create_region(&form.id, &form.name, &form.description, &studio.catalog),
+        "edit" => doc.update_region(&form.id, &form.name, &form.description, &studio.catalog),
         "delete" => doc.delete_region(&form.id, &studio.catalog),
         _ => return (StatusCode::BAD_REQUEST, "unknown region operation").into_response(),
     };
@@ -179,8 +183,14 @@ pub async fn edit_subregion(
         Err(refusal) => return refusal.into_response(),
     };
     let result = match form.op.as_str() {
-        "create" => doc.create_subregion(&form.id, &form.name, &form.region, &studio.catalog),
-        "rename" => doc.rename_subregion(&form.id, &form.name, &studio.catalog),
+        "create" => doc.create_subregion(
+            &form.id,
+            &form.name,
+            &form.region,
+            &form.description,
+            &studio.catalog,
+        ),
+        "edit" => doc.update_subregion(&form.id, &form.name, &form.description, &studio.catalog),
         "delete" => doc.delete_subregion(&form.id, &studio.catalog),
         _ => return (StatusCode::BAD_REQUEST, "unknown sub-region operation").into_response(),
     };
@@ -446,6 +456,7 @@ mod tests {
             op: "create".to_owned(),
             id: "forest".to_owned(),
             name: "Forest".to_owned(),
+            description: String::new(),
         };
         let res = edit_region(
             State(state.clone()),
@@ -466,9 +477,10 @@ mod tests {
         let state = seeded_studio();
         let cookie = editor_cookie(&state);
         let form = RegionForm {
-            op: "rename".to_owned(),
+            op: "edit".to_owned(),
             id: "reg".to_owned(),
             name: "Renamed".to_owned(),
+            description: String::new(),
         };
         let res = edit_region(
             State(state.clone()),
@@ -491,6 +503,7 @@ mod tests {
             id: "vale".to_owned(),
             name: "Vale".to_owned(),
             region: "reg".to_owned(),
+            description: String::new(),
         };
         let res = edit_subregion(
             State(state.clone()),
@@ -509,10 +522,11 @@ mod tests {
         let state = seeded_studio_with_sub();
         let cookie = editor_cookie(&state);
         let form = SubregionForm {
-            op: "rename".to_owned(),
+            op: "edit".to_owned(),
             id: "vale".to_owned(),
             name: "Glen".to_owned(),
             region: String::new(),
+            description: String::new(),
         };
         let res = edit_subregion(
             State(state.clone()),
@@ -535,6 +549,7 @@ mod tests {
             id: "vale".to_owned(),
             name: String::new(),
             region: String::new(),
+            description: String::new(),
         };
         let res = edit_subregion(
             State(state.clone()),
@@ -558,6 +573,7 @@ mod tests {
             op: "create".to_owned(),
             id: "reg".to_owned(),
             name: "Dup".to_owned(),
+            description: String::new(),
         };
         let (status, body) = decode(
             edit_region(
@@ -589,6 +605,7 @@ mod tests {
             id: "vale".to_owned(),
             name: "Vale".to_owned(),
             region: "ghost".to_owned(),
+            description: String::new(),
         };
         let (status, body) = decode(
             edit_subregion(
@@ -619,6 +636,7 @@ mod tests {
             op: "delete".to_owned(),
             id: "reg".to_owned(),
             name: String::new(),
+            description: String::new(),
         };
         let (status, body) = decode(
             edit_region(
@@ -649,7 +667,7 @@ mod tests {
         state.maps = oathstar_storage::FileSaveStore::new(file);
         let original: MapDocument = serde_json::from_str(SEED_DOC).expect("parses");
         let edited = original
-            .create_region("forest", "Forest", &state.catalog)
+            .create_region("forest", "Forest", "", &state.catalog)
             .expect("the edit itself is valid");
         let (status, body) = decode(apply(&state, "m", &original, Ok(edited))).await;
         assert_eq!(status, StatusCode::OK);
@@ -666,6 +684,7 @@ mod tests {
             op: "frobnicate".to_owned(),
             id: "x".to_owned(),
             name: "Y".to_owned(),
+            description: String::new(),
         };
         let res = edit_region(
             State(state),
@@ -686,6 +705,7 @@ mod tests {
             id: "x".to_owned(),
             name: "Y".to_owned(),
             region: "reg".to_owned(),
+            description: String::new(),
         };
         let res = edit_subregion(
             State(state),
@@ -705,6 +725,7 @@ mod tests {
             op: "create".to_owned(),
             id: "x".to_owned(),
             name: "Y".to_owned(),
+            description: String::new(),
         };
         let state = seeded_studio();
         let pid = state
@@ -739,6 +760,7 @@ mod tests {
             id: "x".to_owned(),
             name: "Y".to_owned(),
             region: "reg".to_owned(),
+            description: String::new(),
         };
         let state = seeded_studio();
         let pid = state
@@ -764,5 +786,58 @@ mod tests {
         .await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert_eq!(location(&res), "/login");
+    }
+
+    // ---- description authoring through the handler (REQ-001/002) ----
+
+    #[tokio::test]
+    async fn create_region_with_a_description_persists_it() {
+        let state = seeded_studio();
+        let cookie = editor_cookie(&state);
+        let form = RegionForm {
+            op: "create".to_owned(),
+            id: "forest".to_owned(),
+            name: "Forest".to_owned(),
+            description: "A shaded wood.".to_owned(),
+        };
+        let res = edit_region(
+            State(state.clone()),
+            jar(Some(&cookie)).await,
+            Path("m".to_owned()),
+            Form(form),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let saved: MapDocument = state.maps.read_json("m").expect("reloads");
+        assert_eq!(
+            saved.regions.get("forest").expect("forest").description,
+            "A shaded wood."
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_region_updates_the_description_and_keeps_the_name() {
+        // SEED_DOC's region `reg` is named "Region"; resubmit the name with a new
+        // description (REQ-002).
+        let state = seeded_studio();
+        let cookie = editor_cookie(&state);
+        let form = RegionForm {
+            op: "edit".to_owned(),
+            id: "reg".to_owned(),
+            name: "Region".to_owned(),
+            description: "An edited description.".to_owned(),
+        };
+        let res = edit_region(
+            State(state.clone()),
+            jar(Some(&cookie)).await,
+            Path("m".to_owned()),
+            Form(form),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let saved: MapDocument = state.maps.read_json("m").expect("reloads");
+        let region = saved.regions.get("reg").expect("reg");
+        assert_eq!(region.description, "An edited description.");
+        assert_eq!(region.name, "Region", "name unchanged");
     }
 }

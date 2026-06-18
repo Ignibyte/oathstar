@@ -213,7 +213,7 @@ pub fn regions_list_page(maps: &[MapSummary]) -> Html<String> {
 
 /// Render the per-map region & sub-region editor (ticket #51, slice 2): each region
 /// is a panel with rename + delete forms and a nested list of its sub-regions (each
-/// with rename + delete), plus create-region and create-sub-region forms. Every
+/// with edit + delete), plus create-region and create-sub-region forms. Every
 /// author-supplied id/name is escaped (see [`escape_html`]); `error` shows a refusal
 /// banner. `map_id` is the storage slot the page was loaded under; the forms POST to
 /// `/regions/{map_id}/region` and `/regions/{map_id}/subregion`.
@@ -235,22 +235,24 @@ pub fn region_editor_page(map_id: &str, doc: &MapDocument, error: Option<&str>) 
     for region in doc.regions.values() {
         let rid = escape_html(&region.id);
         let rname = escape_html(&region.name);
+        let rdesc = escape_html(&region.description);
         let rooms = region_rooms.get(region.id.as_str()).copied().unwrap_or(0);
         let _ = write!(
             body,
             r#"<section class="panel"><h2>{rname}</h2><p class="who">{rooms} rooms</p>
-<form method="post" action="/regions/{map_id}/region" class="edit"><input type="hidden" name="op" value="rename"><input type="hidden" name="id" value="{rid}"><input name="name" value="{rname}" aria-label="New name for region {rname}"><button type="submit">Rename</button></form>
+<form method="post" action="/regions/{map_id}/region" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="{rid}"><label>Name <input name="name" value="{rname}" aria-label="Name for region {rname}"></label> <label>Description <textarea name="description" aria-label="Description for region {rname}">{rdesc}</textarea></label> <button type="submit">Save</button></form>
 <form method="post" action="/regions/{map_id}/region" class="delete"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{rid}"><button type="submit">Delete</button></form>
 <ul>"#,
         );
         for sub in doc.subregions.values().filter(|s| s.region == region.id) {
             let sid = escape_html(&sub.id);
             let sname = escape_html(&sub.name);
+            let sdesc = escape_html(&sub.description);
             let srooms = subregion_rooms.get(sub.id.as_str()).copied().unwrap_or(0);
             let _ = write!(
                 body,
                 r#"<li><span>{sname} — {srooms} rooms</span>
-<form method="post" action="/regions/{map_id}/subregion" class="edit"><input type="hidden" name="op" value="rename"><input type="hidden" name="id" value="{sid}"><input name="name" value="{sname}" aria-label="New name for sub-region {sname}"><button type="submit">Rename</button></form>
+<form method="post" action="/regions/{map_id}/subregion" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="{sid}"><label>Name <input name="name" value="{sname}" aria-label="Name for sub-region {sname}"></label> <label>Description <textarea name="description" aria-label="Description for sub-region {sname}">{sdesc}</textarea></label> <button type="submit">Save</button></form>
 <form method="post" action="/regions/{map_id}/subregion" class="delete"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{sid}"><button type="submit">Delete</button></form></li>"#,
             );
         }
@@ -270,9 +272,9 @@ pub fn region_editor_page(map_id: &str, doc: &MapDocument, error: Option<&str>) 
     let _ = write!(
         body,
         r#"<section class="panel"><h2>Add a region</h2>
-<form method="post" action="/regions/{map_id}/region"><input type="hidden" name="op" value="create"><label>Id <input name="id" required></label> <label>Name <input name="name" required></label> <button type="submit">Create region</button></form></section>
+<form method="post" action="/regions/{map_id}/region"><input type="hidden" name="op" value="create"><label>Id <input name="id" required></label> <label>Name <input name="name" required></label> <label>Description <textarea name="description"></textarea></label> <button type="submit">Create region</button></form></section>
 <section class="panel"><h2>Add a sub-region</h2>
-<form method="post" action="/regions/{map_id}/subregion"><input type="hidden" name="op" value="create"><label>Id <input name="id" required></label> <label>Name <input name="name" required></label> <label>Parent region <select name="region" required>{options}</select></label> <button type="submit">Create sub-region</button></form></section>"#,
+<form method="post" action="/regions/{map_id}/subregion"><input type="hidden" name="op" value="create"><label>Id <input name="id" required></label> <label>Name <input name="name" required></label> <label>Parent region <select name="region" required>{options}</select></label> <label>Description <textarea name="description"></textarea></label> <button type="submit">Create sub-region</button></form></section>"#,
     );
 
     Html(format!(
@@ -633,8 +635,8 @@ mod tests {
     /// A map with one region (`reg`, two rooms) and one sub-region (`vale`, one room).
     const RICH_DOC: &str = r#"{
         "id":"m","title":"Mappy","tile_size":16,"width":4,"height":4,"floors":1,
-        "regions":{"reg":{"id":"reg","name":"Region"}},
-        "subregions":{"vale":{"id":"vale","name":"Vale","region":"reg"}},
+        "regions":{"reg":{"id":"reg","name":"Region","description":"A test region."}},
+        "subregions":{"vale":{"id":"vale","name":"Vale","region":"reg","description":"A test sub."}},
         "rooms":[
             {"x":0,"y":0,"z":0,"id":"alpha","region":"reg"},
             {"x":1,"y":0,"z":0,"id":"beta","region":"reg","subregion":"vale"}
@@ -698,17 +700,17 @@ mod tests {
         assert!(
             html.contains(r#"<section class="panel"><h2>Region</h2><p class="who">2 rooms</p>"#)
         );
-        // Rename + delete region forms POST to the slot with the region id.
+        // Edit (name + description) + delete region forms POST to the slot with the id.
         assert!(html.contains(
-            r#"<form method="post" action="/regions/m/region" class="edit"><input type="hidden" name="op" value="rename"><input type="hidden" name="id" value="reg"><input name="name" value="Region" aria-label="New name for region Region"><button type="submit">Rename</button></form>"#
+            r#"<form method="post" action="/regions/m/region" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="reg"><label>Name <input name="name" value="Region" aria-label="Name for region Region"></label> <label>Description <textarea name="description" aria-label="Description for region Region">A test region.</textarea></label> <button type="submit">Save</button></form>"#
         ));
         assert!(html.contains(
             r#"<form method="post" action="/regions/m/region" class="delete"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="reg"><button type="submit">Delete</button></form>"#
         ));
-        // Sub-region nested with its own count + rename form.
+        // Sub-region nested with its own count + edit form.
         assert!(html.contains("<li><span>Vale — 1 rooms</span>"));
         assert!(html.contains(
-            r#"<form method="post" action="/regions/m/subregion" class="edit"><input type="hidden" name="op" value="rename"><input type="hidden" name="id" value="vale"><input name="name" value="Vale" aria-label="New name for sub-region Vale"><button type="submit">Rename</button></form>"#
+            r#"<form method="post" action="/regions/m/subregion" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="vale"><label>Name <input name="name" value="Vale" aria-label="Name for sub-region Vale"></label> <label>Description <textarea name="description" aria-label="Description for sub-region Vale">A test sub.</textarea></label> <button type="submit">Save</button></form>"#
         ));
         // Create forms + the parent-region option.
         assert!(html.contains(
@@ -719,6 +721,25 @@ mod tests {
         ));
         assert!(html.contains(r#"<option value="reg">Region</option>"#));
         assert!(html.contains(r#"<a href="/regions" aria-current="page">Regions</a>"#));
+    }
+
+    #[test]
+    fn region_editor_page_renders_the_description_in_an_escaped_textarea() {
+        // REQ-005: the description is shown (and edited) in the row's textarea, escaped —
+        // a closing-tag injection cannot break out of the textarea.
+        let doc: oathstar_content::MapDocument = serde_json::from_str(
+            r#"{"id":"m","title":"T","tile_size":16,"width":1,"height":1,"floors":1,
+            "regions":{"r":{"id":"r","name":"R","description":"</textarea><script>x</script>"}}}"#,
+        )
+        .expect("fixture parses");
+        let html = super::region_editor_page("m", &doc, None).0;
+        assert!(html.contains(
+            r#"<textarea name="description" aria-label="Description for region R">&lt;/textarea&gt;&lt;script&gt;x&lt;/script&gt;</textarea>"#
+        ));
+        assert!(
+            !html.contains("</textarea><script>x"),
+            "the raw tag must not appear"
+        );
     }
 
     #[test]

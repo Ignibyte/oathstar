@@ -933,6 +933,7 @@ mod tests {
             RegionDefinition {
                 id: "reg".to_owned(),
                 name: "Region".to_owned(),
+                description: String::new(),
             },
         )])
     }
@@ -1031,6 +1032,7 @@ mod tests {
                 id: "sub".to_owned(),
                 name: "Sub".to_owned(),
                 region: "reg".to_owned(),
+                description: String::new(),
             },
         )]);
         doc.terrain.push(terrain(1, 0, 0, "floor"));
@@ -1424,6 +1426,7 @@ mod tests {
                 RegionDefinition {
                     id: "reg".to_owned(),
                     name: "Reg".to_owned(),
+                    description: String::new(),
                 },
             ),
             (
@@ -1431,6 +1434,7 @@ mod tests {
                 RegionDefinition {
                     id: "other".to_owned(),
                     name: "Other".to_owned(),
+                    description: String::new(),
                 },
             ),
         ]);
@@ -1440,6 +1444,7 @@ mod tests {
                 id: "sub".to_owned(),
                 name: "Sub".to_owned(),
                 region: "other".to_owned(), // parent is "other"...
+                description: String::new(),
             },
         )]);
         let mut r = room(0, 0, 0, "start");
