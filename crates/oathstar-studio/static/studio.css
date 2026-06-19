@@ -77,6 +77,9 @@ body.editor { padding: 1.25rem; }
   align-items: start;
 }
 .editor-rail { display: grid; gap: 1rem; min-width: 0; align-content: start; }
+/* Let the stage shrink below the canvas's fixed pixel width so a large map scrolls
+   inside .map-scroll instead of blowing the grid column past the viewport. */
+.canvas-panel { min-width: 0; }
 .tab-bar {
   display: flex;
   gap: 0.25rem;
