@@ -13,11 +13,24 @@
   <body>
     <main class="game-shell" aria-label="Oathstar game">
       <header class="app-header">
-        <div class="brand-lockup">
-          <img src="./assets/oathstar-sigil.svg" alt="" class="brand-sigil" />
-          <div>
-            <h1>Oathstar</h1>
-            <p id="room-kicker">Gatehouse</p>
+        <div class="header-top">
+          <div class="brand-lockup">
+            <img src="./assets/oathstar-sigil.svg" alt="" class="brand-sigil" />
+            <div>
+              <h1>Oathstar</h1>
+              <p id="room-kicker">Gatehouse</p>
+            </div>
+          </div>
+          <div class="header-actions" aria-label="Game actions">
+            <button id="save-button" type="button" title="Save">
+              <span aria-hidden="true">S</span>
+            </button>
+            <button id="load-button" type="button" title="Load">
+              <span aria-hidden="true">L</span>
+            </button>
+            <button id="new-button" type="button" title="New">
+              <span aria-hidden="true">N</span>
+            </button>
           </div>
         </div>
         <section class="top-vitals" aria-label="Character status">
@@ -40,46 +53,27 @@
             </div>
           </div>
         </section>
-        <div class="header-status" aria-label="Current location">
-          <strong id="room-name">Starfall Gate</strong>
+        <p class="header-meta" aria-label="Progress">
           <span id="level-value">Lv 1 · 0 xp</span>
           <span id="turn-count">Turn 0</span>
-        </div>
-        <div class="header-actions" aria-label="Game actions">
-          <button id="save-button" type="button" title="Save">
-            <span aria-hidden="true">S</span>
-          </button>
-          <button id="load-button" type="button" title="Load">
-            <span aria-hidden="true">L</span>
-          </button>
-          <button id="new-button" type="button" title="New">
-            <span aria-hidden="true">N</span>
-          </button>
-        </div>
+        </p>
       </header>
 
       <section class="stage-panel" aria-label="Map and room">
-        <div class="stage-topline">
-          <div>
-            <h2 id="map-label">Gatehouse</h2>
-            <p class="stage-subtitle">Known rooms</p>
-          </div>
-          <div class="stage-legend" aria-label="Map legend">
-            <span><i class="legend-current"></i>Here</span>
-            <span><i class="legend-known"></i>Known</span>
-          </div>
-        </div>
         <div class="map-frame">
           <canvas id="map" class="map-canvas" role="img" aria-label="Map"></canvas>
         </div>
         <div class="room-brief" aria-label="Room">
           <div class="room-text">
+            <p class="room-place">
+              <strong id="map-label">Gatehouse</strong>
+              <span id="room-name">Starfall Gate</span>
+            </p>
             <p id="room-description" class="room-description"></p>
-            <p id="exit-line" class="exit-line"></p>
-            <button id="view-room-button" class="view-room-button" type="button">
-              View room
-            </button>
           </div>
+          <button id="view-room-button" class="view-room-button" type="button">
+            View room
+          </button>
         </div>
       </section>
 

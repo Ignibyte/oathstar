@@ -115,7 +115,6 @@ const el = {
   roomKicker: document.querySelector("#room-kicker"),
   roomName: document.querySelector("#room-name"),
   roomDescription: document.querySelector("#room-description"),
-  exitLine: document.querySelector("#exit-line"),
   exitPad: document.querySelector("#exit-pad"),
   viewRoomButton: document.querySelector("#view-room-button"),
   roomModal: document.querySelector("#room-modal"),
@@ -443,9 +442,6 @@ function renderRoom(snapshot) {
   el.roomName.textContent = hud.roomName;
   el.roomKicker.textContent = hud.roomKicker;
   el.roomDescription.textContent = display.main;
-  el.exitLine.textContent = display.exits.length
-    ? `Exits: ${display.exits.map((exit) => exit.direction).join(", ")}`
-    : "Exits: none";
   renderExitPad(toExitPad(snapshot));
 }
 
