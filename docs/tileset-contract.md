@@ -44,9 +44,13 @@ painting vocabulary as the editor grows.
 
 ## Pointing the client at a sheet
 
-Bake `VITE_OATHSTAR_TILESET` to the descriptor's `.json` URL (the single source
-of truth — no other code names a tileset path). Unset → the flat-color
-fallback.
+The map tileset URL resolves through `resolveTilesetUrl` (in `src/client/tileset.js`,
+the single source — no other code names a tileset path): a baked
+`VITE_OATHSTAR_TILESET` (trimmed, non-blank) wins, otherwise it defaults to the
+committed sheet at `DEFAULT_TILESET_URL` (`/tilesets/arctic.json`). So the game map
+**renders real tiles by default** (S3.1, ticket #54) — the SPA host serves `public/`
+(Vite dev, `dist/`, and the Tauri bundle). A failed fetch or invalid descriptor still
+falls back to flat colors (below), so "real by default" never costs robustness.
 
 ## Validation & fallback
 

@@ -15,6 +15,27 @@ export const KIND_TILE_NAMES = Object.freeze({
   current: "spawn_marker",
 });
 
+// The committed default tile sheet, served by the SPA host at this origin-relative
+// path — Vite serves `public/` at `/` in dev, copies it into `dist/` on build, and
+// Tauri bundles it. The client points here unless `VITE_OATHSTAR_TILESET` overrides
+// it, so the game map renders real tiles by default (S3.1, ticket #54).
+export const DEFAULT_TILESET_URL = "/tilesets/arctic.json";
+
+/**
+ * Resolve the map tileset descriptor URL: the trimmed `override` (e.g. the
+ * build-time `VITE_OATHSTAR_TILESET`) when it is a non-empty string, otherwise the
+ * committed {@link DEFAULT_TILESET_URL}. Pure and total — never throws, never
+ * returns empty; the browser seam supplies the override and does the fetch, and a
+ * missing/invalid sheet still falls back to flat colors in `loadTileset`.
+ *
+ * @param {unknown} override the configured override (a URL string) or anything falsy
+ * @returns {string} a non-empty tileset descriptor URL
+ */
+export function resolveTilesetUrl(override) {
+  const trimmed = typeof override === "string" ? override.trim() : "";
+  return trimmed === "" ? DEFAULT_TILESET_URL : trimmed;
+}
+
 /**
  * Validate raw tileset JSON into a usable tileset. Never throws on any input
  * (the renderer must fall back, not break — REQ-003/004): returns

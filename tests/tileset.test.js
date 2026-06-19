@@ -4,7 +4,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { KIND_TILE_NAMES, validateTileset, tileRect, kindTileRects } from "../src/client/tileset.js";
+import {
+  KIND_TILE_NAMES,
+  validateTileset,
+  tileRect,
+  kindTileRects,
+  resolveTilesetUrl,
+  DEFAULT_TILESET_URL,
+} from "../src/client/tileset.js";
 
 // The author tile-sheet contract (docs/tileset-contract.md): a descriptor plus
 // named-tile rects. Tests load a committed sample sheet — 8px-native, since the
@@ -129,4 +136,23 @@ test("KIND_TILE_NAMES maps all four cell kinds onto sample tiles", () => {
     assert.ok(tileset.byName[name], `'${name}' (${kind}) exists on the sheet`);
     assert.deepEqual(rects[kind], tileRect(tileset, name), `${kind} resolves through the table`);
   }
+});
+
+// ---- S3.1 (ticket #54): the map tileset URL defaults to the committed sheet ----
+
+test("resolveTilesetUrl: an unset / blank / non-string override resolves to the default sheet (REQ-001)", () => {
+  for (const override of [undefined, null, "", "   ", "\t\n", 123, {}, []]) {
+    assert.equal(
+      resolveTilesetUrl(override),
+      DEFAULT_TILESET_URL,
+      `${JSON.stringify(override)} -> default`,
+    );
+  }
+  assert.equal(DEFAULT_TILESET_URL, "/tilesets/arctic.json");
+});
+
+test("resolveTilesetUrl: a non-blank override wins and is trimmed (REQ-002)", () => {
+  assert.equal(resolveTilesetUrl("/custom/sheet.json"), "/custom/sheet.json");
+  assert.equal(resolveTilesetUrl("  /trim.json  "), "/trim.json");
+  assert.equal(resolveTilesetUrl("https://cdn.example/x.json"), "https://cdn.example/x.json");
 });

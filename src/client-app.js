@@ -14,7 +14,7 @@ import { toHud, toMenuModel, toBattle } from "./client/snapshot.js";
 import { toRoomDisplay, toExitPad } from "./client/room.js";
 import { toMapModel, DEFAULT_MAP_CONFIG } from "./client/map.js";
 import { canvasSize, toDrawPlan, mapAriaLabel, MAP_MARKER_COLORS } from "./client/canvas-map.js";
-import { validateTileset } from "./client/tileset.js";
+import { validateTileset, resolveTilesetUrl } from "./client/tileset.js";
 import { suggestCommands } from "./client/intent.js";
 
 // Resolve the server base URL. Default to same-origin (vite dev proxy, or the
@@ -44,19 +44,21 @@ const mapRenderConfig = { ...DEFAULT_MAP_CONFIG };
 // flat-color draw, and any failure leaves that fallback in place for the session
 // (warn once, never throw). See docs/tileset-contract.md for the sheet contract.
 
-// The author tile-sheet descriptor URL, or null for "no sheet yet" (the map
-// renders the flat-color fallback). Point the client at an author sheet by
-// baking VITE_OATHSTAR_TILESET to its `.json` URL; the sheet image is resolved
-// alongside it. Single source — no other code names a tileset path.
+// The map tile-sheet descriptor URL: `VITE_OATHSTAR_TILESET` when baked, else the
+// committed default sheet (`DEFAULT_TILESET_URL`) — so the map renders real tiles by
+// default (S3.1, ticket #54). `resolveTilesetUrl` owns the default/override/trim rule;
+// the sheet image is resolved alongside the `.json`, and a missing/invalid sheet still
+// falls back to flat colors in `loadTileset`.
 function resolveAuthorTilesetUrl() {
+  let override;
   try {
-    if (import.meta && import.meta.env && import.meta.env.VITE_OATHSTAR_TILESET) {
-      return import.meta.env.VITE_OATHSTAR_TILESET;
+    if (import.meta && import.meta.env) {
+      override = import.meta.env.VITE_OATHSTAR_TILESET;
     }
   } catch (_err) {
-    // import.meta.env is absent outside a bundler — no author sheet.
+    // import.meta.env is absent outside a bundler — fall through to the default.
   }
-  return null;
+  return resolveTilesetUrl(override);
 }
 
 const AUTHOR_TILESET_URL = resolveAuthorTilesetUrl();
@@ -65,8 +67,11 @@ let tilesetImage = null;
 let lastMapModel = null;
 
 async function loadTileset() {
+  // Normally set — resolveTilesetUrl defaults to the committed sheet (S3.1) — but
+  // kept as a guard so we never fetch a falsy URL. The flat-color fallback is really
+  // the fetch/validate/image failure paths below, not this early return.
   if (!AUTHOR_TILESET_URL) {
-    return; // no author sheet yet — the map keeps the flat-color fallback
+    return;
   }
   let validated;
   try {
