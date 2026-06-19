@@ -319,10 +319,11 @@ to — default `maps/`) when it is a file; else the **baked beginner** world. Th
 authored doc is loaded + `materialize`d as **untrusted input** (typed errors, re-validate,
 no panics). An invalid *explicit* world is a **loud startup error**; an invalid *active
 slot* is **logged and falls back to beginner** (a saved draft can't brick startup). So:
-save a map as `world` in the studio (#55), restart the game, and it plays — closing the
-author → save → reload → play loop. `maps/` is git-ignored (local authoring artifacts,
-until the S5 content reset). A studio "Set as active" control (so the slot name isn't
-magic) is a later slice.
+save a map as `world` in the studio (#55) — or author under any name and use the
+**"Set as active world"** control (#60), which materialize-guards the document then writes
+the `world` slot (so the slot name isn't magic, and a broken world is refused rather than
+written) — then restart the game and it plays, closing the author → save → activate → play
+loop. `maps/` is git-ignored (local authoring artifacts, until the S5 content reset).
 
 **Served by the studio (ticket #44).** The `oathstar-studio` sidecar exposes an
 Editor-gated `POST /editor/maps/validate`: it takes a `MapDocument` JSON body and runs
@@ -336,11 +337,13 @@ a missing session, a non-editor, or a malformed body. This is the backend the
 **Rendered by the studio (ticket #45).** The same sidecar now serves an
 Editor-gated `GET /editor` page that draws a server-embedded starter
 `MapDocument` on a first-party `<canvas>` (current z-plane: empty / terrain
-floor / wall / room / spawn) plus two mirrored controls: **Save** (a name/slot input
+floor / wall / room / spawn) plus three mirrored controls: **Save** (a name/slot input
 + button that POSTs the document to `/editor/maps`, persisting it under that slot and
-updating the URL to `?map=<id>` so a reload reopens it — ticket #55) and **Validate**
-(POSTs to `/editor/maps/validate` for the typed result). Each renders its outcome
-through a pure `format{Save,Validate}Result` helper. It follows the same
+updating the URL to `?map=<id>` so a reload reopens it — ticket #55), **Validate**
+(POSTs to `/editor/maps/validate` for the typed result), and **Set as active world**
+(POSTs to `/editor/maps/activate`, which materialize-guards then writes the `world` slot —
+`400` if it doesn't materialize, no write — ticket #60). Each renders its outcome
+through a pure `format{Save,Validate,Activate}Result` helper. It follows the same
 pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model
 (`static/editor-canvas.js`, `node --test`-covered) plus a thin canvas/`fetch`
 glue kept as a server-side string — **mirroring** the #16 renderer (Decision

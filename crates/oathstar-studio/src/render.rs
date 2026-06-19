@@ -599,6 +599,28 @@ document.getElementById("save").addEventListener("click", async () => {
     result.dataset.ok = "false";
   }
 });
+
+// Promote the document to the active world slot (`world.json`). The endpoint
+// refuses a document that does not materialize, so a broken world can't be
+// activated. The game reads the slot at startup, so a restart is needed. (#60 —
+// sibling of the Save handler; no `?map=` rewrite, activation isn't a save.)
+document.getElementById("activate").addEventListener("click", async () => {
+  result.textContent = "Activating…";
+  delete result.dataset.ok;
+  try {
+    const res = await fetch("/editor/maps/activate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(doc),
+    });
+    const out = formatActivateResult(await res.json());
+    result.textContent = out.headline + " — " + out.detail;
+    result.dataset.ok = String(out.ok);
+  } catch (err) {
+    result.textContent = "Request failed — " + err;
+    result.dataset.ok = "false";
+  }
+});
 "#;
 
 /// Render the studio map editor canvas page (ticket #45).
@@ -622,13 +644,14 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
     <div class="editor-left">
       <section class="panel canvas-panel">
         <h2>Map editor</h2>
-        <p class="hint">Pick a tile, then click or drag on the map to paint. Save persists it; Validate checks it.</p>
+        <p class="hint">Pick a tile, then click or drag on the map to paint. Save persists it; Validate checks it; Set as active world makes it the game world.</p>
         <div class="map-scroll"><canvas id="map" width="0" height="0"></canvas></div>
       </section>
       <section class="panel controls">
         <label>Map name <input id="map-name" name="map-name" aria-label="Map name (storage slot)"></label>
         <button id="save" type="button">Save</button>
         <button id="validate" type="button">Validate</button>
+        <button id="activate" type="button">Set as active world</button>
         <pre id="result" aria-live="polite"></pre>
       </section>
     </div>
@@ -746,6 +769,17 @@ mod tests {
         assert!(html.contains("formatSaveResult("));
         assert!(html.contains(r#"searchParams.set("map""#));
         assert!(html.contains("history.replaceState("));
+    }
+
+    #[test]
+    fn editor_page_wires_the_activate_control() {
+        // #60 / REQ-001: the Set-as-active control + its glue — the button, the POST
+        // to /editor/maps/activate, and the formatActivateResult render (no ?map=).
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains(r#"<button id="activate""#));
+        assert!(html.contains(r#"getElementById("activate")"#));
+        assert!(html.contains(r#"fetch("/editor/maps/activate", {"#));
+        assert!(html.contains("formatActivateResult("));
     }
 
     #[test]

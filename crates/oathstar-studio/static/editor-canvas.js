@@ -238,6 +238,30 @@ export function formatSaveResult(resp) {
   };
 }
 
+/**
+ * Turn a `/editor/maps/activate` response into a display model (sibling of
+ * {@link formatSaveResult}). A success (`ok:true`) confirms the world is the active
+ * slot and reminds the owner a server restart loads it; any other shape (a
+ * non-materializing doc, or an auth/parse refusal) renders the server `message`.
+ *
+ * @param {object} resp the parsed JSON body from POST /editor/maps/activate
+ * @returns {{ok: boolean, headline: string, detail: string}}
+ */
+export function formatActivateResult(resp) {
+  if (resp && resp.ok === true) {
+    return {
+      ok: true,
+      headline: "Active world set",
+      detail: "Restart the game server to play it.",
+    };
+  }
+  return {
+    ok: false,
+    headline: "Not activated",
+    detail: (resp && resp.message) || "the world does not materialize",
+  };
+}
+
 // ---- ticket #48: paint helpers (palette / point math / mutation) ----
 
 /**

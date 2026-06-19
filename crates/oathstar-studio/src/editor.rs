@@ -53,6 +53,13 @@ struct MapList {
     maps: Vec<String>,
 }
 
+/// A successful activation — the fixed active-world slot the document now occupies.
+#[derive(Serialize)]
+struct Activated {
+    ok: bool,
+    active: &'static str,
+}
+
 /// A refusal response with the given status and message (no typed error).
 fn refuse(status: StatusCode, message: &str) -> Response {
     (
@@ -107,6 +114,55 @@ pub async fn validate(State(studio): State<StudioState>, jar: CookieJar, body: B
         .into_response(),
         Err(error) => (
             StatusCode::OK,
+            Json(Failure {
+                ok: false,
+                message: error.to_string(),
+                error: Some(error),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /editor/maps/activate` — promote a posted map document to the active world
+/// slot (`world` → `maps/world.json`, the game's startup world).
+///
+/// Gated to the Editor role. The document MUST materialize against the catalog — one
+/// that fails is refused `400` (the same typed error `validate` returns) and nothing
+/// is written, so a broken world can never become the active slot. On success the
+/// document is written to the fixed `world` slot and the response is `200 {ok:true,
+/// active:"world"}`. The game loads the slot at startup, so the server must be
+/// (re)started for an activated world to take effect.
+pub async fn set_active(
+    State(studio): State<StudioState>,
+    jar: CookieJar,
+    body: Bytes,
+) -> Response {
+    if let Some(refusal) = editor_refusal(&jar, &studio.sessions) {
+        return refusal;
+    }
+    let Ok(document) = serde_json::from_slice::<MapDocument>(&body) else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "request body is not a valid map document",
+        );
+    };
+    match document.materialize(&studio.catalog) {
+        Ok(_world) => {
+            if studio.maps.write_json("world", &document).is_err() {
+                return refuse(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to activate world",
+                );
+            }
+            Json(Activated {
+                ok: true,
+                active: "world",
+            })
+            .into_response()
+        }
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
             Json(Failure {
                 ok: false,
                 message: error.to_string(),
@@ -261,7 +317,9 @@ pub async fn arctic_sheet(State(studio): State<StudioState>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{arctic_sheet, editor_page, list_maps, load_map, save_map, validate, STARTER_DOC};
+    use super::{
+        arctic_sheet, editor_page, list_maps, load_map, save_map, set_active, validate, STARTER_DOC,
+    };
     use crate::StudioState;
     use axum::body::{to_bytes, Body, Bytes};
     use axum::extract::{FromRequestParts, State};
@@ -269,6 +327,7 @@ mod tests {
     use axum_extra::extract::cookie::CookieJar;
     use oathstar_auth::{owner_principal, AuthRole, Principal, SessionStore, SESSION_COOKIE};
     use oathstar_content::{ContentCatalog, MapDocument};
+    use oathstar_storage::SaveStore;
     use std::sync::Arc;
 
     /// A valid, reference-free document: two rooms in one region, spawned on `alpha`.
@@ -412,6 +471,86 @@ mod tests {
         let loaded: MapDocument = serde_json::from_value(body).expect("load returns a document");
         let expected: MapDocument = serde_json::from_str(VALID_DOC).expect("VALID_DOC parses");
         assert_eq!(loaded, expected, "load returns the saved document");
+    }
+
+    /// POST a document to `set_active` and decode the `(status, json)` response.
+    async fn call_activate(
+        state: StudioState,
+        cookie: Option<String>,
+        body: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let jar = jar(cookie.as_deref()).await;
+        decode(set_active(State(state), jar, Bytes::from(body.to_owned())).await).await
+    }
+
+    #[tokio::test]
+    async fn set_active_promotes_a_materializing_document() {
+        // REQ-001: a materializing doc is written to the fixed `world` slot and the
+        // response names it; the slot round-trips to the activated document.
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        let (status, body) = call_activate(state.clone(), Some(cookie), VALID_DOC).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["active"], "world");
+        let world: MapDocument = state
+            .maps
+            .read_json("world")
+            .expect("the world slot is written");
+        let expected: MapDocument = serde_json::from_str(VALID_DOC).expect("VALID_DOC parses");
+        assert_eq!(
+            world, expected,
+            "the active world is the activated document"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_active_refuses_a_non_materializing_document() {
+        // REQ-002: BAD_TILE_DOC parses but fails to materialize → 400 and NO write,
+        // so a broken world can never become the active slot.
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        let (status, body) = call_activate(state.clone(), Some(cookie), BAD_TILE_DOC).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["ok"], false);
+        assert!(
+            state.maps.read_json::<MapDocument>("world").is_err(),
+            "a non-materializing document writes no world slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_active_refuses_a_malformed_body() {
+        // REQ-003
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        let (status, _body) = call_activate(state, Some(cookie), "not a map document").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn set_active_refuses_non_editor_callers() {
+        // REQ-004: anonymous → 401, Player → 403; neither writes the slot.
+        let anon = studio();
+        assert_eq!(
+            call_activate(anon.clone(), None, VALID_DOC).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(anon.maps.read_json::<MapDocument>("world").is_err());
+
+        let player = studio();
+        let cookie = cookie_header(
+            &player
+                .sessions
+                .create_session(principal(vec![AuthRole::Player])),
+        );
+        assert_eq!(
+            call_activate(player.clone(), Some(cookie), VALID_DOC)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert!(player.maps.read_json::<MapDocument>("world").is_err());
     }
 
     #[tokio::test]

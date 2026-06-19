@@ -14,6 +14,7 @@ import {
   editorAriaLabel,
   formatValidateResult,
   formatSaveResult,
+  formatActivateResult,
   tileIndexToSourceRect,
   canvasPointToCell,
   paletteIndexAtPoint,
@@ -201,6 +202,24 @@ test("formatSaveResult: ok names the saved slot; a refusal / null renders the me
   assert.equal(formatSaveResult(undefined).ok, false);
   // a non-strict ok (e.g. the string "true") is treated as a failure.
   assert.equal(formatSaveResult({ ok: "true" }).ok, false);
+});
+
+test("formatActivateResult: ok confirms the active world; a refusal / null renders the message (#60)", () => {
+  assert.deepEqual(formatActivateResult({ ok: true }), {
+    ok: true,
+    headline: "Active world set",
+    detail: "Restart the game server to play it.",
+  });
+  const refused = formatActivateResult({ ok: false, message: "tile size 7 is not supported" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.headline, "Not activated");
+  assert.equal(refused.detail, "tile size 7 is not supported");
+  // missing message, and null/undefined bodies, fall back.
+  assert.equal(formatActivateResult({ ok: false }).detail, "the world does not materialize");
+  assert.equal(formatActivateResult(null).detail, "the world does not materialize");
+  assert.equal(formatActivateResult(undefined).ok, false);
+  // a non-strict ok (e.g. the string "true") is treated as a failure.
+  assert.equal(formatActivateResult({ ok: "true" }).ok, false);
 });
 
 // ---- ticket #48: paint helpers ----
