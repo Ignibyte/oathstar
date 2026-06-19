@@ -262,6 +262,20 @@ export function formatActivateResult(resp) {
   };
 }
 
+/**
+ * The per-tab selected/hidden state for the editor rail's tab bar (#61). The active
+ * tab is `activeId` when it is one of `tabIds`, otherwise the first tab — so an
+ * unknown, blank, or missing `activeId` falls back to `tabIds[0]`. Pure.
+ *
+ * @param {string[]} tabIds the tab ids in order
+ * @param {string} activeId the requested active tab id
+ * @returns {Array<{id: string, selected: boolean, hidden: boolean}>}
+ */
+export function tabPanelStates(tabIds, activeId) {
+  const active = tabIds.includes(activeId) ? activeId : tabIds[0];
+  return tabIds.map((id) => ({ id, selected: id === active, hidden: id !== active }));
+}
+
 // ---- ticket #48: paint helpers (palette / point math / mutation) ----
 
 /**

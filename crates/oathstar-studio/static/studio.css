@@ -71,12 +71,32 @@ body.dashboard { padding: 1.25rem; }
 body.editor { padding: 1.25rem; }
 .editor-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(19rem, 23rem);
   gap: 1rem;
   margin-top: 1rem;
   align-items: start;
 }
-.editor-left { display: grid; gap: 1rem; min-width: 0; align-content: start; }
+.editor-rail { display: grid; gap: 1rem; min-width: 0; align-content: start; }
+.tab-bar {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 0.25rem;
+}
+.tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  font: inherit;
+}
+.tab[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--brass);
+}
+.tab-panel[hidden] { display: none; }
 .map-scroll { overflow: auto; max-height: 78vh; }
 @media (max-width: 760px) { .editor-main { grid-template-columns: 1fr; } }
 .hint { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.85rem; }

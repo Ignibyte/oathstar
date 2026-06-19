@@ -343,7 +343,11 @@ updating the URL to `?map=<id>` so a reload reopens it — ticket #55), **Valida
 (POSTs to `/editor/maps/validate` for the typed result), and **Set as active world**
 (POSTs to `/editor/maps/activate`, which materialize-guards then writes the `world` slot —
 `400` if it doesn't materialize, no write — ticket #60). Each renders its outcome
-through a pure `format{Save,Validate,Activate}Result` helper. It follows the same
+through a pure `format{Save,Validate,Activate}Result` helper. The page is laid out (#61) as a
+**stage** (the `#map` canvas, left) + a **right rail**: the controls on top, then a
+`role="tablist"` bar — **Tiles** (the active palette tab) | Regions | Rooms | Map (the last three
+are `Coming soon` stubs filled by later slices). Tab switching is the pure `tabPanelStates` + a thin
+glue handler. It follows the same
 pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model
 (`static/editor-canvas.js`, `node --test`-covered) plus a thin canvas/`fetch`
 glue kept as a server-side string — **mirroring** the #16 renderer (Decision

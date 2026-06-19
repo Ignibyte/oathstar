@@ -621,9 +621,34 @@ document.getElementById("activate").addEventListener("click", async () => {
     result.dataset.ok = "false";
   }
 });
+
+// Tab bar (#61): clicking a tab selects it and shows its panel, hiding the rest.
+// The selected/hidden state is the pure tabPanelStates(); the handler just applies
+// it to the DOM. Defensive: a no-op when there is no tablist.
+const tablist = document.querySelector('[role="tablist"]');
+if (tablist) {
+  tablist.addEventListener("click", (event) => {
+    const clicked = event.target.closest('[role="tab"]');
+    if (!clicked) return;
+    const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+    const ids = tabs.map((t) => t.dataset.tab);
+    for (const state of tabPanelStates(ids, clicked.dataset.tab)) {
+      const tab = tablist.querySelector('[data-tab="' + state.id + '"]');
+      if (tab) tab.setAttribute("aria-selected", String(state.selected));
+      const panel = document.getElementById("panel-" + state.id);
+      if (panel) panel.hidden = state.hidden;
+    }
+  });
+}
 "#;
 
 /// Render the studio map editor canvas page (ticket #45).
+///
+/// The layout is a **stage** (the `#map` canvas, left) + a **right rail** (#61): the
+/// document controls (Save / Validate / Set as active world) on top, then a
+/// `role="tablist"` bar — **Tiles** (the active `#palette` tab) | Regions | Rooms |
+/// Map (the last three are stub panels filled by later slices). Tab switching is the
+/// pure `tabPanelStates` + a thin tablist handler in [`EDITOR_GLUE`].
 ///
 /// `doc_json` is a server-controlled [`MapDocument`](oathstar_content::MapDocument)
 /// JSON string (never caller input — see [`crate::editor::editor_page`]); it is
@@ -641,12 +666,12 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
 <body class="editor">
   {header}
   <main class="editor-main">
-    <div class="editor-left">
-      <section class="panel canvas-panel">
-        <h2>Map editor</h2>
-        <p class="hint">Pick a tile, then click or drag on the map to paint. Save persists it; Validate checks it; Set as active world makes it the game world.</p>
-        <div class="map-scroll"><canvas id="map" width="0" height="0"></canvas></div>
-      </section>
+    <section class="panel canvas-panel">
+      <h2>Map editor</h2>
+      <p class="hint">Pick a tile, then click or drag on the map to paint. Save persists it; Validate checks it; Set as active world makes it the game world.</p>
+      <div class="map-scroll"><canvas id="map" width="0" height="0"></canvas></div>
+    </section>
+    <aside class="editor-rail">
       <section class="panel controls">
         <label>Map name <input id="map-name" name="map-name" aria-label="Map name (storage slot)"></label>
         <button id="save" type="button">Save</button>
@@ -654,12 +679,21 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
         <button id="activate" type="button">Set as active world</button>
         <pre id="result" aria-live="polite"></pre>
       </section>
-    </div>
-    <section class="panel palette-panel">
-      <h2>Tiles</h2>
-      <p class="hint" id="active-tile">No tile selected</p>
-      <div class="palette-scroll"><canvas id="palette" width="0" height="0"></canvas></div>
-    </section>
+      <div class="tab-bar" role="tablist" aria-label="Editor sections">
+        <button class="tab" role="tab" id="tab-tiles" data-tab="tiles" aria-controls="panel-tiles" aria-selected="true" type="button">Tiles</button>
+        <button class="tab" role="tab" id="tab-regions" data-tab="regions" aria-controls="panel-regions" aria-selected="false" type="button">Regions</button>
+        <button class="tab" role="tab" id="tab-rooms" data-tab="rooms" aria-controls="panel-rooms" aria-selected="false" type="button">Rooms</button>
+        <button class="tab" role="tab" id="tab-map" data-tab="map" aria-controls="panel-map" aria-selected="false" type="button">Map</button>
+      </div>
+      <section class="panel tab-panel" role="tabpanel" id="panel-tiles" data-tab="tiles" aria-labelledby="tab-tiles">
+        <h2>Tiles</h2>
+        <p class="hint" id="active-tile">No tile selected</p>
+        <div class="palette-scroll"><canvas id="palette" width="0" height="0"></canvas></div>
+      </section>
+      <section class="panel tab-panel" role="tabpanel" id="panel-regions" data-tab="regions" aria-labelledby="tab-regions" hidden><p class="soon">Coming soon.</p></section>
+      <section class="panel tab-panel" role="tabpanel" id="panel-rooms" data-tab="rooms" aria-labelledby="tab-rooms" hidden><p class="soon">Coming soon.</p></section>
+      <section class="panel tab-panel" role="tabpanel" id="panel-map" data-tab="map" aria-labelledby="tab-map" hidden><p class="soon">Coming soon.</p></section>
+    </aside>
   </main>
   <script type="application/json" id="map-doc">{doc_json}</script>
   <script type="module">{editor_js}{EDITOR_GLUE}</script>
@@ -754,6 +788,46 @@ mod tests {
         assert!(html.contains(r#"<a href="/editor" aria-current="page">Maps</a>"#));
         assert!(html.contains(r#"href="/regions""#));
         assert!(html.contains(r#"href="/""#)); // the brand home link
+    }
+
+    #[test]
+    fn editor_page_has_a_tabbed_rail() {
+        // #61 / REQ-001/003: the right rail — a role=tablist with the four tabs
+        // (Tiles selected), the Tiles tabpanel holding the palette, and the three
+        // hidden "Coming soon" stub panels. Pins the rail markup against a
+        // format!-body mutant.
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains(r#"<aside class="editor-rail""#));
+        assert!(html.contains(r#"role="tablist""#));
+        for tab in ["tiles", "regions", "rooms", "map"] {
+            assert!(
+                html.contains(&format!(r#"data-tab="{tab}""#)),
+                "tab {tab} present"
+            );
+        }
+        // Tiles is the selected tab by default.
+        assert!(html.contains(
+            r#"id="tab-tiles" data-tab="tiles" aria-controls="panel-tiles" aria-selected="true""#
+        ));
+        // the palette lives inside the Tiles tabpanel.
+        let panel_tiles = html
+            .find(r#"id="panel-tiles""#)
+            .expect("panel-tiles present");
+        let palette = html.find(r#"id="palette""#).expect("palette present");
+        assert!(
+            panel_tiles < palette,
+            "the palette is inside the Tiles panel"
+        );
+        // the other three are hidden "Coming soon" stubs.
+        for tab in ["regions", "rooms", "map"] {
+            assert!(
+                html.contains(&format!(
+                    r#"id="panel-{tab}" data-tab="{tab}" aria-labelledby="tab-{tab}" hidden"#
+                )),
+                "stub panel {tab} hidden"
+            );
+        }
+        assert!(html.contains("Coming soon."));
     }
 
     #[test]

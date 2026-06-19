@@ -15,6 +15,7 @@ import {
   formatValidateResult,
   formatSaveResult,
   formatActivateResult,
+  tabPanelStates,
   tileIndexToSourceRect,
   canvasPointToCell,
   paletteIndexAtPoint,
@@ -220,6 +221,32 @@ test("formatActivateResult: ok confirms the active world; a refusal / null rende
   assert.equal(formatActivateResult(undefined).ok, false);
   // a non-strict ok (e.g. the string "true") is treated as a failure.
   assert.equal(formatActivateResult({ ok: "true" }).ok, false);
+});
+
+test("tabPanelStates: active tab selected + others hidden; unknown/blank → first tab (#61)", () => {
+  const TABS = ["tiles", "regions", "rooms", "map"];
+  const firstSelected = [
+    { id: "tiles", selected: true, hidden: false },
+    { id: "regions", selected: false, hidden: true },
+    { id: "rooms", selected: false, hidden: true },
+    { id: "map", selected: false, hidden: true },
+  ];
+  // an unknown / blank / missing activeId falls back to the first tab.
+  for (const activeId of ["tiles", "", "  ", "nope", undefined]) {
+    assert.deepEqual(tabPanelStates(TABS, activeId), firstSelected, `activeId=${activeId}`);
+  }
+  // a valid non-first id selects exactly that tab.
+  assert.deepEqual(tabPanelStates(TABS, "regions"), [
+    { id: "tiles", selected: false, hidden: true },
+    { id: "regions", selected: true, hidden: false },
+    { id: "rooms", selected: false, hidden: true },
+    { id: "map", selected: false, hidden: true },
+  ]);
+  // invariant: length preserved, exactly one selected, selected === !hidden everywhere.
+  const states = tabPanelStates(TABS, "rooms");
+  assert.equal(states.length, TABS.length);
+  assert.equal(states.filter((s) => s.selected).length, 1);
+  for (const s of states) assert.equal(s.selected, !s.hidden);
 });
 
 // ---- ticket #48: paint helpers ----
