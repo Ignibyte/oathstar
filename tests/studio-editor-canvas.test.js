@@ -13,6 +13,7 @@ import {
   editorCanvasSize,
   editorAriaLabel,
   formatValidateResult,
+  formatSaveResult,
   tileIndexToSourceRect,
   canvasPointToCell,
   paletteIndexAtPoint,
@@ -180,6 +181,24 @@ test("formatValidateResult: ok:true summary (singular + plural) and the message/
   assert.equal(formatValidateResult(undefined).ok, false);
   // a non-strict ok (e.g. the string "true") is treated as a failure.
   assert.equal(formatValidateResult({ ok: "true" }).ok, false);
+});
+
+test("formatSaveResult: ok names the saved slot; a refusal / null renders the message (#55)", () => {
+  assert.deepEqual(formatSaveResult({ ok: true, id: "vale" }), {
+    ok: true,
+    headline: "Saved",
+    detail: "as vale",
+  });
+  const refused = formatSaveResult({ ok: false, message: "map id is not a valid storage name" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.headline, "Not saved");
+  assert.equal(refused.detail, "map id is not a valid storage name");
+  // missing message, and null/undefined bodies, fall back.
+  assert.equal(formatSaveResult({ ok: false }).detail, "save failed");
+  assert.equal(formatSaveResult(null).detail, "save failed");
+  assert.equal(formatSaveResult(undefined).ok, false);
+  // a non-strict ok (e.g. the string "true") is treated as a failure.
+  assert.equal(formatSaveResult({ ok: "true" }).ok, false);
 });
 
 // ---- ticket #48: paint helpers ----

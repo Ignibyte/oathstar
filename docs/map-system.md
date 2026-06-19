@@ -318,8 +318,11 @@ a missing session, a non-editor, or a malformed body. This is the backend the
 **Rendered by the studio (ticket #45).** The same sidecar now serves an
 Editor-gated `GET /editor` page that draws a server-embedded starter
 `MapDocument` on a first-party `<canvas>` (current z-plane: empty / terrain
-floor / wall / room / spawn) and a **Validate** control that POSTs the document
-to `/editor/maps/validate` and shows the typed result. It follows the same
+floor / wall / room / spawn) plus two mirrored controls: **Save** (a name/slot input
++ button that POSTs the document to `/editor/maps`, persisting it under that slot and
+updating the URL to `?map=<id>` so a reload reopens it — ticket #55) and **Validate**
+(POSTs to `/editor/maps/validate` for the typed result). Each renders its outcome
+through a pure `format{Save,Validate}Result` helper. It follows the same
 pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model
 (`static/editor-canvas.js`, `node --test`-covered) plus a thin canvas/`fetch`
 glue kept as a server-side string — **mirroring** the #16 renderer (Decision
@@ -340,8 +343,9 @@ active layer's cell and repaints. The pure model gained `tileIndexToSourceRect`,
 the room/spawn overlay, `imageSmoothingEnabled=false`); the DOM/canvas/mouse/
 image-load glue stays the smoke-/review-verified seam. v1 paints one active
 layer with one tileset; the room inspector (E), per-tile/layer metadata (S5),
-undo/redo, multi-layer UI, save/load (S4), and runtime materialization (#38) are
-later slices.
+undo/redo, multi-layer UI, and **marquee multi-tile paint** are later slices.
+(**Saving** the document landed with #55; **loading** a saved map into the running
+game — the playable-world wiring — is the next item of the authoring loop.)
 
 **Inside a nav shell (ticket #49).** The map editor is no longer a standalone
 page — every authenticated studio page now carries a persistent navigation

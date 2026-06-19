@@ -501,6 +501,36 @@ document.getElementById("validate").addEventListener("click", async () => {
     result.dataset.ok = "false";
   }
 });
+
+// Save the document to its storage slot (the name input == doc.id). The save
+// endpoint validates the slot name and persists a draft; on success the URL gains
+// `?map=<id>` so a reload reopens it. (#55 — sibling of the Validate handler.)
+const nameInput = document.getElementById("map-name");
+nameInput.value = doc.id;
+document.getElementById("save").addEventListener("click", async () => {
+  doc.id = nameInput.value.trim();
+  result.textContent = "Saving…";
+  delete result.dataset.ok;
+  try {
+    const res = await fetch("/editor/maps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(doc),
+    });
+    const json = await res.json();
+    const out = formatSaveResult(json);
+    result.textContent = out.headline + " — " + out.detail;
+    result.dataset.ok = String(out.ok);
+    if (out.ok) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("map", json.id);
+      window.history.replaceState(null, "", url);
+    }
+  } catch (err) {
+    result.textContent = "Request failed — " + err;
+    result.dataset.ok = "false";
+  }
+});
 "#;
 
 /// Render the studio map editor canvas page (ticket #45).
@@ -524,10 +554,12 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
     <div class="editor-left">
       <section class="panel canvas-panel">
         <h2>Map editor</h2>
-        <p class="hint">Pick a tile, then click or drag on the map to paint. Validate checks it.</p>
+        <p class="hint">Pick a tile, then click or drag on the map to paint. Save persists it; Validate checks it.</p>
         <div class="map-scroll"><canvas id="map" width="0" height="0"></canvas></div>
       </section>
       <section class="panel controls">
+        <label>Map name <input id="map-name" name="map-name" aria-label="Map name (storage slot)"></label>
+        <button id="save" type="button">Save</button>
         <button id="validate" type="button">Validate</button>
         <pre id="result" aria-live="polite"></pre>
       </section>
@@ -631,6 +663,21 @@ mod tests {
         assert!(html.contains(r#"<a href="/editor" aria-current="page">Maps</a>"#));
         assert!(html.contains(r#"href="/regions""#));
         assert!(html.contains(r#"href="/""#)); // the brand home link
+    }
+
+    #[test]
+    fn editor_page_wires_the_save_control() {
+        // #55 / REQ-001/002/004: the Save control + its glue — a name input, a Save
+        // button, the POST to /editor/maps, the formatSaveResult render, and the
+        // ?map= reopen update on success.
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains(r#"<button id="save""#));
+        assert!(html.contains(r#"<input id="map-name""#));
+        assert!(html.contains(r#"getElementById("save")"#));
+        assert!(html.contains(r#"fetch("/editor/maps", {"#));
+        assert!(html.contains("formatSaveResult("));
+        assert!(html.contains(r#"searchParams.set("map""#));
+        assert!(html.contains("history.replaceState("));
     }
 
     #[test]

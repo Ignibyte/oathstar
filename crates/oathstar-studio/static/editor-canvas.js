@@ -218,6 +218,26 @@ export function formatValidateResult(resp) {
   };
 }
 
+/**
+ * Turn a `/editor/maps` save response into a display model (sibling of
+ * {@link formatValidateResult}). A success (`ok:true`) names the saved storage
+ * slot; any other shape (a slot/auth/parse refusal) renders the server `message`,
+ * with a fallback when it is absent.
+ *
+ * @param {object} resp the parsed JSON body from POST /editor/maps
+ * @returns {{ok: boolean, headline: string, detail: string}}
+ */
+export function formatSaveResult(resp) {
+  if (resp && resp.ok === true) {
+    return { ok: true, headline: "Saved", detail: `as ${resp.id}` };
+  }
+  return {
+    ok: false,
+    headline: "Not saved",
+    detail: (resp && resp.message) || "save failed",
+  };
+}
+
 // ---- ticket #48: paint helpers (palette / point math / mutation) ----
 
 /**
