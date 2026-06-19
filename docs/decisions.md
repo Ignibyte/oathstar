@@ -2786,3 +2786,41 @@ Revisit when:
   scale.
 - Real 1:1 art at 64px is wanted — regenerate at `TILE=64` (name-keyed, no
   code/map/wire change); the source then equals the cell and nothing upscales.
+
+## Decision 060: The Studio Serves Content Assets From A Runtime Dir, Not The Binary
+
+The studio's **content** assets — the arctic tile sheet (`/tilesets/arctic.png`)
+and the UI-kit sprites (`/ui/panel-frame.png`, `/ui/button.png`) — are read from a
+**runtime directory** at request time, not compiled in with `include_bytes!`. The
+owner edits a tileset or sprite and a browser refresh shows it; no rebuild. This
+reverses the studio sidecar's "self-contained, no runtime asset dir" posture
+(Decision 058) **for content only** — the first slice of the studio-editable-world
+program (ticket #59).
+
+- **Content moves out; code stays in.** The three PNGs are served from
+  `OATHSTAR_ASSETS_DIR` (default `public`, resolved like `OATHSTAR_MAPS_DIR` —
+  blank counts as unset); `studio.css` + the editor/regions JS modules stay
+  `include_str!`'d, because they are program logic, not content the owner authors.
+- **One shared `serve_png(assets_dir, rel)`.** It `tokio::fs::read`s
+  `assets_dir/rel` and answers `200 image/png` with the bytes, or a **logged
+  `404`** on a missing/unreadable file — never a panic. The three handlers are thin
+  `State(studio)` wrappers passing a **fixed** relative path; no request input
+  reaches the filesystem, so there is no path-traversal surface.
+- **The trade: the studio now needs `public/` present at runtime.** A stripped
+  deploy degrades gracefully (the palette/sprite just doesn't load — a 404, not a
+  crash); the binary is no longer fully self-contained. Acceptable because the
+  studio is the owner's loopback authoring tool, where editability beats a
+  single-file binary.
+- **Tested at the seam.** `resolve_assets_dir` (blank == unset → `public`) and
+  `serve_png` (200-with-bytes / 404-on-missing) are unit- and mutation-tested over
+  temp fixture dirs that never touch the real `public/`.
+
+Revisit when:
+
+- The **maps/world** or the **starter document** should also be runtime-editable
+  (the next pivot slices) — extend the same assets-dir pattern, or add a dedicated
+  content root.
+- A deploy wants the old self-contained binary — gate the runtime dir behind a
+  build feature, or embed a fallback copy used when `public/` is absent.
+- Asset paths ever become caller-influenced — restore traversal-safety
+  (canonicalize + assert-prefix) before un-fixing the `rel`.

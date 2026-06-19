@@ -5,7 +5,7 @@
 //! shares the auth/session model with the game server via `oathstar-auth`. This
 //! v1 is the shell + owner login; the map editor is a later ticket (#43).
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use axum::{
     routing::{get, post},
@@ -15,6 +15,7 @@ use oathstar_auth::SessionStore;
 use oathstar_content::ContentCatalog;
 use oathstar_storage::FileSaveStore;
 
+mod assets;
 mod config;
 mod editor;
 mod handlers;
@@ -33,6 +34,9 @@ struct StudioState {
     catalog: Arc<ContentCatalog>,
     /// Persistent store for authored map documents (root: `OATHSTAR_MAPS_DIR`).
     maps: FileSaveStore,
+    /// Runtime content-assets root (tileset + UI sprites; `OATHSTAR_ASSETS_DIR`,
+    /// default `public`) — served from disk so the owner edits without a rebuild (#59).
+    assets_dir: PathBuf,
 }
 
 #[tokio::main]
@@ -46,12 +50,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Authored map documents persist here (loopback, owner-owned).
     let maps_dir = resolve_maps_dir(std::env::var("OATHSTAR_MAPS_DIR").ok());
+    // Content assets (tileset + UI sprites) are served from this runtime dir (#59).
+    let assets_dir = assets::resolve_assets_dir(std::env::var("OATHSTAR_ASSETS_DIR").ok());
 
     let state = StudioState {
         sessions: SessionStore::new(),
         owner_secret: config.owner_secret,
         catalog: Arc::new(oathstar_content::beginner_catalog()?),
         maps: FileSaveStore::new(maps_dir),
+        assets_dir,
     };
 
     let app = Router::new()

@@ -239,6 +239,7 @@ mod tests {
             owner_secret: Some("pw".to_owned()),
             catalog: Arc::new(ContentCatalog::default()),
             maps: oathstar_storage::FileSaveStore::new(fresh_dir("store")),
+            assets_dir: std::path::PathBuf::from("public"),
         }
     }
 

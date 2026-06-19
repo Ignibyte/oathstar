@@ -7,7 +7,7 @@
 use axum::{
     body::Bytes,
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Redirect, Response},
     Json,
 };
@@ -252,18 +252,11 @@ pub async fn editor_page(State(studio): State<StudioState>, jar: CookieJar) -> R
     render::editor_page(STARTER_DOC).into_response()
 }
 
-/// The committed arctic tile sheet, embedded so the loopback studio serves it
-/// without a runtime asset dir (Decision 058). The editor canvas fetches it from
-/// `/tilesets/arctic.png` to draw the palette and the painted sprites.
-const ARCTIC_PNG: &[u8] = include_bytes!("../../../public/tilesets/arctic.png");
-
-/// `GET /tilesets/arctic.png` — the embedded arctic sheet, served as `image/png`.
-pub async fn arctic_sheet() -> Response {
-    (
-        [(header::CONTENT_TYPE, "image/png")],
-        Bytes::from_static(ARCTIC_PNG),
-    )
-        .into_response()
+/// `GET /tilesets/arctic.png` — the arctic tile sheet, served as `image/png` from the
+/// runtime assets dir (`OATHSTAR_ASSETS_DIR`, #59) so the owner can swap it without a
+/// rebuild. The editor canvas fetches it to draw the palette and the painted sprites.
+pub async fn arctic_sheet(State(studio): State<StudioState>) -> Response {
+    crate::assets::serve_png(&studio.assets_dir, "tilesets/arctic.png").await
 }
 
 #[cfg(test)]
@@ -307,6 +300,7 @@ mod tests {
             owner_secret: Some("pw".to_owned()),
             catalog: Arc::new(ContentCatalog::default()),
             maps: oathstar_storage::FileSaveStore::new(maps_dir),
+            assets_dir: std::path::PathBuf::from("public"),
         }
     }
 
@@ -672,9 +666,18 @@ mod tests {
 
     #[tokio::test]
     async fn serves_the_arctic_sheet() {
-        // ticket #48: the studio serves the embedded sheet so the editor palette
-        // and painted sprites actually render (the studio has no runtime asset dir).
-        let res = arctic_sheet().await;
+        // #59: the sheet is read from the runtime assets dir and served as image/png.
+        // Unique per call (atomic seq, like `studio()`) so the fixture never collides.
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static ARCTIC_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
+        let seq = ARCTIC_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("oathstar-studio-arctic-asset-{seq}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("tilesets")).expect("temp tilesets dir");
+        std::fs::write(dir.join("tilesets/arctic.png"), b"PNGARCTIC").expect("sheet fixture");
+        let mut state = studio();
+        state.assets_dir = dir;
+        let res = arctic_sheet(State(state)).await;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(
             res.headers()
@@ -685,7 +688,11 @@ mod tests {
         let body = to_bytes(res.into_body(), usize::MAX)
             .await
             .expect("body bytes");
-        assert!(!body.is_empty(), "the sheet is served");
+        assert_eq!(
+            &body[..],
+            b"PNGARCTIC",
+            "the on-disk sheet bytes are served"
+        );
     }
 
     #[tokio::test]

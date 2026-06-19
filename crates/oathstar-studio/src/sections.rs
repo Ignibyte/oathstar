@@ -68,6 +68,7 @@ mod tests {
             maps: oathstar_storage::FileSaveStore::new(
                 std::env::temp_dir().join("oathstar-studio-test-unused"),
             ),
+            assets_dir: std::path::PathBuf::from("public"),
         }
     }
 

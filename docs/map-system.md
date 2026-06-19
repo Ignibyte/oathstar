@@ -128,6 +128,12 @@ Implemented (sprite tiles, Decisions 050 + 059):
 - Authored per-room/region tile assignment and per-tile description metadata
   are the reserved next step (intake:
   `INTAKE-tileset-region-authoring-per-tile-metadata`).
+- The **studio editor** serves its tile sheet (`/tilesets/arctic.png`) and UI
+  sprites from a **runtime assets dir** (`OATHSTAR_ASSETS_DIR`, default `public`)
+  rather than embedding them in the binary — so the owner edits the sheet and a
+  refresh shows it, no rebuild (Decision 060, ticket #59). A shared `serve_png`
+  reads fixed relative paths and 404s a missing file (never a panic); code
+  (`studio.css`, the editor JS) stays embedded.
 
 Implemented (ticket #33 — entity/item presence markers, Decision 051):
 
