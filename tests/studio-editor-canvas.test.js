@@ -18,6 +18,8 @@ import {
   canvasPointToCell,
   paletteIndexAtPoint,
   paintCell,
+  cellsInRect,
+  paintRect,
 } from "../crates/oathstar-studio/static/editor-canvas.js";
 
 /** A small MapDocument with sane defaults; override fields per test. */
@@ -256,6 +258,52 @@ test("paintCell: inserts, replaces in place, and never mutates the input", () =>
 
   const noop = paintCell(d, "missing", { x: 0, y: 0, z: 0 }, { tileset: "arctic", index: 0 });
   assert.deepEqual(noop.layers[0].cells, [], "a missing layer is a no-op");
+});
+
+test("cellsInRect: inclusive, normalized, row-major (#57)", () => {
+  const rowMajor = [
+    [0, 0],
+    [1, 0],
+    [2, 0],
+    [0, 1],
+    [1, 1],
+    [2, 1],
+  ];
+  assert.deepEqual(cellsInRect({ x: 0, y: 0 }, { x: 2, y: 1 }).map((c) => [c.x, c.y]), rowMajor);
+  // reversed corners -> the same set (normalized via min/max)
+  assert.deepEqual(cellsInRect({ x: 2, y: 1 }, { x: 0, y: 0 }).map((c) => [c.x, c.y]), rowMajor);
+  // a 1x1 (a == b) -> exactly one cell
+  assert.deepEqual(cellsInRect({ x: 3, y: 4 }, { x: 3, y: 4 }), [{ x: 3, y: 4 }]);
+  // a row and a column
+  assert.deepEqual(cellsInRect({ x: 0, y: 5 }, { x: 2, y: 5 }).map((c) => c.x), [0, 1, 2]);
+  assert.deepEqual(cellsInRect({ x: 5, y: 0 }, { x: 5, y: 2 }).map((c) => c.y), [0, 1, 2]);
+});
+
+test("paintRect: fills the rect on the layer/z immutably; 1x1 == one paintCell (#57)", () => {
+  const d = {
+    layers: [{ id: "ground", name: "Ground", kind: "tile", visible: true, cells: [] }],
+  };
+  const snapshot = JSON.stringify(d);
+  const painted = paintRect(d, "ground", { x: 0, y: 0 }, { x: 1, y: 1 }, 0, {
+    tileset: "arctic",
+    index: 7,
+  });
+  assert.equal(JSON.stringify(d), snapshot, "input doc is not mutated");
+  assert.deepEqual(
+    painted.layers[0].cells.map((c) => [c.x, c.y, c.z, c.tileset, c.index]),
+    [
+      [0, 0, 0, "arctic", 7],
+      [1, 0, 0, "arctic", 7],
+      [0, 1, 0, "arctic", 7],
+      [1, 1, 0, "arctic", 7],
+    ],
+    "all four cells of the 2x2 rect carry the tile + z",
+  );
+  // a 1x1 rectangle equals a single paintCell
+  assert.deepEqual(
+    paintRect(d, "ground", { x: 2, y: 3 }, { x: 2, y: 3 }, 0, { tileset: "arctic", index: 4 }),
+    paintCell(d, "ground", { x: 2, y: 3, z: 0 }, { tileset: "arctic", index: 4 }),
+  );
 });
 
 test("paintCell: a layer without a cells array gains the painted cell", () => {

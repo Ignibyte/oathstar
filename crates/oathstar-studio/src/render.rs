@@ -468,20 +468,31 @@ if (palette) {
   });
 }
 
-// Paint the active tile onto the "ground" layer at the clicked cell. The cell
-// MUST carry the active z-plane (Z): editorDrawPlan filters layer cells by z, so
-// a cell with z === undefined is silently dropped and never drawn (#48 fix 2).
-function paintAt(e) {
-  if (!active) { return; }
+// Marquee paint (#57): drag a rectangle to fill it with the active tile. mousedown
+// records the start cell; mouseup fills start→end via paintRect — a single click is
+// a 1×1 fill. Painted cells MUST carry the active z-plane (Z): editorDrawPlan filters
+// layer cells by z, so a cell with z === undefined is never drawn (#48 fix 2).
+function cellAt(e) {
   const rect = canvas.getBoundingClientRect();
-  const cell = canvasPointToCell(e.clientX - rect.left, e.clientY - rect.top, TILE, doc.width, doc.height);
-  if (cell) {
-    doc = paintCell(doc, "ground", { x: cell.x, y: cell.y, z: Z }, active);
+  return canvasPointToCell(e.clientX - rect.left, e.clientY - rect.top, TILE, doc.width, doc.height);
+}
+let dragStart = null;
+canvas.addEventListener("mousedown", (e) => {
+  if (!active) { return; }
+  dragStart = cellAt(e);
+});
+canvas.addEventListener("mouseup", (e) => {
+  // Every mouseup ends the drag — clear the start first, so an early return can
+  // never leave a stale dragStart for the next gesture.
+  const start = dragStart;
+  dragStart = null;
+  if (!active || !start) { return; }
+  const end = cellAt(e);
+  if (end) {
+    doc = paintRect(doc, "ground", start, end, Z, active);
     redraw();
   }
-}
-canvas.addEventListener("mousedown", paintAt);
-canvas.addEventListener("mousemove", (e) => { if (e.buttons === 1) { paintAt(e); } });
+});
 
 const result = document.getElementById("result");
 document.getElementById("validate").addEventListener("click", async () => {
@@ -678,6 +689,20 @@ mod tests {
         assert!(html.contains("formatSaveResult("));
         assert!(html.contains(r#"searchParams.set("map""#));
         assert!(html.contains("history.replaceState("));
+    }
+
+    #[test]
+    fn editor_page_wires_the_marquee_paint() {
+        // #57 / REQ-003: marquee paint — mousedown starts a drag, mouseup fills the
+        // rectangle via paintRect; the old freehand per-move paint is gone.
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains(r#"addEventListener("mousedown""#));
+        assert!(html.contains(r#"addEventListener("mouseup""#));
+        assert!(html.contains("paintRect("));
+        assert!(
+            !html.contains("e.buttons === 1"),
+            "the freehand per-move paint is replaced by the marquee",
+        );
     }
 
     #[test]

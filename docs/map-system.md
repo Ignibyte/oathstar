@@ -348,14 +348,16 @@ serves the sheet itself at `GET /tilesets/arctic.png` (embedded via
 `include_bytes!` — the same no-runtime-asset-dir pattern as the studio's
 embedded CSS/JS since #45). The palette draws the
 sheet (a scrollable strip, not thousands of DOM nodes); clicking it selects an
-active `(tileset, index)`; clicking/dragging the map paints that tile onto the
-active layer's cell and repaints. The pure model gained `tileIndexToSourceRect`,
-`canvasPointToCell`, `paletteIndexAtPoint`, and an immutable `paintCell`, and
+active `(tileset, index)`; **dragging a rectangle** on the map fills it with that
+tile — a single click is a 1×1 fill (marquee paint, #57, replacing the earlier
+freehand drag). The pure model gained `tileIndexToSourceRect`, `canvasPointToCell`,
+`paletteIndexAtPoint`, an immutable `paintCell`, and `cellsInRect`/`paintRect`, and
 `editorDrawPlan` now emits a `sprites` op per painted layer cell (blitted under
 the room/spawn overlay, `imageSmoothingEnabled=false`); the DOM/canvas/mouse/
 image-load glue stays the smoke-/review-verified seam. v1 paints one active
 layer with one tileset; the room inspector (E), per-tile/layer metadata (S5),
-undo/redo, multi-layer UI, and **marquee multi-tile paint** are later slices.
+undo/redo, and a multi-layer UI are later slices (**marquee multi-tile paint**
+landed with #57).
 (**Saving** the document landed with #55 and **loading** the active map into the running
 game with #56 — the author → save → reload → play loop is now closed; see "Loaded by the
 game" above.)

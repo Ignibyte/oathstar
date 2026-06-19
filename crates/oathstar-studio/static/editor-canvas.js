@@ -337,3 +337,48 @@ export function paintCell(doc, layerId, cell, tileRef) {
   });
   return { ...doc, layers };
 }
+
+/**
+ * The cells of the inclusive rectangle spanned by corners `a` and `b`, normalized
+ * (any drag direction yields the same set), in deterministic row-major order
+ * (`y` outer, `x` inner). Pure — the marquee paint seam folds {@link paintCell}
+ * over these (#57).
+ *
+ * @param {{x: number, y: number}} a one corner cell
+ * @param {{x: number, y: number}} b the opposite corner cell
+ * @returns {{x: number, y: number}[]}
+ */
+export function cellsInRect(a, b) {
+  const x0 = Math.min(a.x, b.x);
+  const x1 = Math.max(a.x, b.x);
+  const y0 = Math.min(a.y, b.y);
+  const y1 = Math.max(a.y, b.y);
+  const cells = [];
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
+      cells.push({ x, y });
+    }
+  }
+  return cells;
+}
+
+/**
+ * Paint `tileRef` into every cell of the rectangle `a`→`b` on `layerId` at plane
+ * `z`, folding the immutable {@link paintCell}. Returns a new document (the input is
+ * unchanged); a 1×1 rectangle (`a == b`) paints exactly the one cell. Pure (#57).
+ *
+ * @param {object} doc a MapDocument
+ * @param {string} layerId the target layer's id
+ * @param {{x: number, y: number}} a one corner cell
+ * @param {{x: number, y: number}} b the opposite corner cell
+ * @param {number} z the z-plane the painted cells carry
+ * @param {{tileset: string, index: number}} tileRef the tile to place
+ * @returns {object} a new MapDocument
+ */
+export function paintRect(doc, layerId, a, b, z, tileRef) {
+  let next = doc;
+  for (const cell of cellsInRect(a, b)) {
+    next = paintCell(next, layerId, { x: cell.x, y: cell.y, z }, tileRef);
+  }
+  return next;
+}
