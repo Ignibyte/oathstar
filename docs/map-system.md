@@ -306,6 +306,18 @@ concept). The TMX/TMJ importer (#39), per-room biome colors over the wire (#38),
 the `/admin/editor` canvas UI are separate tickets; both Studio and any importer
 materialize the **same** validated world data.
 
+**Loaded by the game (tickets #53, #56).** At startup `oathstar-server` resolves its
+world in order: an explicit `OATHSTAR_WORLD` path (a saved `MapDocument` JSON) **wins**;
+else the **active slot** `<OATHSTAR_MAPS_DIR>/world.json` (the same dir the studio saves
+to — default `maps/`) when it is a file; else the **baked beginner** world. The chosen
+authored doc is loaded + `materialize`d as **untrusted input** (typed errors, re-validate,
+no panics). An invalid *explicit* world is a **loud startup error**; an invalid *active
+slot* is **logged and falls back to beginner** (a saved draft can't brick startup). So:
+save a map as `world` in the studio (#55), restart the game, and it plays — closing the
+author → save → reload → play loop. `maps/` is git-ignored (local authoring artifacts,
+until the S5 content reset). A studio "Set as active" control (so the slot name isn't
+magic) is a later slice.
+
 **Served by the studio (ticket #44).** The `oathstar-studio` sidecar exposes an
 Editor-gated `POST /editor/maps/validate`: it takes a `MapDocument` JSON body and runs
 validate + materialize against a server-built `ContentCatalog` (from
@@ -344,8 +356,9 @@ the room/spawn overlay, `imageSmoothingEnabled=false`); the DOM/canvas/mouse/
 image-load glue stays the smoke-/review-verified seam. v1 paints one active
 layer with one tileset; the room inspector (E), per-tile/layer metadata (S5),
 undo/redo, multi-layer UI, and **marquee multi-tile paint** are later slices.
-(**Saving** the document landed with #55; **loading** a saved map into the running
-game — the playable-world wiring — is the next item of the authoring loop.)
+(**Saving** the document landed with #55 and **loading** the active map into the running
+game with #56 — the author → save → reload → play loop is now closed; see "Loaded by the
+game" above.)
 
 **Inside a nav shell (ticket #49).** The map editor is no longer a standalone
 page — every authenticated studio page now carries a persistent navigation

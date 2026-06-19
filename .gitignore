@@ -16,6 +16,10 @@ mutants.out.old/
 # local save slots (ticket #28) — player data, never source
 saves/
 
+# authored map documents (studio OATHSTAR_MAPS_DIR; the game's active-world slot,
+# ticket #56) — local authoring artifacts, never source until a content reset (S5)
+maps/
+
 # raw art packs (original/purchased tilesets + extracted working trees). The
 # committed, sliced tile sheets live under public/tilesets/; raw_assets/ is
 # scratch, never source.

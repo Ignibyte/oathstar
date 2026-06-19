@@ -1,4 +1,10 @@
-use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    convert::Infallible,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use async_stream::stream;
 use axum::{
@@ -92,11 +98,16 @@ impl SaveLoadResponse {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Opt into an authored world via `OATHSTAR_WORLD` (a path to a saved map
-    // document). With none, the baked beginner world loads; a configured-but-invalid
-    // world is a loud startup error, not a silent fallback to beginner.
-    let authored = authored_world_path(std::env::var("OATHSTAR_WORLD").ok());
-    let world = oathstar_content::load_startup_world(authored.as_deref())?;
+    // Select the startup world: an explicit `OATHSTAR_WORLD` path wins; else the
+    // conventional active slot `<OATHSTAR_MAPS_DIR>/world.json` (the dir the studio
+    // saves to) when present; else the baked beginner world. An invalid explicit world
+    // is a loud startup error; an invalid active slot logs and falls back to beginner,
+    // so a saved draft never bricks startup. #56.
+    let maps_dir = std::env::var("OATHSTAR_MAPS_DIR").unwrap_or_else(|_| "maps".to_owned());
+    let world = load_world(resolve_world_path(
+        std::env::var("OATHSTAR_WORLD").ok(),
+        Path::new(&maps_dir),
+    ))?;
     let mut engine = Engine::try_new(world)?;
     // Emit the opening scene once, up front, and keep it to seed each new
     // subscriber. begin() does not move the player, so /state stays consistent.
@@ -365,12 +376,55 @@ fn event_to_json(event: &GameEvent) -> Option<String> {
     serde_json::to_string(event).ok()
 }
 
-/// The authored-world path from a raw `OATHSTAR_WORLD` value: `None` when unset or
-/// blank (a set-but-empty var is treated as unset), otherwise the path. Split out
-/// of `main` so the blank-≠-unset rule is unit-testable.
-fn authored_world_path(raw: Option<String>) -> Option<std::path::PathBuf> {
-    raw.filter(|path| !path.is_empty())
-        .map(std::path::PathBuf::from)
+/// The conventional active-world file inside `OATHSTAR_MAPS_DIR` — the slot the
+/// studio saves to that the game loads by default.
+const ACTIVE_WORLD_FILE: &str = "world.json";
+
+/// Which world the game should start with, resolved from config + the maps dir.
+#[derive(Debug, PartialEq, Eq)]
+enum WorldSource {
+    /// An explicit `OATHSTAR_WORLD` path — loaded verbatim; invalid is a loud error.
+    Explicit(PathBuf),
+    /// The conventional active slot in the maps dir — best-effort (invalid falls back).
+    ActiveSlot(PathBuf),
+    /// No authored world configured — the baked beginner world.
+    Beginner,
+}
+
+/// Resolve the startup world source: an explicit `OATHSTAR_WORLD` path (blank ==
+/// unset) wins; else the active slot `maps_dir/world.json` when it is a file; else
+/// the baked beginner world. Split out of `main` so the precedence is unit-testable.
+fn resolve_world_path(oathstar_world: Option<String>, maps_dir: &Path) -> WorldSource {
+    if let Some(path) = oathstar_world.filter(|raw| !raw.is_empty()) {
+        return WorldSource::Explicit(PathBuf::from(path));
+    }
+    let active = maps_dir.join(ACTIVE_WORLD_FILE);
+    if active.is_file() {
+        WorldSource::ActiveSlot(active)
+    } else {
+        WorldSource::Beginner
+    }
+}
+
+/// Load the world for a [`WorldSource`], reusing `load_startup_world`. An explicit
+/// world that fails to load is a loud error (the caller opted into it); an active
+/// slot that fails to load is logged and falls back to the baked beginner world, so
+/// a saved draft never bricks startup.
+fn load_world(source: WorldSource) -> anyhow::Result<oathstar_content::WorldDefinition> {
+    match source {
+        WorldSource::Explicit(path) => oathstar_content::load_startup_world(Some(&path)),
+        WorldSource::ActiveSlot(path) => match oathstar_content::load_startup_world(Some(&path)) {
+            Ok(world) => Ok(world),
+            Err(error) => {
+                eprintln!(
+                    "oathstar-server: active world {} failed to load ({error}); using the baked beginner world",
+                    path.display()
+                );
+                oathstar_content::load_startup_world(None)
+            }
+        },
+        WorldSource::Beginner => oathstar_content::load_startup_world(None),
+    }
 }
 
 #[cfg(test)]
@@ -380,13 +434,112 @@ mod tests {
         CombatOutcome, EventChannel, GameEventKind, OathStatus, OutputComponent,
     };
 
+    // ---- #56: active-world resolution ----
+
+    // A valid map document (spawn → room `alpha`) and one that parses but fails to
+    // materialize (unsupported tile size) — mirroring oathstar-content's fixtures.
+    const AUTHORED: &str = r#"{
+        "id":"authored","title":"Authored","tile_size":16,"width":4,"height":4,"floors":1,
+        "terrain_palette":{"floor":{"tile":"f","passable":true}},
+        "terrain":[{"x":0,"y":0,"z":0,"terrain":"floor"},{"x":1,"y":0,"z":0,"terrain":"floor"}],
+        "regions":{"reg":{"id":"reg","name":"Reg"}},
+        "rooms":[{"x":0,"y":0,"z":0,"id":"alpha","region":"reg"},{"x":1,"y":0,"z":0,"id":"beta","region":"reg"}],
+        "spawn":{"x":0,"y":0,"z":0}
+    }"#;
+    const UNMATERIALIZABLE: &str = r#"{
+        "id":"bad","title":"Bad","tile_size":7,"width":4,"height":4,"floors":1,
+        "terrain_palette":{},"terrain":[],"regions":{},"rooms":[],"spawn":null
+    }"#;
+
+    /// A fresh, unique temp dir for one test — never the real `maps/`.
+    fn fresh_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("oathstar-server-aw-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
     #[test]
-    fn authored_world_path_treats_blank_as_unset() {
-        assert_eq!(authored_world_path(None), None);
-        assert_eq!(authored_world_path(Some(String::new())), None);
+    fn resolve_world_path_explicit_wins_even_with_an_active_slot() {
+        // REQ-001: an explicit OATHSTAR_WORLD beats a present active slot.
+        let dir = fresh_dir("explicit-wins");
+        std::fs::write(dir.join(ACTIVE_WORLD_FILE), "{}").expect("write slot");
         assert_eq!(
-            authored_world_path(Some("worlds/x.json".to_owned())),
-            Some(std::path::PathBuf::from("worlds/x.json"))
+            resolve_world_path(Some("explicit.json".to_owned()), &dir),
+            WorldSource::Explicit(PathBuf::from("explicit.json")),
+        );
+    }
+
+    #[test]
+    fn resolve_world_path_blank_or_unset_uses_the_active_slot() {
+        // REQ-001/002: blank == unset; both fall through to the active slot when present.
+        let dir = fresh_dir("active-slot");
+        let slot = dir.join(ACTIVE_WORLD_FILE);
+        std::fs::write(&slot, "{}").expect("write slot");
+        assert_eq!(
+            resolve_world_path(Some(String::new()), &dir),
+            WorldSource::ActiveSlot(slot.clone()),
+        );
+        assert_eq!(
+            resolve_world_path(None, &dir),
+            WorldSource::ActiveSlot(slot)
+        );
+    }
+
+    #[test]
+    fn resolve_world_path_no_file_active_slot_is_beginner() {
+        // REQ-003: no slot → Beginner; a slot that is a DIRECTORY (not a file) → Beginner.
+        let empty = fresh_dir("no-slot");
+        assert_eq!(resolve_world_path(None, &empty), WorldSource::Beginner);
+        let dir = fresh_dir("slot-is-dir");
+        std::fs::create_dir_all(dir.join(ACTIVE_WORLD_FILE)).expect("mkdir slot");
+        assert_eq!(resolve_world_path(None, &dir), WorldSource::Beginner);
+    }
+
+    #[test]
+    fn load_world_loads_authored_for_a_valid_active_slot_or_explicit() {
+        // REQ-004: a valid authored world materializes (start room `alpha`).
+        let dir = fresh_dir("lw-valid");
+        let slot = dir.join(ACTIVE_WORLD_FILE);
+        std::fs::write(&slot, AUTHORED).expect("write");
+        assert_eq!(
+            load_world(WorldSource::ActiveSlot(slot.clone()))
+                .expect("active loads")
+                .start_room_id,
+            "alpha",
+        );
+        assert_eq!(
+            load_world(WorldSource::Explicit(slot))
+                .expect("explicit loads")
+                .start_room_id,
+            "alpha",
+        );
+    }
+
+    #[test]
+    fn load_world_active_slot_falls_back_but_explicit_errs_on_invalid() {
+        // REQ-004: an invalid ACTIVE slot logs + falls back to beginner (no brick); an
+        // invalid EXPLICIT world is a loud error.
+        let dir = fresh_dir("lw-invalid");
+        let bad = dir.join("bad.json");
+        std::fs::write(&bad, UNMATERIALIZABLE).expect("write");
+        assert_eq!(
+            load_world(WorldSource::ActiveSlot(bad.clone()))
+                .expect("falls back to beginner")
+                .start_room_id,
+            "hollowmere_square",
+        );
+        assert!(load_world(WorldSource::Explicit(bad)).is_err());
+    }
+
+    #[test]
+    fn load_world_beginner_loads_the_baked_world() {
+        // REQ-004: Beginner → the baked world.
+        assert_eq!(
+            load_world(WorldSource::Beginner)
+                .expect("beginner loads")
+                .start_room_id,
+            "hollowmere_square",
         );
     }
 
