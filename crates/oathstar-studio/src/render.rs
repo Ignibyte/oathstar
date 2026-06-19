@@ -192,27 +192,82 @@ fn doc_room_counts(doc: &MapDocument) -> (BTreeMap<&str, usize>, BTreeMap<&str, 
     (regions, subregions)
 }
 
-/// Render the regions dashboard: the persisted authored maps, each linking to its
-/// per-map region editor (ticket #51, slice 2). Authoring targets an authored
-/// document, not the baked world — an empty store shows a "create one" prompt.
+/// The browser seam for the regions dashboard table (#58): builds row records from
+/// the rendered `<tr>` data and wires the search input + sortable headers to the pure
+/// `filterRows`/`sortRows`. Runs after the `regions-table.js` module in the same inline
+/// `<script type="module">`; smoke-/review-verified, never `node`-imported.
+const REGIONS_GLUE: &str = r#"
+const search = document.getElementById("regions-search");
+const tbody = document.querySelector(".regions-table tbody");
+if (search && tbody) {
+  const rows = [...tbody.querySelectorAll("tr")].map((el) => ({
+    el,
+    title: el.dataset.title,
+    id: el.dataset.id,
+    regions: el.dataset.regions,
+    subs: el.dataset.subs,
+  }));
+  let sortKey = null;
+  let sortDir = "asc";
+  const apply = () => {
+    const shown = new Set(filterRows(rows, search.value));
+    const ordered = sortKey ? sortRows(rows, sortKey, sortDir) : rows;
+    for (const row of ordered) {
+      row.el.hidden = !shown.has(row);
+      tbody.appendChild(row.el);
+    }
+  };
+  search.addEventListener("input", apply);
+  for (const button of document.querySelectorAll(".regions-table thead button")) {
+    button.addEventListener("click", () => {
+      const key = button.dataset.key;
+      sortDir = sortKey === key && sortDir === "asc" ? "desc" : "asc";
+      sortKey = key;
+      for (const th of document.querySelectorAll(".regions-table th")) {
+        th.setAttribute("aria-sort", "none");
+      }
+      button.closest("th").setAttribute("aria-sort", sortDir === "asc" ? "ascending" : "descending");
+      apply();
+    });
+  }
+}
+"#;
+
+/// Render the regions dashboard: the persisted authored maps as a **searchable,
+/// sortable table**, each row linking to its per-map region editor (ticket #51 / #58).
+/// Authoring targets an authored document, not the baked world — an empty store shows a
+/// "create one" prompt.
 pub fn regions_list_page(maps: &[MapSummary]) -> Html<String> {
-    let mut body = String::new();
-    if maps.is_empty() {
-        body.push_str(
-            r#"<section class="panel"><p class="soon">No authored maps yet. Create one in the <a href="/editor">Maps editor</a>, then manage its regions here.</p></section>"#,
-        );
+    let body = if maps.is_empty() {
+        r#"<section class="panel"><p class="soon">No authored maps yet. Create one in the <a href="/editor">Maps editor</a>, then manage its regions here.</p></section>"#.to_owned()
     } else {
+        let mut rows = String::new();
         for map in maps {
             let id = escape_html(&map.id);
             let title = escape_html(&map.title);
             let _ = write!(
-                body,
-                r#"<section class="panel"><h2>{title}</h2><p class="who">{regions} regions · {subs} sub-regions</p><p><a class="cta" href="/regions/{id}">Edit regions</a></p></section>"#,
+                rows,
+                r#"<tr data-title="{title}" data-id="{id}" data-regions="{regions}" data-subs="{subs}"><td>{title}</td><td>{id}</td><td>{regions}</td><td>{subs}</td><td><a class="cta" href="/regions/{id}">Edit regions</a></td></tr>"#,
                 regions = map.region_count,
                 subs = map.subregion_count,
             );
         }
-    }
+        format!(
+            r#"<section class="panel">
+    <label class="table-search">Filter <input id="regions-search" type="search" aria-label="Filter maps" placeholder="Search title or id…"></label>
+    <table class="regions-table">
+      <thead><tr>
+        <th aria-sort="none"><button type="button" data-key="title">Title</button></th>
+        <th aria-sort="none"><button type="button" data-key="id">Id</button></th>
+        <th aria-sort="none"><button type="button" data-key="regions">Regions</button></th>
+        <th aria-sort="none"><button type="button" data-key="subs">Sub-regions</button></th>
+        <th>Actions</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </section>"#
+        )
+    };
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -221,9 +276,11 @@ pub fn regions_list_page(maps: &[MapSummary]) -> Html<String> {
 <body class="dashboard">
   {header}
   <main>{body}</main>
+  <script type="module">{regions_js}{REGIONS_GLUE}</script>
 </body>
 </html>"#,
         header = studio_header(Some(NavSection::Regions)),
+        regions_js = include_str!("../static/regions-table.js"),
     ))
 }
 
@@ -767,12 +824,12 @@ mod tests {
             },
         ];
         let html = regions_list_page(&maps).0;
-        assert!(html.contains("<h2>First</h2>"));
-        assert!(html.contains("<h2>Second</h2>"));
-        assert!(html.contains(r#"<a class="cta" href="/regions/m1">Edit regions</a>"#));
+        assert!(html.contains(r#"<table class="regions-table">"#));
+        // a data row carries its fields on data-* (the glue reads them) + the cells + link
+        assert!(html.contains(
+            r#"<tr data-title="First" data-id="m1" data-regions="2" data-subs="1"><td>First</td><td>m1</td><td>2</td><td>1</td><td><a class="cta" href="/regions/m1">Edit regions</a></td></tr>"#
+        ));
         assert!(html.contains(r#"<a class="cta" href="/regions/m2">Edit regions</a>"#));
-        assert!(html.contains("2 regions · 1 sub-regions"));
-        assert!(html.contains("0 regions · 0 sub-regions"));
         assert!(html.contains(r#"<a href="/regions" aria-current="page">Regions</a>"#));
         assert!(!html.contains("No authored maps yet"));
     }
@@ -785,6 +842,31 @@ mod tests {
         assert!(
             !html.contains(r#"class="cta""#),
             "no map cards in the empty state"
+        );
+    }
+
+    #[test]
+    fn regions_list_page_wires_search_sort_and_escapes_titles() {
+        // #58 / REQ-004: the search input + sortable headers + the glue wiring; and an
+        // XSS guard — an author title with `"`/`<` is escaped in BOTH the data-* attribute
+        // and the cell, never emitted raw.
+        use super::{regions_list_page, MapSummary};
+        let maps = vec![MapSummary {
+            id: "m1".to_owned(),
+            title: r#"a"<b"#.to_owned(),
+            region_count: 1,
+            subregion_count: 0,
+        }];
+        let html = regions_list_page(&maps).0;
+        assert!(html.contains(r#"<input id="regions-search""#));
+        assert!(html.contains(r#"aria-sort="none""#));
+        assert!(html.contains("filterRows("));
+        assert!(html.contains("sortRows("));
+        assert!(html.contains(r#"data-title="a&quot;&lt;b""#));
+        assert!(html.contains("<td>a&quot;&lt;b</td>"));
+        assert!(
+            !html.contains(r#"a"<b"#),
+            "the raw unescaped title must never appear",
         );
     }
 

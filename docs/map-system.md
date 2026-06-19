@@ -380,8 +380,12 @@ and the rest of the kit (icons, portraits, bars, banners) are later #50 slices.
 
 **Regions dashboard + authoring (ticket #51).** The nav's **Regions** section manages
 the regions and sub-regions of the **persisted authored maps** (the S1 store), not the
-baked world. `GET /regions` lists the saved maps (each with region / sub-region counts);
-`GET /regions/{id}` is a per-map editor that lists each region — with its nested
+baked world. `GET /regions` lists the saved maps as a **searchable, sortable table** (Title /
+Id / region & sub-region counts / an Edit-regions link), the search + column sort done
+client-side over the rendered rows via the pure `filterRows`/`sortRows`
+(`static/regions-table.js`) behind a thin `REGIONS_GLUE` seam (ticket #58, the
+`editor-canvas.js` + `EDITOR_GLUE` pattern); `GET /regions/{id}` is a per-map editor that
+lists each region — with its nested
 sub-regions and room counts — beside Editor-gated **create / edit / delete** forms for
 both (`POST /regions/{id}/region` and `…/subregion`, op-dispatched). Every mutation runs
 through the content edit seam (the region methods on `MapDocument`): targeted referential

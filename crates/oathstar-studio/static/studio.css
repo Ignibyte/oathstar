@@ -165,3 +165,51 @@ button {
   font-weight: 700;
   image-rendering: pixelated;
 }
+
+/* regions dashboard table (#58) */
+.table-search {
+  display: block;
+  margin: 0 0 0.7rem;
+  color: var(--muted);
+}
+.table-search input {
+  margin-left: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.regions-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.regions-table th,
+.regions-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+.regions-table thead th {
+  color: var(--muted);
+}
+.regions-table thead button {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.regions-table thead th[aria-sort="ascending"] button::after {
+  content: " \25B2";
+  color: var(--brass);
+}
+.regions-table thead th[aria-sort="descending"] button::after {
+  content: " \25BC";
+  color: var(--brass);
+}
+.regions-table tbody tr:hover {
+  background: var(--panel);
+}
