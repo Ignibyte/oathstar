@@ -15,7 +15,7 @@ use axum_extra::extract::cookie::CookieJar;
 use oathstar_auth::{principal_from_cookie, require_role, AuthRole, SessionStore};
 use oathstar_content::{MapDocument, MapValidationError};
 use oathstar_storage::{validate_save_slot_name, SaveStore};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{render, StudioState};
 
@@ -58,6 +58,20 @@ struct MapList {
 struct Activated {
     ok: bool,
     active: &'static str,
+}
+
+/// A posted region edit (#62): the in-memory document, the op, and the region fields
+/// (`id`/`name`/`description` default to empty so a `delete` need only carry `id`).
+#[derive(Deserialize)]
+struct RegionOp {
+    document: MapDocument,
+    op: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
 }
 
 /// A refusal response with the given status and message (no typed error).
@@ -170,6 +184,41 @@ pub async fn set_active(
             }),
         )
             .into_response(),
+    }
+}
+
+/// `POST /editor/maps/region-op` — apply a region create/edit/delete to the posted
+/// document via the `MapDocument` region CRUD, returning the updated document.
+///
+/// Gated to the Editor role. The op dispatches to `create_region`/`update_region`/
+/// `delete_region` against the catalog; `200` returns the full updated document JSON
+/// (the editor swaps it into its in-memory doc, so Save persists it), and any typed
+/// `RegionEditError` — e.g. a delete refused while a room references the region — is a
+/// `400` with that message. The CRUD is reused, not reimplemented.
+pub async fn region_op(State(studio): State<StudioState>, jar: CookieJar, body: Bytes) -> Response {
+    if let Some(refusal) = editor_refusal(&jar, &studio.sessions) {
+        return refusal;
+    }
+    let Ok(req) = serde_json::from_slice::<RegionOp>(&body) else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "request body is not a valid region op",
+        );
+    };
+    let result = match req.op.as_str() {
+        "create" => {
+            req.document
+                .create_region(&req.id, &req.name, &req.description, &studio.catalog)
+        }
+        "edit" => req
+            .document
+            .update_region(&req.id, &req.name, &req.description, &studio.catalog),
+        "delete" => req.document.delete_region(&req.id, &studio.catalog),
+        _ => return refuse(StatusCode::BAD_REQUEST, "unknown region op"),
+    };
+    match result {
+        Ok(document) => Json(document).into_response(),
+        Err(error) => refuse(StatusCode::BAD_REQUEST, &error.to_string()),
     }
 }
 
@@ -318,7 +367,8 @@ pub async fn arctic_sheet(State(studio): State<StudioState>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        arctic_sheet, editor_page, list_maps, load_map, save_map, set_active, validate, STARTER_DOC,
+        arctic_sheet, editor_page, list_maps, load_map, region_op, save_map, set_active, validate,
+        STARTER_DOC,
     };
     use crate::StudioState;
     use axum::body::{to_bytes, Body, Bytes};
@@ -551,6 +601,167 @@ mod tests {
             StatusCode::FORBIDDEN
         );
         assert!(player.maps.read_json::<MapDocument>("world").is_err());
+    }
+
+    /// POST a region op and decode `(status, json)`.
+    async fn call_region_op(
+        state: StudioState,
+        cookie: Option<String>,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let jar = jar(cookie.as_deref()).await;
+        let bytes = serde_json::to_vec(&body).expect("serialize region op");
+        decode(region_op(State(state), jar, Bytes::from(bytes)).await).await
+    }
+
+    /// `VALID_DOC` as a JSON value, for embedding as a region op's `document`.
+    fn valid_doc_value() -> serde_json::Value {
+        serde_json::from_str(VALID_DOC).expect("VALID_DOC parses")
+    }
+
+    fn region_op_body(
+        document: serde_json::Value,
+        op: &str,
+        id: &str,
+        name: &str,
+        description: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "document": document, "op": op, "id": id, "name": name, "description": description,
+        })
+    }
+
+    #[tokio::test]
+    async fn region_op_creates_a_region() {
+        // REQ-001: create returns the updated document with the new region.
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        let (status, body) = call_region_op(
+            state,
+            Some(cookie),
+            region_op_body(valid_doc_value(), "create", "wild", "Wilds", ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let doc: MapDocument = serde_json::from_value(body).expect("the body is a document");
+        assert!(
+            doc.regions.contains_key("wild"),
+            "the new region is present"
+        );
+    }
+
+    #[tokio::test]
+    async fn region_op_edits_a_region() {
+        // REQ-002: edit renames the region.
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        let (status, body) = call_region_op(
+            state,
+            Some(cookie),
+            region_op_body(valid_doc_value(), "edit", "reg", "Renamed", "keep"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let doc: MapDocument = serde_json::from_value(body).expect("the body is a document");
+        assert_eq!(doc.regions["reg"].name, "Renamed");
+    }
+
+    #[tokio::test]
+    async fn region_op_deletes_unreferenced_but_refuses_referenced() {
+        // REQ-003: an unreferenced region deletes; a region rooms use is refused and
+        // the document is left unchanged (the 400 body is a Failure, not a document).
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        let (_s, created) = call_region_op(
+            state.clone(),
+            Some(cookie.clone()),
+            region_op_body(valid_doc_value(), "create", "wild", "Wilds", ""),
+        )
+        .await;
+        let (status, body) = call_region_op(
+            state.clone(),
+            Some(cookie.clone()),
+            region_op_body(created, "delete", "wild", "", ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let doc: MapDocument = serde_json::from_value(body).expect("the body is a document");
+        assert!(
+            !doc.regions.contains_key("wild"),
+            "the unreferenced region is gone"
+        );
+
+        let (status, body) = call_region_op(
+            state,
+            Some(cookie),
+            region_op_body(valid_doc_value(), "delete", "reg", "", ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["ok"], false);
+        let message = body["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("alpha") || message.contains("beta") || message.contains("room"),
+            "the refusal names the referencing room: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn region_op_refuses_a_bad_op_or_duplicate_id() {
+        // REQ-004: an unknown op and a duplicate-id create are both 400.
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        assert_eq!(
+            call_region_op(
+                state.clone(),
+                Some(cookie.clone()),
+                region_op_body(valid_doc_value(), "bogus", "x", "X", ""),
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            call_region_op(
+                state,
+                Some(cookie),
+                region_op_body(valid_doc_value(), "create", "reg", "Dup", ""),
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn region_op_refuses_non_editor_callers() {
+        // REQ-005: anonymous → 401, Player → 403.
+        assert_eq!(
+            call_region_op(
+                studio(),
+                None,
+                region_op_body(valid_doc_value(), "create", "x", "X", ""),
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let state = studio();
+        let cookie = cookie_header(
+            &state
+                .sessions
+                .create_session(principal(vec![AuthRole::Player])),
+        );
+        assert_eq!(
+            call_region_op(
+                state,
+                Some(cookie),
+                region_op_body(valid_doc_value(), "create", "x", "X", ""),
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
     }
 
     #[tokio::test]

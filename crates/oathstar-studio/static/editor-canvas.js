@@ -276,6 +276,36 @@ export function tabPanelStates(tabIds, activeId) {
   return tabIds.map((id) => ({ id, selected: id === active, hidden: id !== active }));
 }
 
+/**
+ * The region rows for the editor's Regions tab (#62): one per declared region, with
+ * its room count and sub-region count tallied from the document. Pure — the caller
+ * renders the ids/names via `textContent`. Order follows `doc.regions` (id-sorted in
+ * real data — `regions` is a `BTreeMap`). Null-safe.
+ *
+ * @param {object} doc the in-memory MapDocument
+ * @returns {Array<{id: string, name: string, roomCount: number, subregionCount: number}>}
+ */
+export function editorRegionRows(doc) {
+  const regions = (doc && doc.regions) || {};
+  const subs = (doc && doc.subregions) || {};
+  const rooms = (doc && doc.rooms) || [];
+  const roomBy = {};
+  for (const room of rooms) {
+    roomBy[room.region] = (roomBy[room.region] || 0) + 1;
+  }
+  const subBy = {};
+  for (const sub of Object.values(subs)) {
+    subBy[sub.region] = (subBy[sub.region] || 0) + 1;
+  }
+  return Object.values(regions).map((reg) => ({
+    id: reg.id,
+    name: reg.name,
+    description: reg.description ?? "",
+    roomCount: roomBy[reg.id] || 0,
+    subregionCount: subBy[reg.id] || 0,
+  }));
+}
+
 // ---- ticket #48: paint helpers (palette / point math / mutation) ----
 
 /**

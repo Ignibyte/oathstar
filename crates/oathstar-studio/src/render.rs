@@ -640,6 +640,89 @@ if (tablist) {
     }
   });
 }
+
+// Regions tab (#62): inline region create / rename / delete. Each op POSTs the
+// in-memory doc + the op to /editor/maps/region-op, which applies the MapDocument
+// region CRUD server-side and returns the updated doc; we swap it in and re-render.
+// The list is built with textContent (never innerHTML), so author ids/names are safe.
+const regionList = document.getElementById("region-list");
+const regionResult = document.getElementById("region-result");
+const regionAdd = document.getElementById("region-add");
+const regionAddId = document.getElementById("region-add-id");
+const regionAddName = document.getElementById("region-add-name");
+const regionAddDesc = document.getElementById("region-add-desc");
+
+async function regionOp(op, fields) {
+  if (regionResult) {
+    regionResult.textContent = "Working…";
+    delete regionResult.dataset.ok;
+  }
+  try {
+    const res = await fetch("/editor/maps/region-op", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ document: doc, op, ...fields }),
+    });
+    if (res.ok) {
+      doc = await res.json();
+      renderRegions();
+      redraw();
+      if (regionResult) {
+        regionResult.textContent = "Saved.";
+        regionResult.dataset.ok = "true";
+      }
+    } else {
+      const body = await res.json().catch(() => ({}));
+      if (regionResult) {
+        regionResult.textContent = body.message || "Region op failed.";
+        regionResult.dataset.ok = "false";
+      }
+    }
+  } catch (err) {
+    if (regionResult) {
+      regionResult.textContent = "Request failed — " + err;
+      regionResult.dataset.ok = "false";
+    }
+  }
+}
+
+function renderRegions() {
+  if (!regionList) return;
+  regionList.textContent = "";
+  for (const row of editorRegionRows(doc)) {
+    const li = document.createElement("li");
+    li.className = "region-row";
+    const label = document.createElement("span");
+    label.textContent =
+      row.name + " (" + row.id + ") — " + row.roomCount + " rooms · " + row.subregionCount + " sub-regions";
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.textContent = "Rename";
+    rename.addEventListener("click", () => {
+      const name = prompt("New name for " + row.id, row.name);
+      // pass the current description back unchanged — update_region overwrites it,
+      // so omitting it would wipe an authored description on a rename (#62 inspect).
+      if (name !== null) regionOp("edit", { id: row.id, name, description: row.description });
+    });
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => regionOp("delete", { id: row.id }));
+    li.append(label, rename, del);
+    regionList.append(li);
+  }
+}
+
+if (regionAdd) {
+  regionAdd.addEventListener("click", () => {
+    regionOp("create", {
+      id: regionAddId.value.trim(),
+      name: regionAddName.value.trim(),
+      description: regionAddDesc.value.trim(),
+    });
+  });
+}
+renderRegions();
 "#;
 
 /// Render the studio map editor canvas page (ticket #45).
@@ -690,7 +773,17 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
         <p class="hint" id="active-tile">No tile selected</p>
         <div class="palette-scroll"><canvas id="palette" width="0" height="0"></canvas></div>
       </section>
-      <section class="panel tab-panel" role="tabpanel" id="panel-regions" data-tab="regions" aria-labelledby="tab-regions" hidden><p class="soon">Coming soon.</p></section>
+      <section class="panel tab-panel" role="tabpanel" id="panel-regions" data-tab="regions" aria-labelledby="tab-regions" hidden>
+        <h2>Regions</h2>
+        <form id="region-add-form" class="region-add">
+          <label>Id <input id="region-add-id" name="region-add-id" aria-label="New region id"></label>
+          <label>Name <input id="region-add-name" name="region-add-name" aria-label="New region name"></label>
+          <label>Description <input id="region-add-desc" name="region-add-desc" aria-label="New region description"></label>
+          <button id="region-add" type="button">Add region</button>
+        </form>
+        <pre id="region-result" aria-live="polite"></pre>
+        <ul id="region-list" class="region-list"></ul>
+      </section>
       <section class="panel tab-panel" role="tabpanel" id="panel-rooms" data-tab="rooms" aria-labelledby="tab-rooms" hidden><p class="soon">Coming soon.</p></section>
       <section class="panel tab-panel" role="tabpanel" id="panel-map" data-tab="map" aria-labelledby="tab-map" hidden><p class="soon">Coming soon.</p></section>
     </aside>
@@ -828,6 +921,20 @@ mod tests {
             );
         }
         assert!(html.contains("Coming soon."));
+    }
+
+    #[test]
+    fn editor_page_regions_tab_has_the_region_ui() {
+        // #62 / REQ-007: the Regions tab is the inline region editor — an add-region
+        // form + a list wired to editorRegionRows + /editor/maps/region-op (no longer a
+        // "Coming soon" stub).
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains(r#"id="region-list""#));
+        assert!(html.contains(r#"id="region-add""#));
+        assert!(html.contains(r#"id="region-add-id""#));
+        assert!(html.contains("editorRegionRows("));
+        assert!(html.contains("renderRegions("));
+        assert!(html.contains(r#"fetch("/editor/maps/region-op""#));
     }
 
     #[test]

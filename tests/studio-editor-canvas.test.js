@@ -16,6 +16,7 @@ import {
   formatSaveResult,
   formatActivateResult,
   tabPanelStates,
+  editorRegionRows,
   tileIndexToSourceRect,
   canvasPointToCell,
   paletteIndexAtPoint,
@@ -247,6 +248,31 @@ test("tabPanelStates: active tab selected + others hidden; unknown/blank → fir
   assert.equal(states.length, TABS.length);
   assert.equal(states.filter((s) => s.selected).length, 1);
   for (const s of states) assert.equal(s.selected, !s.hidden);
+});
+
+test("editorRegionRows: one row per region with room + sub-region counts + description (#62)", () => {
+  const doc = {
+    regions: {
+      r1: { id: "r1", name: "R1", description: "d" },
+      r2: { id: "r2", name: "R2", description: "" },
+    },
+    subregions: { s1: { id: "s1", region: "r1" } },
+    rooms: [{ region: "r1" }, { region: "r1" }, { region: "r2" }],
+  };
+  assert.deepEqual(editorRegionRows(doc), [
+    { id: "r1", name: "R1", description: "d", roomCount: 2, subregionCount: 1 },
+    { id: "r2", name: "R2", description: "", roomCount: 1, subregionCount: 0 },
+  ]);
+  // empty / null / undefined docs → [].
+  assert.deepEqual(editorRegionRows({}), []);
+  assert.deepEqual(editorRegionRows(null), []);
+  assert.deepEqual(editorRegionRows(undefined), []);
+  // a region with no rooms → roomCount 0; the description is carried so a rename can
+  // echo it back unchanged (the #62 inspect fix).
+  const rows = editorRegionRows({ regions: { r: { id: "r", name: "R", description: "keep" } } });
+  assert.equal(rows[0].roomCount, 0);
+  assert.equal(rows[0].subregionCount, 0);
+  assert.equal(rows[0].description, "keep");
 });
 
 // ---- ticket #48: paint helpers ----

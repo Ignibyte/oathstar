@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/editor", get(editor::editor_page))
         .route("/editor/maps/validate", post(editor::validate))
         .route("/editor/maps/activate", post(editor::set_active))
+        .route("/editor/maps/region-op", post(editor::region_op))
         .route(
             "/editor/maps",
             post(editor::save_map).get(editor::list_maps),

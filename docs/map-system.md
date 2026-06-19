@@ -345,9 +345,12 @@ updating the URL to `?map=<id>` so a reload reopens it — ticket #55), **Valida
 `400` if it doesn't materialize, no write — ticket #60). Each renders its outcome
 through a pure `format{Save,Validate,Activate}Result` helper. The page is laid out (#61) as a
 **stage** (the `#map` canvas, left) + a **right rail**: the controls on top, then a
-`role="tablist"` bar — **Tiles** (the active palette tab) | Regions | Rooms | Map (the last three
-are `Coming soon` stubs filled by later slices). Tab switching is the pure `tabPanelStates` + a thin
-glue handler. It follows the same
+`role="tablist"` bar — **Tiles** (the palette) | **Regions** | Rooms | Map (the last two are `Coming
+soon` stubs filled by later slices). Tab switching is the pure `tabPanelStates` + a thin glue handler.
+The **Regions** tab edits the in-memory document's regions inline (#62 — create / rename / delete),
+each op dispatched to the `MapDocument` region CRUD via `POST /editor/maps/region-op` (a delete is
+refused while a room references the region); the endpoint returns the updated document, which the
+editor swaps back in so Save persists it. Sub-region editing is a later slice. It follows the same
 pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model
 (`static/editor-canvas.js`, `node --test`-covered) plus a thin canvas/`fetch`
 glue kept as a server-side string — **mirroring** the #16 renderer (Decision
