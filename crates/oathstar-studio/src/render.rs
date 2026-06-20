@@ -533,8 +533,15 @@ function cellAt(e) {
   const rect = canvas.getBoundingClientRect();
   return canvasPointToCell(e.clientX - rect.left, e.clientY - rect.top, TILE, doc.width, doc.height);
 }
+// Canvas tool is tab-gated (#64): the Rooms tab makes a click SELECT a room; every
+// other tab leaves the paint loop in charge.
+function roomsTabActive() {
+  const panel = document.getElementById("panel-rooms");
+  return !!panel && !panel.hidden;
+}
 let dragStart = null;
 canvas.addEventListener("mousedown", (e) => {
+  if (roomsTabActive()) { return; }
   if (!active) { return; }
   dragStart = cellAt(e);
 });
@@ -543,12 +550,23 @@ canvas.addEventListener("mouseup", (e) => {
   // never leave a stale dragStart for the next gesture.
   const start = dragStart;
   dragStart = null;
+  if (roomsTabActive()) { return; }
   if (!active || !start) { return; }
   const end = cellAt(e);
   if (end) {
     doc = paintRect(doc, "ground", start, end, Z, active);
     redraw();
   }
+});
+// Canvas-click room selection (#64): on the Rooms tab a click resolves the clicked
+// cell to a room (via editorRoomAt) and opens its inspector through #63's selectRoom;
+// paint is gated off above, and on other tabs this no-ops so the paint loop runs.
+canvas.addEventListener("click", (e) => {
+  if (!roomsTabActive()) { return; }
+  const cell = cellAt(e);
+  if (!cell) { return; }
+  const room = editorRoomAt(doc, cell.x, cell.y, Z);
+  if (room) { selectRoom(room.id); }
 });
 
 const result = document.getElementById("result");
@@ -1073,6 +1091,19 @@ mod tests {
         assert!(html.contains("editorRoomRows("));
         assert!(html.contains("renderRooms("));
         assert!(html.contains(r#"fetch("/editor/maps/room-op""#));
+    }
+
+    #[test]
+    fn editor_page_canvas_selects_rooms_on_the_rooms_tab() {
+        // #64 / REQ-002+003: a canvas click on the Rooms tab resolves the cell to a room
+        // (editorRoomAt → selectRoom), and the paint loop is gated off while Rooms is
+        // active (the guard string), so painting stays Tiles-only.
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains("editorRoomAt("));
+        assert!(html.contains("roomsTabActive("));
+        assert!(html.contains(r#"addEventListener("click""#));
+        assert!(html.contains("selectRoom(room.id)"));
+        assert!(html.contains("if (roomsTabActive()) { return; }"));
     }
 
     #[test]

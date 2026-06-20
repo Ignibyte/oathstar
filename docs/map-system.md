@@ -356,8 +356,11 @@ editing that room's title / description / region / sub-region, dispatched via
 `POST /editor/maps/room-op` to the new `MapDocument::update_room` — a **partial** update that sets
 only those four fields and **preserves** the room's coordinates / glyph / combat flag / exits /
 entities, so a metadata edit never wipes the rest (the #62 data-loss class, applied structurally).
-The returned document is swapped back in (Save persists it). Creating/deleting rooms, canvas-click
-selection, and editing exits/glyph are later slices. The controls also carry a **map-title** field
+The returned document is swapped back in (Save persists it). A room is reachable two ways — the list
+**or by clicking it on the `#map` canvas** (#64): the canvas tool is **tab-gated** — on the Rooms tab a
+click selects the room at that cell (`editorRoomAt` → the same `selectRoom` inspector), on the Tiles tab
+the click still paints (the paint loop is gated, not changed); single-floor (`Z=0`), and an empty-cell
+click is a no-op. Creating/deleting rooms and editing exits/glyph are later slices. The controls also carry a **map-title** field
 (`#map-title` → `doc.title`, the display name; the storage slot stays `#map-name` → `doc.id`). It
 follows the same
 pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model

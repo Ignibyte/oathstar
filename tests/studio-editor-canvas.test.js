@@ -18,6 +18,7 @@ import {
   tabPanelStates,
   editorRegionRows,
   editorRoomRows,
+  editorRoomAt,
   tileIndexToSourceRect,
   canvasPointToCell,
   paletteIndexAtPoint,
@@ -291,6 +292,23 @@ test("editorRoomRows: one row per room; title falls back to id; region/subregion
   assert.deepEqual(editorRoomRows({}), []);
   assert.deepEqual(editorRoomRows(null), []);
   assert.deepEqual(editorRoomRows(undefined), []);
+});
+
+test("editorRoomAt: the room at a cell, matching x AND y AND z; null otherwise (#64)", () => {
+  const doc = {
+    rooms: [
+      { x: 1, y: 2, z: 0, id: "a" },
+      { x: 3, y: 0, z: 0, id: "b" },
+    ],
+  };
+  assert.equal(editorRoomAt(doc, 1, 2, 0).id, "a");
+  assert.equal(editorRoomAt(doc, 3, 0, 0).id, "b");
+  assert.equal(editorRoomAt(doc, 9, 9, 0), null); // no room at that cell
+  assert.equal(editorRoomAt(doc, 1, 2, 1), null); // wrong z
+  assert.equal(editorRoomAt(doc, 1, 0, 0), null); // y differs
+  assert.equal(editorRoomAt(doc, 0, 2, 0), null); // x differs
+  assert.equal(editorRoomAt({}, 0, 0, 0), null);
+  assert.equal(editorRoomAt(null, 0, 0, 0), null);
 });
 
 // ---- ticket #48: paint helpers ----

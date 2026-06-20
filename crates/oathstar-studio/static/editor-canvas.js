@@ -324,6 +324,22 @@ export function editorRoomRows(doc) {
   }));
 }
 
+/**
+ * The room at map cell (`x`, `y`, `z`), or `null` when no room occupies it. Backs the
+ * editor's canvas-click selection (#64): a clicked cell resolves to a room. Pure and
+ * null-safe.
+ *
+ * @param {object} doc the in-memory MapDocument
+ * @param {number} x column
+ * @param {number} y row
+ * @param {number} z floor / z-plane
+ * @returns {(object|null)} the matching RoomCell, or null
+ */
+export function editorRoomAt(doc, x, y, z) {
+  const rooms = (doc && doc.rooms) || [];
+  return rooms.find((room) => room.x === x && room.y === y && room.z === z) ?? null;
+}
+
 // ---- ticket #48: paint helpers (palette / point math / mutation) ----
 
 /**
