@@ -1123,7 +1123,7 @@ mod tests {
         let response = page(state, Some(cookie_header(&id))).await;
         assert_eq!(response.status(), StatusCode::OK);
         let html = body_string(response).await;
-        assert!(html.contains(r#"class="editor""#));
+        assert!(html.contains(r#"class="editor-main"#));
         assert!(html.contains(r#"<canvas id="map""#));
         assert!(html.contains(r#"id="map-doc""#));
         assert!(html.contains(r#"id="validate""#));

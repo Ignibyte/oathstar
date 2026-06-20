@@ -1,0 +1,122 @@
+/* Oathstar Studio — Tailwind v4 + DaisyUI source stylesheet (ticket #66).
+ *
+ * This is the INPUT. The committed `static/studio.css` is the COMPILED output
+ * (`npm run studio:css`) that `render.rs` embeds via `include_str!`. Do not edit
+ * `studio.css` by hand — edit this file and rebuild; `bin/gate.sh` gate:18 fails
+ * the build if the committed CSS drifts from a fresh build.
+ *
+ * Decision 034 sanctions a component kit for the Host Manager; a custom
+ * `oathstar` theme (brass-on-dark, from the old studio.css tokens) keeps the
+ * brand so it does not read as a generic dashboard. Studio only — the player
+ * client is out (Decision 034 bars DaisyUI there).
+ */
+@import "tailwindcss";
+
+/* Only the bespoke theme below — no stock DaisyUI themes (keeps the brand + the
+ * compiled CSS small + deterministic). */
+@plugin "daisyui" {
+  themes: false;
+}
+@plugin "daisyui/theme" {
+  name: "oathstar";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+  --color-base-100: #0e1215;
+  --color-base-200: #151a1f;
+  --color-base-300: #28323b;
+  --color-base-content: #e6ded0;
+  --color-primary: #e5c56f;
+  --color-primary-content: #141414;
+  --color-secondary: #6b8fb6;
+  --color-secondary-content: #0e1215;
+  --color-accent: #61a391;
+  --color-accent-content: #0e1215;
+  --color-neutral: #1d2025;
+  --color-neutral-content: #e6ded0;
+  --color-info: #6b8fb6;
+  --color-success: #7fae7f;
+  --color-warning: #e5c56f;
+  --color-error: #d98a8a;
+  --color-error-content: #2a0f0f;
+  --radius-selector: 0.4rem;
+  --radius-field: 0.4rem;
+  --radius-box: 0.6rem;
+  --border: 1px;
+}
+
+/* Scan the studio's server-rendered HTML for class names — they live in the
+ * `render.rs` `format!` literals (and the EDITOR_GLUE / REGIONS_GLUE const
+ * strings, which also live under src/). */
+@source "../src";
+
+/* Tailwind has no built-in image-rendering utility; the pixel-art canvases need it. */
+@utility pixelated {
+  image-rendering: pixelated;
+}
+
+/* Studio rules utilities can't express because the state is toggled at runtime by
+ * the inline glue (`data-ok`, `aria-selected`) or the element/class is created in
+ * JS (`region-row` / `room-row`). Everything else is utilities in the markup. */
+@layer components {
+  /* result panels — the glue sets `data-ok` after validate/save/activate/region/room ops */
+  #result,
+  #region-result,
+  #room-result {
+    white-space: pre-wrap;
+    min-height: 1.5rem;
+    padding: 0.5rem 0.7rem;
+    border-radius: var(--radius-field, 0.4rem);
+    border: 1px solid var(--color-base-300);
+    background: color-mix(in oklab, var(--color-base-300) 35%, transparent);
+    color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+  }
+  #result[data-ok="true"],
+  #region-result[data-ok="true"],
+  #room-result[data-ok="true"] {
+    color: var(--color-success);
+    border-color: color-mix(in oklab, var(--color-success) 50%, transparent);
+  }
+  #result[data-ok="false"],
+  #region-result[data-ok="false"],
+  #room-result[data-ok="false"] {
+    color: var(--color-error);
+    border-color: color-mix(in oklab, var(--color-error) 55%, transparent);
+  }
+
+  /* active tab — the glue toggles `aria-selected` (not a class), so style the attribute */
+  .tab[aria-selected="true"] {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+  }
+
+  /* tab panels — the glue toggles the `hidden` property; keep a hidden panel
+   * hidden even when a display utility/component (e.g. DaisyUI `.card`) would
+   * otherwise show it. */
+  [role="tabpanel"][hidden] {
+    display: none;
+  }
+
+  /* region/room list rows are created by the glue with these classNames */
+  .region-row,
+  .room-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .room-row button {
+    width: 100%;
+    text-align: left;
+  }
+
+  /* regions-table sort indicator — the glue toggles `aria-sort` on the <th> */
+  .regions-table th[aria-sort="ascending"] button::after {
+    content: " \25B2";
+    color: var(--color-primary);
+  }
+  .regions-table th[aria-sort="descending"] button::after {
+    content: " \25BC";
+    color: var(--color-primary);
+  }
+}

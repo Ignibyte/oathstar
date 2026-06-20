@@ -396,7 +396,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("<h2>Region</h2>"));
+        assert!(body.contains(">Region</h2>"));
         assert!(body.contains(r#"action="/regions/m/region""#));
     }
 

@@ -2824,3 +2824,53 @@ Revisit when:
   build feature, or embed a fallback copy used when `public/` is absent.
 - Asset paths ever become caller-influenced — restore traversal-safety
   (canonicalize + assert-prefix) before un-fixing the `rel`.
+
+## Decision 061: The Studio (Host Manager) UI Is Tailwind v4 + DaisyUI
+
+Status: Locked
+
+Date: 2026-06-19
+
+The studio / Host Manager UI (`crates/oathstar-studio`) is styled with **Tailwind
+v4 + DaisyUI** as its component system, replacing the hand-written `studio.css` and
+the ticket-50 pixel-art `border-image` theme (ticket #66). This is the Host-Manager
+allowance Decision 034 reserved ("DaisyUI ... can be reconsidered later for the Host
+Manager if admin velocity matters more than bespoke presentation") — it does **not**
+change the player client, where Decision 034 still bars DaisyUI.
+
+- **A custom `oathstar` DaisyUI theme, not a stock one** — brass `#e5c56f` primary on
+  the dark `#0e1215` base (the old `studio.css` tokens), so the admin keeps the brand
+  instead of reading as a generic dashboard (the exact risk Decision 034 named).
+- **The compiled CSS stays embedded** (`include_str!("../static/studio.css")`, inlined
+  per page), consistent with Decision 060 (code/CSS embedded; only content PNGs are
+  runtime-served). The committed `static/studio.css` is the build OUTPUT; its input is
+  `static/studio.tw.css` (`@import "tailwindcss"; @plugin "daisyui"; @source "../src"`).
+  **No new HTTP route for CSS.**
+- **A node build scans the Rust source.** `@source "../src"` lets Tailwind extract
+  class names from the `render.rs` `format!` string literals (where the studio's HTML
+  is emitted). Class names are static literals, so the extractor sees them. DaisyUI v5
+  emits its full component CSS; only Tailwind utilities tree-shake from the scan.
+- **A no-drift gate.** `bin/gate.sh` gate:18 rebuilds the CSS to a temp file and
+  byte-compares it to the committed `studio.css` (never mutates the worktree); a
+  forgotten rebuild fails the gate. Deterministic because `tailwindcss` /
+  `@tailwindcss/cli` / `daisyui` are pinned exact with a committed lockfile.
+- **The inline-glue contracts are preserved.** The studio is plain `fetch` + inline
+  glue (not Datastar); the re-skin changed only `class` values, keeping every id /
+  `data-*` / `role` / `aria-*` / `hidden` hook and the `regions-table` class the glue
+  queries. Runtime-toggled styling (`[data-ok]`, the `aria-selected` tab, the
+  glue-created `.region-row`/`.room-row`, `[role=tabpanel][hidden]`) lives in a small
+  `@layer` in `studio.tw.css`.
+
+This **supersedes ticket-50's studio slice** (the `border-image` fantasy frame/button
+theme, `WORK-studio-fantasy-theme-foundation-v1`). The two `/ui/*.png` sprite routes
+(`ui.rs`) stay served-but-dormant so Decision 060 is unchanged; removing them is an
+optional follow-up. Ticket-50's player-client re-skin remains a separate future option
+under Decision 034.
+
+Revisit when:
+
+- The player client wants a component kit — that reopens Decision 034, not this one.
+- The compiled CSS grows enough that inlining it per page matters — serve it from a
+  cached route instead (still embedded via `include_bytes!`).
+- A second studio theme (e.g. a light mode) is wanted — add it to `studio.tw.css` and
+  rebuild; the gate keeps it honest.

@@ -20,11 +20,16 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "studio:css": "tailwindcss -i crates/oathstar-studio/static/studio.tw.css -o crates/oathstar-studio/static/studio.css --minify",
+    "studio:css:check": "tailwindcss -i crates/oathstar-studio/static/studio.tw.css -o \"${TMPDIR:-/tmp}/oathstar-studio.css.check\" --minify && cmp \"${TMPDIR:-/tmp}/oathstar-studio.css.check\" crates/oathstar-studio/static/studio.css"
   },
   "devDependencies": {
+    "@tailwindcss/cli": "4.3.1",
     "@tauri-apps/cli": "^2.11.2",
+    "daisyui": "5.5.23",
     "esbuild": "^0.28.0",
+    "tailwindcss": "4.3.1",
     "vite": "^8.0.16"
   }
 }

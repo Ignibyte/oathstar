@@ -26,6 +26,7 @@
 #   lints-base   diff meta-gate     ← NoBaselinesGate, config side (gate:21)
 #   doc-todos    grep meta-gate     ← doc-todos (gate:24)
 #   tauri-shell  fmt + clippy       ← src-tauri (standalone) compile gate
+#   studio-css   tailwind no-drift  ← compiled studio.css == fresh DaisyUI build (gate:18)
 #   [FULL] rust-cov  cargo-llvm-cov ← coverage floor (gate:20)
 #   [FULL] js-cov    node coverage  ← (JS coverage)
 #   [FULL] mutation  cargo-mutants  ← Infection MSI (gate:12)
@@ -218,6 +219,31 @@ tauri_shell_g() {
   cargo clippy --manifest-path "$m" --all-targets -- -D warnings
 }
 run_gate "gate:14 tauri shell (fmt; +clippy full)" tauri_shell_g
+
+# ── 18. studio CSS no-drift (Tailwind v4 + DaisyUI compiled output, ticket #66) ─
+# `crates/oathstar-studio/static/studio.css` is GENERATED from `studio.tw.css` by
+# the Tailwind CLI (DaisyUI plugin) scanning the studio's render.rs class literals,
+# then committed + `include_str!`'d. A forgotten rebuild would ship stale styling,
+# so a fresh build must byte-match the committed CSS. Built to a temp file and
+# compared — never mutates the worktree. Deterministic because tailwindcss /
+# @tailwindcss/cli / daisyui are pinned exact in package.json. Runs in BOTH modes
+# (cheap); the bin comes from `npm install`, guarded like the cargo tools.
+studio_css_g() {
+  local bin="node_modules/.bin/tailwindcss"
+  local src="crates/oathstar-studio/static/studio.tw.css"
+  local out="crates/oathstar-studio/static/studio.css"
+  [ -x "$bin" ] || { echo "MISSING: $bin — run 'npm install' (pins tailwindcss + daisyui)"; return 1; }
+  local tmp; tmp=$(mktemp) || { echo "mktemp failed"; return 1; }
+  if ! "$bin" -i "$src" -o "$tmp" --minify >/dev/null 2>&1; then
+    echo "tailwind build failed for $src"; rm -f "$tmp"; return 1
+  fi
+  if ! cmp -s "$tmp" "$out"; then
+    echo "studio.css is STALE — run 'npm run studio:css' and commit the result (gate:18)."
+    rm -f "$tmp"; return 1
+  fi
+  rm -f "$tmp"
+}
+run_gate "gate:18 studio-css (no-drift)" studio_css_g
 
 # ── FULL-only: coverage + mutation ───────────────────────────────────────────
 # FAST is a legitimate green-able quick loop, but it prints "GATE GREEN [fast]";

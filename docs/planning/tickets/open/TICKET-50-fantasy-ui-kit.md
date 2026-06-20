@@ -11,6 +11,14 @@ pipeline_spec:
 
 # TICKET-50-fantasy-ui-kit
 
+> **Update 2026-06-19 (ticket #66 / Decision 061):** the **studio** slice of this
+> re-skin is **superseded** — the Host Manager now uses **Tailwind v4 + DaisyUI**, not
+> the mini-medieval `border-image` theme. The studio fantasy-theme foundation
+> (`WORK-studio-fantasy-theme-foundation-v1`) is retired; the `/ui/*.png` sprite routes
+> stay dormant (Decision 060 unchanged). The **player-client** half of this ticket
+> remains a future option under Decision 034 (which still bars DaisyUI on the player
+> client) — re-scope or close accordingly when it's picked up.
+
 ## Summary
 
 Re-skin **both** the studio admin and the player-facing game client with the

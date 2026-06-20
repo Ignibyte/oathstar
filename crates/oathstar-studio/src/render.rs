@@ -13,22 +13,24 @@ const STUDIO_CSS: &str = include_str!("../static/studio.css");
 /// caller input is ever reflected into the page, so there is no injection surface.
 pub fn login_page(error: Option<&str>) -> Html<String> {
     let banner = error.map_or_else(String::new, |message| {
-        format!(r#"<p class="error" role="alert">{message}</p>"#)
+        format!(r#"<p class="alert alert-error" role="alert">{message}</p>"#)
     });
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oathstar Studio — Sign in</title><style>{STUDIO_CSS}</style></head>
-<body class="login">
-  <main class="card">
-    <h1>Oathstar Studio</h1>
-    {banner}
-    <form method="post" action="/login">
-      <label for="secret">Owner password</label>
-      <input id="secret" name="secret" type="password" autocomplete="current-password" autofocus>
-      <button type="submit">Sign in</button>
-    </form>
+<body class="min-h-screen grid place-items-center bg-base-100 p-4 text-base-content">
+  <main class="card w-[min(22rem,100%)] bg-base-200 shadow-xl">
+    <div class="card-body gap-3">
+      <h1 class="text-xl font-bold text-primary">Oathstar Studio</h1>
+      {banner}
+      <form method="post" action="/login" class="grid gap-2">
+        <label class="text-sm text-base-content/70" for="secret">Owner password</label>
+        <input id="secret" name="secret" type="password" autocomplete="current-password" autofocus class="input input-bordered w-full">
+        <button type="submit" class="btn btn-primary mt-1">Sign in</button>
+      </form>
+    </div>
   </main>
 </body>
 </html>"#
@@ -94,15 +96,15 @@ fn studio_header(active: Option<NavSection>) -> String {
         };
         let _ = write!(
             links,
-            r#"<a href="{href}"{current}>{label}</a>"#,
+            r#"<a href="{href}" class="px-1 text-base-content/70 no-underline hover:text-base-content aria-[current=page]:text-primary aria-[current=page]:font-semibold aria-[current=page]:border-b-2 aria-[current=page]:border-primary"{current}>{label}</a>"#,
             href = section.href(),
             label = section.label(),
         );
     }
     format!(
-        r#"<header class="studio-header">
-    <nav class="studio-nav"><a class="brand" href="/">Oathstar Studio</a>{links}</nav>
-    <form method="post" action="/logout"><button type="submit">Sign out</button></form>
+        r#"<header class="navbar bg-base-200 shadow gap-4 px-4">
+    <nav class="navbar-start flex items-baseline flex-wrap gap-x-4 gap-y-1"><a class="btn btn-ghost text-xl text-primary px-2" href="/">Oathstar Studio</a>{links}</nav>
+    <form class="navbar-end" method="post" action="/logout"><button type="submit" class="btn btn-sm">Sign out</button></form>
   </header>"#
     )
 }
@@ -116,10 +118,10 @@ pub fn section_stub_page(section: NavSection) -> Html<String> {
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oathstar Studio — {label}</title><style>{STUDIO_CSS}</style></head>
-<body class="dashboard">
+<body class="min-h-screen bg-base-100 text-base-content">
   {header}
-  <main>
-    <section class="panel"><h2>{label}</h2><p class="soon">Coming soon.</p></section>
+  <main class="grid gap-4 p-5">
+    <section class="card bg-base-200 shadow p-4"><h2 class="text-base font-semibold mb-1">{label}</h2><p class="italic text-base-content/60">Coming soon.</p></section>
   </main>
 </body>
 </html>"#,
@@ -239,7 +241,7 @@ if (search && tbody) {
 /// "create one" prompt.
 pub fn regions_list_page(maps: &[MapSummary]) -> Html<String> {
     let body = if maps.is_empty() {
-        r#"<section class="panel"><p class="soon">No authored maps yet. Create one in the <a href="/editor">Maps editor</a>, then manage its regions here.</p></section>"#.to_owned()
+        r#"<section class="card bg-base-200 shadow p-4"><p class="italic text-base-content/60">No authored maps yet. Create one in the <a class="link link-primary" href="/editor">Maps editor</a>, then manage its regions here.</p></section>"#.to_owned()
     } else {
         let mut rows = String::new();
         for map in maps {
@@ -247,20 +249,20 @@ pub fn regions_list_page(maps: &[MapSummary]) -> Html<String> {
             let title = escape_html(&map.title);
             let _ = write!(
                 rows,
-                r#"<tr data-title="{title}" data-id="{id}" data-regions="{regions}" data-subs="{subs}"><td>{title}</td><td>{id}</td><td>{regions}</td><td>{subs}</td><td><a class="cta" href="/regions/{id}">Edit regions</a></td></tr>"#,
+                r#"<tr data-title="{title}" data-id="{id}" data-regions="{regions}" data-subs="{subs}"><td>{title}</td><td>{id}</td><td>{regions}</td><td>{subs}</td><td><a class="btn btn-primary btn-xs" href="/regions/{id}">Edit regions</a></td></tr>"#,
                 regions = map.region_count,
                 subs = map.subregion_count,
             );
         }
         format!(
-            r#"<section class="panel">
-    <label class="table-search">Filter <input id="regions-search" type="search" aria-label="Filter maps" placeholder="Search title or id…"></label>
-    <table class="regions-table">
+            r#"<section class="card bg-base-200 shadow p-4">
+    <label class="flex items-center gap-2 mb-3 text-base-content/70">Filter <input id="regions-search" type="search" aria-label="Filter maps" placeholder="Search title or id…" class="input input-bordered input-sm"></label>
+    <table class="regions-table table table-zebra w-full">
       <thead><tr>
-        <th aria-sort="none"><button type="button" data-key="title">Title</button></th>
-        <th aria-sort="none"><button type="button" data-key="id">Id</button></th>
-        <th aria-sort="none"><button type="button" data-key="regions">Regions</button></th>
-        <th aria-sort="none"><button type="button" data-key="subs">Sub-regions</button></th>
+        <th aria-sort="none"><button type="button" data-key="title" class="cursor-pointer font-semibold inline-flex items-center gap-1">Title</button></th>
+        <th aria-sort="none"><button type="button" data-key="id" class="cursor-pointer font-semibold inline-flex items-center gap-1">Id</button></th>
+        <th aria-sort="none"><button type="button" data-key="regions" class="cursor-pointer font-semibold inline-flex items-center gap-1">Regions</button></th>
+        <th aria-sort="none"><button type="button" data-key="subs" class="cursor-pointer font-semibold inline-flex items-center gap-1">Sub-regions</button></th>
         <th>Actions</th>
       </tr></thead>
       <tbody>{rows}</tbody>
@@ -273,9 +275,9 @@ pub fn regions_list_page(maps: &[MapSummary]) -> Html<String> {
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oathstar Studio — Regions</title><style>{STUDIO_CSS}</style></head>
-<body class="dashboard">
+<body class="min-h-screen bg-base-100 text-base-content">
   {header}
-  <main>{body}</main>
+  <main class="grid gap-4 p-5">{body}</main>
   <script type="module">{regions_js}{REGIONS_GLUE}</script>
 </body>
 </html>"#,
@@ -299,7 +301,7 @@ pub fn region_editor_page(map_id: &str, doc: &MapDocument, error: Option<&str>) 
     let title = escape_html(&doc.title);
     let banner = error.map_or_else(String::new, |message| {
         format!(
-            r#"<p class="error" role="alert">{}</p>"#,
+            r#"<p class="alert alert-error" role="alert">{}</p>"#,
             escape_html(message)
         )
     });
@@ -312,10 +314,10 @@ pub fn region_editor_page(map_id: &str, doc: &MapDocument, error: Option<&str>) 
         let rooms = region_rooms.get(region.id.as_str()).copied().unwrap_or(0);
         let _ = write!(
             body,
-            r#"<section class="panel"><h2>{rname}</h2><p class="who">{rooms} rooms</p>
-<form method="post" action="/regions/{map_id}/region" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="{rid}"><label>Name <input name="name" value="{rname}" aria-label="Name for region {rname}"></label> <label>Description <textarea name="description" aria-label="Description for region {rname}">{rdesc}</textarea></label> <button type="submit">Save</button></form>
-<form method="post" action="/regions/{map_id}/region" class="delete"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{rid}"><button type="submit">Delete</button></form>
-<ul>"#,
+            r#"<section class="card bg-base-200 shadow p-4"><h2 class="text-base font-semibold">{rname}</h2><p class="text-sm text-base-content/60">{rooms} rooms</p>
+<form method="post" action="/regions/{map_id}/region" class="edit grid gap-2 mt-2 sm:grid-cols-[1fr_2fr_auto] sm:items-end"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="{rid}"><label class="grid gap-1 text-sm text-base-content/70">Name <input name="name" value="{rname}" aria-label="Name for region {rname}" class="input input-bordered input-sm w-full"></label> <label class="grid gap-1 text-sm text-base-content/70">Description <textarea name="description" aria-label="Description for region {rname}" class="textarea textarea-bordered w-full">{rdesc}</textarea></label> <button type="submit" class="btn btn-primary btn-sm">Save</button></form>
+<form method="post" action="/regions/{map_id}/region" class="delete mt-2"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{rid}"><button type="submit" class="btn btn-error btn-outline btn-sm">Delete</button></form>
+<ul class="list-none p-0 m-0 grid gap-2 mt-3">"#,
         );
         for sub in doc.subregions.values().filter(|s| s.region == region.id) {
             let sid = escape_html(&sub.id);
@@ -325,9 +327,9 @@ pub fn region_editor_page(map_id: &str, doc: &MapDocument, error: Option<&str>) 
             let srooms = subregion_rooms.get(sub.id.as_str()).copied().unwrap_or(0);
             let _ = write!(
                 body,
-                r#"<li><span>{sname} — {srooms} rooms</span> <a class="cta" href="/editor?map={map_id}&subregion={senc}">Open in editor</a>
-<form method="post" action="/regions/{map_id}/subregion" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="{sid}"><label>Name <input name="name" value="{sname}" aria-label="Name for sub-region {sname}"></label> <label>Description <textarea name="description" aria-label="Description for sub-region {sname}">{sdesc}</textarea></label> <button type="submit">Save</button></form>
-<form method="post" action="/regions/{map_id}/subregion" class="delete"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{sid}"><button type="submit">Delete</button></form></li>"#,
+                r#"<li class="rounded-box border border-base-300 p-3"><span class="text-base-content/80">{sname} — {srooms} rooms</span> <a class="link link-primary" href="/editor?map={map_id}&subregion={senc}">Open in editor</a>
+<form method="post" action="/regions/{map_id}/subregion" class="edit grid gap-2 mt-2 sm:grid-cols-[1fr_2fr_auto] sm:items-end"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="{sid}"><label class="grid gap-1 text-sm text-base-content/70">Name <input name="name" value="{sname}" aria-label="Name for sub-region {sname}" class="input input-bordered input-sm w-full"></label> <label class="grid gap-1 text-sm text-base-content/70">Description <textarea name="description" aria-label="Description for sub-region {sname}" class="textarea textarea-bordered w-full">{sdesc}</textarea></label> <button type="submit" class="btn btn-primary btn-sm">Save</button></form>
+<form method="post" action="/regions/{map_id}/subregion" class="delete mt-2"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{sid}"><button type="submit" class="btn btn-error btn-outline btn-sm">Delete</button></form></li>"#,
             );
         }
         let _ = write!(body, "</ul></section>");
@@ -345,10 +347,10 @@ pub fn region_editor_page(map_id: &str, doc: &MapDocument, error: Option<&str>) 
 
     let _ = write!(
         body,
-        r#"<section class="panel"><h2>Add a region</h2>
-<form method="post" action="/regions/{map_id}/region"><input type="hidden" name="op" value="create"><label>Id <input name="id" required></label> <label>Name <input name="name" required></label> <label>Description <textarea name="description"></textarea></label> <button type="submit">Create region</button></form></section>
-<section class="panel"><h2>Add a sub-region</h2>
-<form method="post" action="/regions/{map_id}/subregion"><input type="hidden" name="op" value="create"><label>Id <input name="id" required></label> <label>Name <input name="name" required></label> <label>Parent region <select name="region" required>{options}</select></label> <label>Description <textarea name="description"></textarea></label> <button type="submit">Create sub-region</button></form></section>"#,
+        r#"<section class="card bg-base-200 shadow p-4"><h2 class="text-base font-semibold mb-2">Add a region</h2>
+<form method="post" action="/regions/{map_id}/region" class="grid gap-2"><input type="hidden" name="op" value="create"><label class="grid gap-1 text-sm text-base-content/70">Id <input name="id" required class="input input-bordered input-sm w-full"></label> <label class="grid gap-1 text-sm text-base-content/70">Name <input name="name" required class="input input-bordered input-sm w-full"></label> <label class="grid gap-1 text-sm text-base-content/70">Description <textarea name="description" class="textarea textarea-bordered w-full"></textarea></label> <button type="submit" class="btn btn-primary btn-sm justify-self-start">Create region</button></form></section>
+<section class="card bg-base-200 shadow p-4"><h2 class="text-base font-semibold mb-2">Add a sub-region</h2>
+<form method="post" action="/regions/{map_id}/subregion" class="grid gap-2"><input type="hidden" name="op" value="create"><label class="grid gap-1 text-sm text-base-content/70">Id <input name="id" required class="input input-bordered input-sm w-full"></label> <label class="grid gap-1 text-sm text-base-content/70">Name <input name="name" required class="input input-bordered input-sm w-full"></label> <label class="grid gap-1 text-sm text-base-content/70">Parent region <select name="region" required class="select select-bordered select-sm w-full">{options}</select></label> <label class="grid gap-1 text-sm text-base-content/70">Description <textarea name="description" class="textarea textarea-bordered w-full"></textarea></label> <button type="submit" class="btn btn-primary btn-sm justify-self-start">Create sub-region</button></form></section>"#,
     );
 
     Html(format!(
@@ -356,9 +358,9 @@ pub fn region_editor_page(map_id: &str, doc: &MapDocument, error: Option<&str>) 
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oathstar Studio — Regions: {title}</title><style>{STUDIO_CSS}</style></head>
-<body class="dashboard">
+<body class="min-h-screen bg-base-100 text-base-content">
   {header}
-  <main><h1>{title}</h1>{banner}{body}</main>
+  <main class="grid gap-4 p-5"><h1 class="text-xl font-bold text-primary">{title}</h1>{banner}{body}</main>
 </body>
 </html>"#,
         header = studio_header(Some(NavSection::Regions)),
@@ -375,12 +377,12 @@ pub fn dashboard_page(principal: &Principal) -> Html<String> {
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oathstar Studio</title><style>{STUDIO_CSS}</style></head>
-<body class="dashboard">
+<body class="min-h-screen bg-base-100 text-base-content">
   {header}
-  <main>
-    <p class="who">Signed in as <strong>{name}</strong>.</p>
-    <section class="panel"><h2>World management</h2><p class="soon">Coming soon.</p></section>
-    <section class="panel"><h2>Map editor</h2><p><a class="cta" href="/editor">Open the map editor</a></p></section>
+  <main class="grid gap-4 p-5">
+    <p class="text-base-content/60">Signed in as <strong class="text-base-content">{name}</strong>.</p>
+    <section class="card bg-base-200 shadow p-4"><h2 class="text-base font-semibold mb-1">World management</h2><p class="italic text-base-content/60">Coming soon.</p></section>
+    <section class="card bg-base-200 shadow p-4"><h2 class="text-base font-semibold mb-2">Map editor</h2><p><a class="btn btn-primary btn-sm" href="/editor">Open the map editor</a></p></section>
   </main>
 </body>
 </html>"#,
@@ -890,59 +892,59 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oathstar Studio — Map editor</title><style>{STUDIO_CSS}</style></head>
-<body class="editor">
+<body class="min-h-screen bg-base-100 text-base-content">
   {header}
-  <main class="editor-main">
-    <section class="panel canvas-panel">
-      <h2>Map editor</h2>
-      <p class="hint">Pick a tile, then click or drag on the map to paint. Save persists it; Validate checks it; Set as active world makes it the game world.</p>
-      <div class="map-scroll"><canvas id="map" width="0" height="0"></canvas></div>
+  <main class="editor-main grid gap-4 p-5 items-start lg:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)]">
+    <section class="card bg-base-200 shadow p-4 min-w-0">
+      <h2 class="text-base font-semibold">Map editor</h2>
+      <p class="text-sm text-base-content/60 mb-3">Pick a tile, then click or drag on the map to paint. Save persists it; Validate checks it; Set as active world makes it the game world.</p>
+      <div class="overflow-auto max-h-[78vh]"><canvas id="map" width="0" height="0" class="block pixelated cursor-crosshair bg-base-300/40 border border-base-300 rounded-box"></canvas></div>
     </section>
-    <aside class="editor-rail">
-      <section class="panel controls">
-        <label>Map name <input id="map-name" name="map-name" aria-label="Map name (storage slot)"></label>
-        <label>Title <input id="map-title" name="map-title" aria-label="Map title (display name)"></label>
-        <label>Zoom <input id="zoom" type="range" min="8" max="80" step="4" value="40"><span id="zoom-px">40px</span></label>
-        <button id="save" type="button">Save</button>
-        <button id="validate" type="button">Validate</button>
-        <button id="activate" type="button">Set as active world</button>
+    <aside class="grid gap-4 content-start min-w-0">
+      <section class="card bg-base-200 shadow p-4 grid gap-2">
+        <label class="grid gap-1 text-sm text-base-content/70">Map name <input id="map-name" name="map-name" aria-label="Map name (storage slot)" class="input input-bordered input-sm w-full"></label>
+        <label class="grid gap-1 text-sm text-base-content/70">Title <input id="map-title" name="map-title" aria-label="Map title (display name)" class="input input-bordered input-sm w-full"></label>
+        <label class="grid gap-1 text-sm text-base-content/70">Zoom <input id="zoom" type="range" min="8" max="80" step="4" value="40" class="range range-primary range-sm"><span id="zoom-px" class="text-xs text-base-content/60">40px</span></label>
+        <button id="save" type="button" class="btn btn-primary btn-sm">Save</button>
+        <button id="validate" type="button" class="btn btn-sm">Validate</button>
+        <button id="activate" type="button" class="btn btn-secondary btn-sm">Set as active world</button>
         <pre id="result" aria-live="polite"></pre>
       </section>
-      <div class="tab-bar" role="tablist" aria-label="Editor sections">
+      <div class="tabs tabs-bordered" role="tablist" aria-label="Editor sections">
         <button class="tab" role="tab" id="tab-tiles" data-tab="tiles" aria-controls="panel-tiles" aria-selected="true" type="button">Tiles</button>
         <button class="tab" role="tab" id="tab-regions" data-tab="regions" aria-controls="panel-regions" aria-selected="false" type="button">Regions</button>
         <button class="tab" role="tab" id="tab-rooms" data-tab="rooms" aria-controls="panel-rooms" aria-selected="false" type="button">Rooms</button>
         <button class="tab" role="tab" id="tab-map" data-tab="map" aria-controls="panel-map" aria-selected="false" type="button">Map</button>
       </div>
-      <section class="panel tab-panel" role="tabpanel" id="panel-tiles" data-tab="tiles" aria-labelledby="tab-tiles">
-        <h2>Tiles</h2>
-        <p class="hint" id="active-tile">No tile selected</p>
-        <div class="palette-scroll"><canvas id="palette" width="0" height="0"></canvas></div>
+      <section class="bg-base-200 rounded-box shadow p-4" role="tabpanel" id="panel-tiles" data-tab="tiles" aria-labelledby="tab-tiles">
+        <h2 class="text-base font-semibold">Tiles</h2>
+        <p class="text-sm text-base-content/60 mb-2" id="active-tile">No tile selected</p>
+        <div class="overflow-auto max-h-[78vh] bg-base-300/40 border border-base-300 rounded-box"><canvas id="palette" width="0" height="0" class="block pixelated cursor-crosshair"></canvas></div>
       </section>
-      <section class="panel tab-panel" role="tabpanel" id="panel-regions" data-tab="regions" aria-labelledby="tab-regions" hidden>
-        <h2>Regions</h2>
-        <form id="region-add-form" class="region-add">
-          <label>Id <input id="region-add-id" name="region-add-id" aria-label="New region id"></label>
-          <label>Name <input id="region-add-name" name="region-add-name" aria-label="New region name"></label>
-          <label>Description <input id="region-add-desc" name="region-add-desc" aria-label="New region description"></label>
-          <button id="region-add" type="button">Add region</button>
+      <section class="bg-base-200 rounded-box shadow p-4" role="tabpanel" id="panel-regions" data-tab="regions" aria-labelledby="tab-regions" hidden>
+        <h2 class="text-base font-semibold mb-2">Regions</h2>
+        <form id="region-add-form" class="grid gap-2">
+          <label class="grid gap-1 text-sm text-base-content/70">Id <input id="region-add-id" name="region-add-id" aria-label="New region id" class="input input-bordered input-sm w-full"></label>
+          <label class="grid gap-1 text-sm text-base-content/70">Name <input id="region-add-name" name="region-add-name" aria-label="New region name" class="input input-bordered input-sm w-full"></label>
+          <label class="grid gap-1 text-sm text-base-content/70">Description <input id="region-add-desc" name="region-add-desc" aria-label="New region description" class="input input-bordered input-sm w-full"></label>
+          <button id="region-add" type="button" class="btn btn-primary btn-sm justify-self-start">Add region</button>
         </form>
-        <pre id="region-result" aria-live="polite"></pre>
-        <ul id="region-list" class="region-list"></ul>
+        <pre id="region-result" aria-live="polite" class="mt-2"></pre>
+        <ul id="region-list" class="list-none p-0 m-0 grid gap-1 mt-2"></ul>
       </section>
-      <section class="panel tab-panel" role="tabpanel" id="panel-rooms" data-tab="rooms" aria-labelledby="tab-rooms" hidden>
-        <h2>Rooms</h2>
+      <section class="bg-base-200 rounded-box shadow p-4" role="tabpanel" id="panel-rooms" data-tab="rooms" aria-labelledby="tab-rooms" hidden>
+        <h2 class="text-base font-semibold mb-2">Rooms</h2>
         <pre id="room-result" aria-live="polite"></pre>
-        <ul id="room-list" class="room-list"></ul>
-        <form id="room-inspector" class="room-inspector" hidden>
-          <label>Title <input id="room-title"></label>
-          <label>Description <input id="room-desc"></label>
-          <label>Region <select id="room-region"></select></label>
-          <label>Sub-region <select id="room-subregion"></select></label>
-          <button id="room-save" type="button">Save room</button>
+        <ul id="room-list" class="list-none p-0 m-0 grid gap-1 mt-2"></ul>
+        <form id="room-inspector" class="grid gap-2 mt-3" hidden>
+          <label class="grid gap-1 text-sm text-base-content/70">Title <input id="room-title" class="input input-bordered input-sm w-full"></label>
+          <label class="grid gap-1 text-sm text-base-content/70">Description <input id="room-desc" class="input input-bordered input-sm w-full"></label>
+          <label class="grid gap-1 text-sm text-base-content/70">Region <select id="room-region" class="select select-bordered select-sm w-full"></select></label>
+          <label class="grid gap-1 text-sm text-base-content/70">Sub-region <select id="room-subregion" class="select select-bordered select-sm w-full"></select></label>
+          <button id="room-save" type="button" class="btn btn-primary btn-sm justify-self-start">Save room</button>
         </form>
       </section>
-      <section class="panel tab-panel" role="tabpanel" id="panel-map" data-tab="map" aria-labelledby="tab-map" hidden><p class="soon">Coming soon.</p></section>
+      <section class="bg-base-200 rounded-box shadow p-4" role="tabpanel" id="panel-map" data-tab="map" aria-labelledby="tab-map" hidden><p class="italic text-base-content/60">Coming soon.</p></section>
     </aside>
   </main>
   <script type="application/json" id="map-doc">{doc_json}</script>
@@ -975,7 +977,8 @@ mod tests {
         // T8/REQ-003: an invalid login re-renders with a visible error.
         let html = login_page(Some("Invalid credentials.")).0;
         assert!(html.contains("Invalid credentials."));
-        assert!(html.contains(r#"class="error""#));
+        assert!(html.contains(r#"class="alert alert-error""#));
+        assert!(html.contains(r#"role="alert""#));
     }
 
     #[test]
@@ -985,20 +988,19 @@ mod tests {
         assert!(html.contains("Sign out"));
         assert!(html.contains("Owner")); // principal.name, server-constructed
         assert!(html.contains("Map editor"));
-        assert!(html.contains(".panel")); // embedded CSS marker
-                                          // ticket #49: the persistent nav with all five sections; the dashboard is
-                                          // "home", so nothing is marked active.
-        assert!(html.contains(r#"class="studio-nav""#));
+        assert!(html.contains(".navbar")); // DaisyUI component compiled into the embedded CSS
+                                           // ticket #49: the persistent nav with all five sections; the dashboard is
+                                           // "home", so nothing is marked active.
+        assert!(html.contains(r#"class="navbar"#));
         assert!(html.contains(r#"href="/editor""#)); // Maps
         assert!(html.contains(r#"href="/regions""#));
         assert!(html.contains(r#"href="/items""#));
         assert!(html.contains(r#"href="/enemies""#));
         assert!(html.contains(r#"href="/settings""#));
         assert!(html.contains(">Game Settings<"));
-        // home marks no active section — the nav links carry no `aria-current`
-        // (the string also appears in the embedded CSS selector, so assert the
-        // Maps link is in its inactive form rather than scanning the whole page).
-        assert!(html.contains(r#"<a href="/editor">Maps</a>"#));
+        // home marks no active section — no nav link carries `aria-current`.
+        assert!(html.contains(">Maps</a>")); // the Maps nav label is present
+        assert!(!html.contains(r#"aria-current="page""#));
     }
 
     #[test]
@@ -1006,7 +1008,7 @@ mod tests {
         // T6/REQ-002: the dashboard "Map editor" panel links to /editor.
         let html = dashboard_page(&owner_principal()).0;
         assert!(html.contains(r#"href="/editor""#));
-        assert!(html.contains(r#"class="cta""#));
+        assert!(html.contains(r#"class="btn btn-primary btn-sm" href="/editor""#));
     }
 
     #[test]
@@ -1019,7 +1021,7 @@ mod tests {
         assert!(html.contains(r#"id="map-doc""#));
         assert!(html.contains(r#"id="validate""#));
         assert!(html.contains(r#"id="result""#));
-        assert!(html.contains(r#"class="editor""#));
+        assert!(html.contains(r#"class="editor-main"#));
         assert!(html.contains(r#""id":"x""#)); // the embedded data island, verbatim
         assert!(html.contains("editorDrawPlan("));
         assert!(html.contains("editorCanvasSize("));
@@ -1034,8 +1036,8 @@ mod tests {
         assert!(html.contains("tileIndexToSourceRect("));
         // ticket #49: the editor is the Maps section — the nav is present with
         // Maps marked active and the other sections linked.
-        assert!(html.contains(r#"class="studio-nav""#));
-        assert!(html.contains(r#"<a href="/editor" aria-current="page">Maps</a>"#));
+        assert!(html.contains(r#"class="navbar"#));
+        assert!(html.contains(r#"aria-current="page">Maps</a>"#));
         assert!(html.contains(r#"href="/regions""#));
         assert!(html.contains(r#"href="/""#)); // the brand home link
     }
@@ -1047,7 +1049,7 @@ mod tests {
         // hidden "Coming soon" stub panels. Pins the rail markup against a
         // format!-body mutant.
         let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
-        assert!(html.contains(r#"<aside class="editor-rail""#));
+        assert!(html.contains(r#"class="tabs tabs-bordered""#)); // DaisyUI tabs (the rail's tab bar)
         assert!(html.contains(r#"role="tablist""#));
         for tab in ["tiles", "regions", "rooms", "map"] {
             assert!(
@@ -1182,21 +1184,63 @@ mod tests {
         // ticket #49 / REQ-003 + REQ-005: a stub names its section, says "Coming
         // soon", marks that section active, and leaves the others inactive.
         let html = section_stub_page(NavSection::Regions).0;
-        assert!(html.contains("<h2>Regions</h2>"));
+        assert!(html.contains(">Regions</h2>"));
         assert!(html.contains("Coming soon."));
-        assert!(html.contains(r#"<a href="/regions" aria-current="page">Regions</a>"#));
-        assert!(html.contains(r#"<a href="/editor">Maps</a>"#)); // Maps not active
-        assert!(html.contains(r#"class="studio-nav""#));
+        assert!(html.contains(r#"aria-current="page">Regions</a>"#));
+        assert!(html.contains(">Maps</a>")); // Maps present…
+        assert!(!html.contains(r#"aria-current="page">Maps</a>"#)); // …but not active
+        assert!(html.contains(r#"class="navbar"#));
     }
 
     #[test]
-    fn pages_reference_the_ui_kit_assets() {
-        // ticket #50: the embedded STUDIO_CSS wires the fantasy frame + button
-        // sprites, so every authenticated page references the served /ui assets.
-        // Assert the specific url() forms (the CSS embeds them) — not a bare token.
+    fn studio_css_embeds_the_daisyui_theme_and_drops_the_fantasy_sprites() {
+        // REQ-002: every authenticated page embeds the compiled DaisyUI stylesheet —
+        // the custom `oathstar` theme (its brass primary) + a DaisyUI component selector.
+        // REQ-005: the ticket-50 fantasy `/ui` sprite theme is superseded and gone.
         let html = dashboard_page(&owner_principal()).0;
-        assert!(html.contains(r#"url("/ui/panel-frame.png")"#));
-        assert!(html.contains(r#"url("/ui/button.png")"#));
+        assert!(
+            html.contains("e5c56f"),
+            "the oathstar theme's brass primary is compiled in"
+        );
+        assert!(
+            html.contains(".btn"),
+            "DaisyUI button component is compiled in"
+        );
+        assert!(
+            !html.contains("/ui/panel-frame.png"),
+            "the #50 fantasy frame sprite is superseded"
+        );
+        assert!(
+            !html.contains("/ui/button.png"),
+            "the #50 fantasy button sprite is superseded"
+        );
+    }
+
+    #[test]
+    fn studio_pages_use_daisyui_components() {
+        use super::{regions_list_page, MapSummary};
+        // REQ-003: the shell + editor surfaces render DaisyUI component classes.
+        let nav = dashboard_page(&owner_principal()).0;
+        assert!(nav.contains(r#"class="navbar"#), "nav -> navbar");
+        assert!(nav.contains(r#"class="card bg-base-200"#), "panels -> card");
+        assert!(nav.contains("btn btn-primary"), "CTA -> btn");
+        let regions = regions_list_page(&[MapSummary {
+            id: "m".to_owned(),
+            title: "M".to_owned(),
+            region_count: 1,
+            subregion_count: 0,
+        }])
+        .0;
+        assert!(
+            regions.contains(r#"class="regions-table table table-zebra"#),
+            "regions list -> table (regions-table glue hook kept)"
+        );
+        let editor = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(
+            editor.contains(r#"class="tabs tabs-bordered""#),
+            "editor rail -> tabs"
+        );
+        assert!(editor.contains("input input-bordered"), "controls -> input");
     }
 
     // ---- ticket #51 slice 2: regions authoring render ----
@@ -1239,13 +1283,15 @@ mod tests {
             },
         ];
         let html = regions_list_page(&maps).0;
-        assert!(html.contains(r#"<table class="regions-table">"#));
+        // the `regions-table` glue hook is kept; DaisyUI `table` styling is additive
+        assert!(html.contains(r#"<table class="regions-table table table-zebra w-full">"#));
         // a data row carries its fields on data-* (the glue reads them) + the cells + link
         assert!(html.contains(
-            r#"<tr data-title="First" data-id="m1" data-regions="2" data-subs="1"><td>First</td><td>m1</td><td>2</td><td>1</td><td><a class="cta" href="/regions/m1">Edit regions</a></td></tr>"#
+            r#"<tr data-title="First" data-id="m1" data-regions="2" data-subs="1"><td>First</td><td>m1</td><td>2</td><td>1</td><td><a class="btn btn-primary btn-xs" href="/regions/m1">Edit regions</a></td></tr>"#
         ));
-        assert!(html.contains(r#"<a class="cta" href="/regions/m2">Edit regions</a>"#));
-        assert!(html.contains(r#"<a href="/regions" aria-current="page">Regions</a>"#));
+        assert!(html
+            .contains(r#"<a class="btn btn-primary btn-xs" href="/regions/m2">Edit regions</a>"#));
+        assert!(html.contains(r#"aria-current="page">Regions</a>"#));
         assert!(!html.contains("No authored maps yet"));
     }
 
@@ -1253,10 +1299,10 @@ mod tests {
     fn regions_list_page_shows_an_empty_state() {
         let html = super::regions_list_page(&[]).0;
         assert!(html.contains("No authored maps yet"));
-        assert!(html.contains(r#"<a href="/editor">Maps editor</a>"#));
+        assert!(html.contains(r#"<a class="link link-primary" href="/editor">Maps editor</a>"#));
         assert!(
-            !html.contains(r#"class="cta""#),
-            "no map cards in the empty state"
+            !html.contains("Edit regions"),
+            "no map cards (no per-row action) in the empty state"
         );
     }
 
@@ -1290,31 +1336,33 @@ mod tests {
         let doc: oathstar_content::MapDocument =
             serde_json::from_str(RICH_DOC).expect("fixture parses");
         let html = super::region_editor_page("m", &doc, None).0;
-        // Region panel header + its room count (alpha + beta).
-        assert!(
-            html.contains(r#"<section class="panel"><h2>Region</h2><p class="who">2 rooms</p>"#)
-        );
-        // Edit (name + description) + delete region forms POST to the slot with the id.
-        assert!(html.contains(
-            r#"<form method="post" action="/regions/m/region" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="reg"><label>Name <input name="name" value="Region" aria-label="Name for region Region"></label> <label>Description <textarea name="description" aria-label="Description for region Region">A test region.</textarea></label> <button type="submit">Save</button></form>"#
-        ));
-        assert!(html.contains(
-            r#"<form method="post" action="/regions/m/region" class="delete"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="reg"><button type="submit">Delete</button></form>"#
-        ));
+        // Region panel (a DaisyUI card) header + its room count (alpha + beta).
+        assert!(html.contains(r#"class="card bg-base-200"#));
+        assert!(html.contains(">Region</h2>"));
+        assert!(html.contains("2 rooms"));
+        // Edit + delete region forms POST to the slot with the id; name + escaped description.
+        assert!(html.contains(r#"action="/regions/m/region""#));
+        assert!(html.contains(r#"name="op" value="edit""#));
+        assert!(html.contains(r#"name="id" value="reg""#));
+        assert!(html.contains(r#"name="name" value="Region""#));
+        assert!(html.contains(r#"aria-label="Description for region Region""#));
+        assert!(html.contains(">A test region.</textarea>"));
+        assert!(html.contains(r#"name="op" value="delete""#));
         // Sub-region nested with its own count + edit form.
-        assert!(html.contains("<li><span>Vale — 1 rooms</span>"));
-        assert!(html.contains(
-            r#"<form method="post" action="/regions/m/subregion" class="edit"><input type="hidden" name="op" value="edit"><input type="hidden" name="id" value="vale"><label>Name <input name="name" value="Vale" aria-label="Name for sub-region Vale"></label> <label>Description <textarea name="description" aria-label="Description for sub-region Vale">A test sub.</textarea></label> <button type="submit">Save</button></form>"#
-        ));
-        // Create forms + the parent-region option.
-        assert!(html.contains(
-            r#"<form method="post" action="/regions/m/region"><input type="hidden" name="op" value="create">"#
-        ));
-        assert!(html.contains(
-            r#"<form method="post" action="/regions/m/subregion"><input type="hidden" name="op" value="create">"#
-        ));
+        assert!(html.contains("Vale — 1 rooms"));
+        assert!(html.contains(r#"action="/regions/m/subregion""#));
+        assert!(html.contains(r#"name="id" value="vale""#));
+        assert!(html.contains(">A test sub.</textarea>"));
+        // Create forms (op=create) + the parent-region option.
+        assert!(html.contains(r#"name="op" value="create""#));
         assert!(html.contains(r#"<option value="reg">Region</option>"#));
-        assert!(html.contains(r#"<a href="/regions" aria-current="page">Regions</a>"#));
+        // DaisyUI form components (REQ-003).
+        assert!(html.contains("input input-bordered"));
+        assert!(html.contains("textarea textarea-bordered"));
+        assert!(html.contains("select select-bordered"));
+        assert!(html.contains("btn btn-primary"));
+        assert!(html.contains("btn btn-error"));
+        assert!(html.contains(r#"aria-current="page">Regions</a>"#));
     }
 
     #[test]
@@ -1327,9 +1375,9 @@ mod tests {
         )
         .expect("fixture parses");
         let html = super::region_editor_page("m", &doc, None).0;
-        assert!(html.contains(
-            r#"<textarea name="description" aria-label="Description for region R">&lt;/textarea&gt;&lt;script&gt;x&lt;/script&gt;</textarea>"#
-        ));
+        assert!(html.contains(r#"aria-label="Description for region R""#));
+        // the escaped payload stays INSIDE the textarea — a closing-tag injection can't break out
+        assert!(html.contains(">&lt;/textarea&gt;&lt;script&gt;x&lt;/script&gt;</textarea>"));
         assert!(
             !html.contains("</textarea><script>x"),
             "the raw tag must not appear"
@@ -1355,7 +1403,9 @@ mod tests {
         )
         .expect("fixture parses");
         let html = super::region_editor_page("m", &doc, Some("bad <x> & y")).0;
-        assert!(html.contains(r#"<p class="error" role="alert">bad &lt;x&gt; &amp; y</p>"#));
+        assert!(
+            html.contains(r#"<p class="alert alert-error" role="alert">bad &lt;x&gt; &amp; y</p>"#)
+        );
     }
 
     #[test]
@@ -1388,8 +1438,9 @@ mod tests {
         )
         .expect("fixture parses");
         let html = super::region_editor_page("m", &doc, None).0;
-        assert!(html
-            .contains(r#"<a class="cta" href="/editor?map=m&subregion=a%20b">Open in editor</a>"#));
+        assert!(html.contains(
+            r#"<a class="link link-primary" href="/editor?map=m&subregion=a%20b">Open in editor</a>"#
+        ));
     }
 
     #[test]
