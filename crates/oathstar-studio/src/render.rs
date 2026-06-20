@@ -575,7 +575,10 @@ document.getElementById("validate").addEventListener("click", async () => {
 // `?map=<id>` so a reload reopens it. (#55 — sibling of the Validate handler.)
 const nameInput = document.getElementById("map-name");
 nameInput.value = doc.id;
+const mapTitle = document.getElementById("map-title");
+mapTitle.value = doc.title;
 document.getElementById("save").addEventListener("click", async () => {
+  doc.title = mapTitle.value.trim();
   doc.id = nameInput.value.trim();
   result.textContent = "Saving…";
   delete result.dataset.ok;
@@ -723,6 +726,113 @@ if (regionAdd) {
   });
 }
 renderRegions();
+
+// Rooms tab (#63): a room list → an inspector that edits a room's metadata (title /
+// description / region / sub-region). The inspector POSTs only those fields to
+// /editor/maps/room-op; update_room preserves the rest of the room. Built with
+// textContent (never innerHTML), so author strings can't inject.
+const roomList = document.getElementById("room-list");
+const roomResult = document.getElementById("room-result");
+const roomInspector = document.getElementById("room-inspector");
+const roomTitle = document.getElementById("room-title");
+const roomDesc = document.getElementById("room-desc");
+const roomRegion = document.getElementById("room-region");
+const roomSubregion = document.getElementById("room-subregion");
+const roomSave = document.getElementById("room-save");
+let selectedRoomId = null;
+
+function optionList(select, entries, current, includeNone) {
+  select.textContent = "";
+  if (includeNone) {
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "(none)";
+    if (!current) none.selected = true;
+    select.append(none);
+  }
+  for (const entry of entries) {
+    const option = document.createElement("option");
+    option.value = entry.id;
+    option.textContent = (entry.name ?? entry.id) + " (" + entry.id + ")";
+    if (entry.id === current) option.selected = true;
+    select.append(option);
+  }
+}
+
+function selectRoom(id) {
+  const room = ((doc && doc.rooms) || []).find((r) => r.id === id);
+  if (!room) return;
+  selectedRoomId = id;
+  roomTitle.value = room.title ?? "";
+  roomDesc.value = room.description ?? "";
+  optionList(roomRegion, Object.values(doc.regions || {}), room.region, false);
+  optionList(roomSubregion, Object.values(doc.subregions || {}), room.subregion ?? "", true);
+  roomInspector.hidden = false;
+}
+
+function renderRooms() {
+  if (!roomList) return;
+  roomList.textContent = "";
+  for (const row of editorRoomRows(doc)) {
+    const li = document.createElement("li");
+    li.className = "room-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent =
+      row.title + " (" + row.id + ") — " + row.region + (row.subregion ? " / " + row.subregion : "");
+    button.addEventListener("click", () => selectRoom(row.id));
+    li.append(button);
+    roomList.append(li);
+  }
+}
+
+async function roomOp(op, fields) {
+  if (roomResult) {
+    roomResult.textContent = "Working…";
+    delete roomResult.dataset.ok;
+  }
+  try {
+    const res = await fetch("/editor/maps/room-op", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ document: doc, op, ...fields }),
+    });
+    if (res.ok) {
+      doc = await res.json();
+      renderRooms();
+      redraw();
+      if (roomResult) {
+        roomResult.textContent = "Saved.";
+        roomResult.dataset.ok = "true";
+      }
+    } else {
+      const body = await res.json().catch(() => ({}));
+      if (roomResult) {
+        roomResult.textContent = body.message || "Room op failed.";
+        roomResult.dataset.ok = "false";
+      }
+    }
+  } catch (err) {
+    if (roomResult) {
+      roomResult.textContent = "Request failed — " + err;
+      roomResult.dataset.ok = "false";
+    }
+  }
+}
+
+if (roomSave) {
+  roomSave.addEventListener("click", () => {
+    if (!selectedRoomId) return;
+    roomOp("edit", {
+      id: selectedRoomId,
+      title: roomTitle.value.trim() || null,
+      description: roomDesc.value.trim() || null,
+      region: roomRegion.value,
+      subregion: roomSubregion.value || null,
+    });
+  });
+}
+renderRooms();
 "#;
 
 /// Render the studio map editor canvas page (ticket #45).
@@ -757,6 +867,7 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
     <aside class="editor-rail">
       <section class="panel controls">
         <label>Map name <input id="map-name" name="map-name" aria-label="Map name (storage slot)"></label>
+        <label>Title <input id="map-title" name="map-title" aria-label="Map title (display name)"></label>
         <button id="save" type="button">Save</button>
         <button id="validate" type="button">Validate</button>
         <button id="activate" type="button">Set as active world</button>
@@ -784,7 +895,18 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
         <pre id="region-result" aria-live="polite"></pre>
         <ul id="region-list" class="region-list"></ul>
       </section>
-      <section class="panel tab-panel" role="tabpanel" id="panel-rooms" data-tab="rooms" aria-labelledby="tab-rooms" hidden><p class="soon">Coming soon.</p></section>
+      <section class="panel tab-panel" role="tabpanel" id="panel-rooms" data-tab="rooms" aria-labelledby="tab-rooms" hidden>
+        <h2>Rooms</h2>
+        <pre id="room-result" aria-live="polite"></pre>
+        <ul id="room-list" class="room-list"></ul>
+        <form id="room-inspector" class="room-inspector" hidden>
+          <label>Title <input id="room-title"></label>
+          <label>Description <input id="room-desc"></label>
+          <label>Region <select id="room-region"></select></label>
+          <label>Sub-region <select id="room-subregion"></select></label>
+          <button id="room-save" type="button">Save room</button>
+        </form>
+      </section>
       <section class="panel tab-panel" role="tabpanel" id="panel-map" data-tab="map" aria-labelledby="tab-map" hidden><p class="soon">Coming soon.</p></section>
     </aside>
   </main>
@@ -935,6 +1057,22 @@ mod tests {
         assert!(html.contains("editorRegionRows("));
         assert!(html.contains("renderRegions("));
         assert!(html.contains(r#"fetch("/editor/maps/region-op""#));
+    }
+
+    #[test]
+    fn editor_page_rooms_tab_has_the_room_ui() {
+        // #63 / REQ-006: the Rooms tab is the room-metadata inspector (a list + an
+        // inspector wired to editorRoomRows + /editor/maps/room-op), and the rail has a
+        // map-title field — not a "Coming soon" stub.
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains(r#"id="room-list""#));
+        assert!(html.contains(r#"id="room-inspector""#));
+        assert!(html.contains(r#"id="room-region""#));
+        assert!(html.contains(r#"id="room-save""#));
+        assert!(html.contains(r#"id="map-title""#));
+        assert!(html.contains("editorRoomRows("));
+        assert!(html.contains("renderRooms("));
+        assert!(html.contains(r#"fetch("/editor/maps/room-op""#));
     }
 
     #[test]

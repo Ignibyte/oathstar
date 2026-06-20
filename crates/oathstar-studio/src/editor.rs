@@ -74,6 +74,24 @@ struct RegionOp {
     description: String,
 }
 
+/// A posted room edit (#63): the in-memory document, the op, and the room metadata
+/// fields the inspector edits (the rest of the room is preserved by `update_room`).
+#[derive(Deserialize)]
+struct RoomOp {
+    document: MapDocument,
+    op: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    region: String,
+    #[serde(default)]
+    subregion: Option<String>,
+}
+
 /// A refusal response with the given status and message (no typed error).
 fn refuse(status: StatusCode, message: &str) -> Response {
     (
@@ -215,6 +233,41 @@ pub async fn region_op(State(studio): State<StudioState>, jar: CookieJar, body: 
             .update_region(&req.id, &req.name, &req.description, &studio.catalog),
         "delete" => req.document.delete_region(&req.id, &studio.catalog),
         _ => return refuse(StatusCode::BAD_REQUEST, "unknown region op"),
+    };
+    match result {
+        Ok(document) => Json(document).into_response(),
+        Err(error) => refuse(StatusCode::BAD_REQUEST, &error.to_string()),
+    }
+}
+
+/// `POST /editor/maps/room-op` — apply a room metadata edit to the posted document via
+/// [`MapDocument::update_room`], returning the updated document.
+///
+/// Gated to the Editor role. `"edit"` dispatches to `update_room` (a **partial** update
+/// — only title/description/region/subregion; the room's coordinates/glyph/exits/etc.
+/// are preserved) against the catalog; `200` returns the full updated document JSON (the
+/// editor swaps it into its in-memory doc), and a typed error (unknown room, undeclared
+/// region) is a `400` with that message. The CRUD is reused, not reimplemented.
+pub async fn room_op(State(studio): State<StudioState>, jar: CookieJar, body: Bytes) -> Response {
+    if let Some(refusal) = editor_refusal(&jar, &studio.sessions) {
+        return refusal;
+    }
+    let Ok(req) = serde_json::from_slice::<RoomOp>(&body) else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "request body is not a valid room op",
+        );
+    };
+    let result = match req.op.as_str() {
+        "edit" => req.document.update_room(
+            &req.id,
+            req.title,
+            req.description,
+            &req.region,
+            req.subregion,
+            &studio.catalog,
+        ),
+        _ => return refuse(StatusCode::BAD_REQUEST, "unknown room op"),
     };
     match result {
         Ok(document) => Json(document).into_response(),
@@ -367,8 +420,8 @@ pub async fn arctic_sheet(State(studio): State<StudioState>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        arctic_sheet, editor_page, list_maps, load_map, region_op, save_map, set_active, validate,
-        STARTER_DOC,
+        arctic_sheet, editor_page, list_maps, load_map, region_op, room_op, save_map, set_active,
+        validate, STARTER_DOC,
     };
     use crate::StudioState;
     use axum::body::{to_bytes, Body, Bytes};
@@ -760,6 +813,71 @@ mod tests {
             )
             .await
             .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// POST a room op and decode `(status, json)`.
+    async fn call_room_op(
+        state: StudioState,
+        cookie: Option<String>,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let jar = jar(cookie.as_deref()).await;
+        let bytes = serde_json::to_vec(&body).expect("serialize room op");
+        decode(room_op(State(state), jar, Bytes::from(bytes)).await).await
+    }
+
+    fn room_op_body(op: &str) -> serde_json::Value {
+        serde_json::json!({
+            "document": valid_doc_value(),
+            "op": op,
+            "id": "alpha",
+            "title": "Atrium",
+            "description": "A wide hall.",
+            "region": "reg",
+            "subregion": null,
+        })
+    }
+
+    #[tokio::test]
+    async fn room_op_edits_a_room() {
+        // REQ-004: an edit returns the updated document with the room's metadata changed.
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        let (status, body) = call_room_op(state, Some(cookie), room_op_body("edit")).await;
+        assert_eq!(status, StatusCode::OK);
+        let doc: MapDocument = serde_json::from_value(body).expect("the body is a document");
+        let room = doc.rooms.iter().find(|r| r.id == "alpha").expect("alpha");
+        assert_eq!(room.title, Some("Atrium".to_owned()));
+        assert_eq!(room.description, Some("A wide hall.".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn room_op_refuses_a_bad_op_and_non_editors() {
+        // REQ-004: unknown op → 400; anonymous → 401; Player → 403.
+        let state = studio();
+        let cookie = cookie_header(&state.sessions.create_session(owner_principal()));
+        assert_eq!(
+            call_room_op(state, Some(cookie), room_op_body("bogus"))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            call_room_op(studio(), None, room_op_body("edit")).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let player = studio();
+        let cookie = cookie_header(
+            &player
+                .sessions
+                .create_session(principal(vec![AuthRole::Player])),
+        );
+        assert_eq!(
+            call_room_op(player, Some(cookie), room_op_body("edit"))
+                .await
+                .0,
             StatusCode::FORBIDDEN
         );
     }

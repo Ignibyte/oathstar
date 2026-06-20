@@ -345,12 +345,21 @@ updating the URL to `?map=<id>` so a reload reopens it — ticket #55), **Valida
 `400` if it doesn't materialize, no write — ticket #60). Each renders its outcome
 through a pure `format{Save,Validate,Activate}Result` helper. The page is laid out (#61) as a
 **stage** (the `#map` canvas, left) + a **right rail**: the controls on top, then a
-`role="tablist"` bar — **Tiles** (the palette) | **Regions** | Rooms | Map (the last two are `Coming
-soon` stubs filled by later slices). Tab switching is the pure `tabPanelStates` + a thin glue handler.
+`role="tablist"` bar — **Tiles** (the palette) | **Regions** | **Rooms** | Map (Map is the last
+`Coming soon` stub, filled by a later slice). Tab switching is the pure `tabPanelStates` + a thin glue handler.
 The **Regions** tab edits the in-memory document's regions inline (#62 — create / rename / delete),
 each op dispatched to the `MapDocument` region CRUD via `POST /editor/maps/region-op` (a delete is
 refused while a room references the region); the endpoint returns the updated document, which the
-editor swaps back in so Save persists it. Sub-region editing is a later slice. It follows the same
+editor swaps back in so Save persists it. Sub-region editing is a later slice. The **Rooms** tab
+(#63) is a room-metadata inspector: a room list (`editorRoomRows`) → click a row → an inspector
+editing that room's title / description / region / sub-region, dispatched via
+`POST /editor/maps/room-op` to the new `MapDocument::update_room` — a **partial** update that sets
+only those four fields and **preserves** the room's coordinates / glyph / combat flag / exits /
+entities, so a metadata edit never wipes the rest (the #62 data-loss class, applied structurally).
+The returned document is swapped back in (Save persists it). Creating/deleting rooms, canvas-click
+selection, and editing exits/glyph are later slices. The controls also carry a **map-title** field
+(`#map-title` → `doc.title`, the display name; the storage slot stays `#map-name` → `doc.id`). It
+follows the same
 pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model
 (`static/editor-canvas.js`, `node --test`-covered) plus a thin canvas/`fetch`
 glue kept as a server-side string — **mirroring** the #16 renderer (Decision

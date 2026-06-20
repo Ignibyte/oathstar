@@ -306,6 +306,24 @@ export function editorRegionRows(doc) {
   }));
 }
 
+/**
+ * The room rows for the editor's Rooms tab (#63): one per authored room, with its
+ * display title (falling back to the id), region, and optional sub-region. Pure — the
+ * caller renders the strings via `textContent`. Null-safe.
+ *
+ * @param {object} doc the in-memory MapDocument
+ * @returns {Array<{id: string, title: string, region: string, subregion: (string|null)}>}
+ */
+export function editorRoomRows(doc) {
+  const rooms = (doc && doc.rooms) || [];
+  return rooms.map((room) => ({
+    id: room.id,
+    title: room.title ?? room.id,
+    region: room.region,
+    subregion: room.subregion ?? null,
+  }));
+}
+
 // ---- ticket #48: paint helpers (palette / point math / mutation) ----
 
 /**

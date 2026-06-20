@@ -17,6 +17,7 @@ import {
   formatActivateResult,
   tabPanelStates,
   editorRegionRows,
+  editorRoomRows,
   tileIndexToSourceRect,
   canvasPointToCell,
   paletteIndexAtPoint,
@@ -273,6 +274,23 @@ test("editorRegionRows: one row per region with room + sub-region counts + descr
   assert.equal(rows[0].roomCount, 0);
   assert.equal(rows[0].subregionCount, 0);
   assert.equal(rows[0].description, "keep");
+});
+
+test("editorRoomRows: one row per room; title falls back to id; region/subregion carried (#63)", () => {
+  const doc = {
+    rooms: [
+      { id: "a", title: "Atrium", region: "r" },
+      { id: "b", region: "r", subregion: "s" },
+    ],
+  };
+  assert.deepEqual(editorRoomRows(doc), [
+    { id: "a", title: "Atrium", region: "r", subregion: null },
+    { id: "b", title: "b", region: "r", subregion: "s" },
+  ]);
+  // empty / null / undefined docs → [].
+  assert.deepEqual(editorRoomRows({}), []);
+  assert.deepEqual(editorRoomRows(null), []);
+  assert.deepEqual(editorRoomRows(undefined), []);
 });
 
 // ---- ticket #48: paint helpers ----

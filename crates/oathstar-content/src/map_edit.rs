@@ -37,6 +37,11 @@ pub enum RegionEditError {
         /// The missing region id.
         id: String,
     },
+    /// Editing a room that does not exist.
+    UnknownRoom {
+        /// The missing room id.
+        id: String,
+    },
     /// Deleting a region a room still places itself in.
     RegionReferencedByRoom {
         /// The region id.
@@ -86,6 +91,7 @@ impl fmt::Display for RegionEditError {
             Self::BlankField { field } => write!(f, "the {field} must not be blank"),
             Self::DuplicateRegionId { id } => write!(f, "region id '{id}' already exists"),
             Self::UnknownRegion { id } => write!(f, "no region '{id}' exists"),
+            Self::UnknownRoom { id } => write!(f, "no room '{id}' exists"),
             Self::RegionReferencedByRoom { id, room_id } => {
                 write!(f, "region '{id}' is still used by room '{room_id}'")
             }
@@ -194,6 +200,36 @@ impl MapDocument {
         };
         region.name = name.to_owned();
         region.description = description.trim().to_owned();
+        edited.finish(catalog)
+    }
+
+    /// Update room `id`'s metadata — its `title`, `description`, `region`, and
+    /// `subregion` — leaving its coordinates, glyph, combat flag, exits, and entities
+    /// untouched (a partial update, so a single-field edit never wipes the rest).
+    ///
+    /// # Errors
+    /// [`RegionEditError::BlankField`] for a blank `region`,
+    /// [`RegionEditError::UnknownRoom`] when no room has that id, or
+    /// [`RegionEditError::WouldBreakWorld`] when the result (e.g. an undeclared region
+    /// or sub-region) would not materialize.
+    pub fn update_room(
+        &self,
+        id: &str,
+        title: Option<String>,
+        description: Option<String>,
+        region: &str,
+        subregion: Option<String>,
+        catalog: &ContentCatalog,
+    ) -> Result<Self, RegionEditError> {
+        let region = non_blank(region, "region")?;
+        let mut edited = self.clone();
+        let Some(room) = edited.rooms.iter_mut().find(|room| room.id == id) else {
+            return Err(RegionEditError::UnknownRoom { id: id.to_owned() });
+        };
+        room.title = title;
+        room.description = description;
+        room.region = region.to_owned();
+        room.subregion = subregion;
         edited.finish(catalog)
     }
 
@@ -512,6 +548,77 @@ mod tests {
                 id: "ghost".to_owned()
             }
         );
+    }
+
+    // ---- C1 (#63): room metadata edit (partial — preserves the rest) ----
+
+    /// A valid doc whose `start` room carries a glyph + an east exit to a second room
+    /// (`hall`), so the preserve test has non-default fields to keep.
+    fn doc_with_a_decorated_room() -> MapDocument {
+        let mut doc = base_doc();
+        doc.terrain.push(TerrainCell {
+            x: 1,
+            y: 0,
+            z: 0,
+            terrain: "floor".to_owned(),
+        });
+        let mut start = room(0, 0, 0, "start", "reg", None);
+        start.glyph = Some('A');
+        start.exits = BTreeMap::from([("east".to_owned(), "hall".to_owned())]);
+        doc.rooms = vec![start, room(1, 0, 0, "hall", "reg", None)];
+        doc
+    }
+
+    #[test]
+    fn update_room_edits_metadata_and_preserves_the_rest() {
+        // REQ-001: editing title/description/region sets exactly those, and leaves the
+        // room's coordinates, glyph, and exits intact (a partial update).
+        let edited = doc_with_a_decorated_room()
+            .update_room(
+                "start",
+                Some("New Title".to_owned()),
+                Some("New desc".to_owned()),
+                "reg",
+                None,
+                &cat(),
+            )
+            .expect("edits");
+        let room = edited.rooms.iter().find(|r| r.id == "start").expect("room");
+        assert_eq!(room.title, Some("New Title".to_owned()));
+        assert_eq!(room.description, Some("New desc".to_owned()));
+        // preserved — the #62 data-loss class must not recur:
+        assert_eq!(room.glyph, Some('A'));
+        assert_eq!(room.exits.get("east"), Some(&"hall".to_owned()));
+        assert_eq!((room.x, room.y, room.z), (0, 0, 0));
+        assert_eq!(room.region, "reg");
+    }
+
+    #[test]
+    fn update_room_refuses_unknown() {
+        // REQ-002
+        let err = base_doc()
+            .update_room("ghost", None, None, "reg", None, &cat())
+            .unwrap_err();
+        assert_eq!(
+            err,
+            RegionEditError::UnknownRoom {
+                id: "ghost".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn update_room_refuses_a_blank_or_undeclared_region() {
+        // REQ-003: a blank region is BlankField; an undeclared region is caught by
+        // finish() (the materialize boundary) as WouldBreakWorld.
+        let blank = base_doc()
+            .update_room("start", None, None, "  ", None, &cat())
+            .unwrap_err();
+        assert!(matches!(blank, RegionEditError::BlankField { .. }));
+        let undeclared = base_doc()
+            .update_room("start", None, None, "nope", None, &cat())
+            .unwrap_err();
+        assert!(matches!(undeclared, RegionEditError::WouldBreakWorld(_)));
     }
 
     #[test]
