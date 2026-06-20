@@ -361,8 +361,13 @@ The returned document is swapped back in (Save persists it). A room is reachable
 click selects the room at that cell (`editorRoomAt` → the same `selectRoom` inspector), on the Tiles tab
 the click still paints (the paint loop is gated, not changed); single-floor (`Z=0`), and an empty-cell
 click is a no-op. Creating/deleting rooms and editing exits/glyph are later slices. The controls also carry a **map-title** field
-(`#map-title` → `doc.title`, the display name; the storage slot stays `#map-name` → `doc.id`). It
-follows the same
+(`#map-title` → `doc.title`, the display name; the storage slot stays `#map-name` → `doc.id`) and a
+**Zoom** slider (#65, `#zoom`, 8–80 px, default 40) that sets the **render tile size** — how big each
+cell draws — so a large map can be sized to fit and the horizontal scrollbar avoided. Zoom is
+**view-only** (the render scale, *not* `doc.tile_size`, which is the source tileset sampling size):
+`resizeCanvas()` re-sizes the canvas and **re-applies** the dpr transform + text style each time
+(setting `canvas.width` resets the 2D context), and `cellAt` uses the live tile size so paint and
+room-click hit-test correctly at any zoom. It follows the same
 pure-model + thin-seam split as the game canvas: a DOM-free studio-owned model
 (`static/editor-canvas.js`, `node --test`-covered) plus a thin canvas/`fetch`
 glue kept as a server-side string — **mirroring** the #16 renderer (Decision

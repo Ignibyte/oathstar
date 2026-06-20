@@ -19,6 +19,7 @@ import {
   editorRegionRows,
   editorRoomRows,
   editorRoomAt,
+  editorClampTilePixels,
   tileIndexToSourceRect,
   canvasPointToCell,
   paletteIndexAtPoint,
@@ -309,6 +310,16 @@ test("editorRoomAt: the room at a cell, matching x AND y AND z; null otherwise (
   assert.equal(editorRoomAt(doc, 0, 2, 0), null); // x differs
   assert.equal(editorRoomAt({}, 0, 0, 0), null);
   assert.equal(editorRoomAt(null, 0, 0, 0), null);
+});
+
+test("editorClampTilePixels: floor + clamp to [min,max]; non-numeric → fallback (#65)", () => {
+  assert.equal(editorClampTilePixels(40, 8, 80, 40), 40);
+  assert.equal(editorClampTilePixels(4, 8, 80, 40), 8); // below min
+  assert.equal(editorClampTilePixels(200, 8, 80, 40), 80); // above max
+  assert.equal(editorClampTilePixels(23.9, 8, 80, 40), 23); // floors
+  assert.equal(editorClampTilePixels("x", 8, 80, 40), 40); // NaN → fallback
+  assert.equal(editorClampTilePixels(undefined, 8, 80, 40), 40); // fallback
+  assert.equal(editorClampTilePixels("", 8, 80, 40), 8); // Number("")=0 → clamps to min (intentional)
 });
 
 // ---- ticket #48: paint helpers ----

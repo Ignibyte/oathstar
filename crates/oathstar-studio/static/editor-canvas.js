@@ -340,6 +340,22 @@ export function editorRoomAt(doc, x, y, z) {
   return rooms.find((room) => room.x === x && room.y === y && room.z === z) ?? null;
 }
 
+/**
+ * Clamp a render tile-pixel size (the editor's zoom, #65) to [`min`, `max`], flooring to
+ * a whole pixel. A non-numeric `value` returns `fallback`. Note `Number("") === 0`, so an
+ * empty string clamps to `min` (a range slider never sends one). Pure.
+ *
+ * @param {(number|string)} value the requested tile-pixel size
+ * @param {number} min minimum px
+ * @param {number} max maximum px
+ * @param {number} fallback px used when `value` is non-numeric
+ * @returns {number} the clamped whole-pixel size
+ */
+export function editorClampTilePixels(value, min, max, fallback) {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
 // ---- ticket #48: paint helpers (palette / point math / mutation) ----
 
 /**

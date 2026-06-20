@@ -414,24 +414,31 @@ if (savedMapId) {
 }
 const canvas = document.getElementById("map");
 const palette = document.getElementById("palette");
-const TILE = 40;
+let tileSize = 40;
 const PALETTE_SCALE = 2;
 const Z = 0;
 let active = null;
 const sheets = {};
 
-const size = editorCanvasSize(doc, { tilePixels: TILE, devicePixelRatio: window.devicePixelRatio });
-canvas.width = size.backingWidth;
-canvas.height = size.backingHeight;
-canvas.style.width = size.cssWidth + "px";
-canvas.style.height = size.cssHeight + "px";
 canvas.setAttribute("aria-label", editorAriaLabel(doc));
 const ctx = canvas.getContext("2d");
-ctx.scale(size.dpr, size.dpr);
-ctx.imageSmoothingEnabled = false;
-ctx.font = "18px ui-monospace, monospace";
-ctx.textBaseline = "middle";
-ctx.textAlign = "center";
+// The render tile size (zoom, #65) is view state — never written to the document.
+// Setting canvas.width/height resets the 2D context, so resizeCanvas re-applies the dpr
+// transform + text style after every (re)size.
+let size;
+function resizeCanvas() {
+  size = editorCanvasSize(doc, { tilePixels: tileSize, devicePixelRatio: window.devicePixelRatio });
+  canvas.width = size.backingWidth;
+  canvas.height = size.backingHeight;
+  canvas.style.width = size.cssWidth + "px";
+  canvas.style.height = size.cssHeight + "px";
+  ctx.scale(size.dpr, size.dpr);
+  ctx.imageSmoothingEnabled = false;
+  ctx.font = "18px ui-monospace, monospace";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+}
+resizeCanvas();
 
 // A uniform tile grid over every cell so each tile is delineated (#48 fix 4).
 function drawGrid() {
@@ -439,19 +446,19 @@ function drawGrid() {
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let gx = 0; gx <= doc.width; gx += 1) {
-    ctx.moveTo(gx * TILE + 0.5, 0);
-    ctx.lineTo(gx * TILE + 0.5, doc.height * TILE);
+    ctx.moveTo(gx * tileSize + 0.5, 0);
+    ctx.lineTo(gx * tileSize + 0.5, doc.height * tileSize);
   }
   for (let gy = 0; gy <= doc.height; gy += 1) {
-    ctx.moveTo(0, gy * TILE + 0.5);
-    ctx.lineTo(doc.width * TILE, gy * TILE + 0.5);
+    ctx.moveTo(0, gy * tileSize + 0.5);
+    ctx.lineTo(doc.width * tileSize, gy * tileSize + 0.5);
   }
   ctx.stroke();
 }
 
 function redraw() {
   ctx.clearRect(0, 0, size.cssWidth, size.cssHeight);
-  for (const op of editorDrawPlan(doc, { z: Z, tilePixels: TILE, focusSubregion }).ops) {
+  for (const op of editorDrawPlan(doc, { z: Z, tilePixels: tileSize, focusSubregion }).ops) {
     if (op.sprites.length) {
       for (const s of op.sprites) {
         const img = sheets[s.tileset];
@@ -510,6 +517,15 @@ for (const ts of (doc.tilesets || [])) {
 }
 redraw();
 
+const zoom = document.getElementById("zoom");
+const zoomPx = document.getElementById("zoom-px");
+zoom.addEventListener("input", () => {
+  tileSize = editorClampTilePixels(zoom.value, 8, 80, 40);
+  zoomPx.textContent = tileSize + "px";
+  resizeCanvas();
+  redraw();
+});
+
 if (palette) {
   palette.addEventListener("click", (e) => {
     const ts = doc.tilesets[0];
@@ -531,7 +547,7 @@ if (palette) {
 // layer cells by z, so a cell with z === undefined is never drawn (#48 fix 2).
 function cellAt(e) {
   const rect = canvas.getBoundingClientRect();
-  return canvasPointToCell(e.clientX - rect.left, e.clientY - rect.top, TILE, doc.width, doc.height);
+  return canvasPointToCell(e.clientX - rect.left, e.clientY - rect.top, tileSize, doc.width, doc.height);
 }
 // Canvas tool is tab-gated (#64): the Rooms tab makes a click SELECT a room; every
 // other tab leaves the paint loop in charge.
@@ -886,6 +902,7 @@ pub fn editor_page(doc_json: &str) -> Html<String> {
       <section class="panel controls">
         <label>Map name <input id="map-name" name="map-name" aria-label="Map name (storage slot)"></label>
         <label>Title <input id="map-title" name="map-title" aria-label="Map title (display name)"></label>
+        <label>Zoom <input id="zoom" type="range" min="8" max="80" step="4" value="40"><span id="zoom-px">40px</span></label>
         <button id="save" type="button">Save</button>
         <button id="validate" type="button">Validate</button>
         <button id="activate" type="button">Set as active world</button>
@@ -1104,6 +1121,20 @@ mod tests {
         assert!(html.contains(r#"addEventListener("click""#));
         assert!(html.contains("selectRoom(room.id)"));
         assert!(html.contains("if (roomsTabActive()) { return; }"));
+    }
+
+    #[test]
+    fn editor_page_has_a_zoom_control() {
+        // #65 / REQ-002: the controls carry a zoom slider whose input re-sizes + redraws
+        // the canvas at an adjustable render tile size (editorClampTilePixels → tileSize →
+        // resizeCanvas + redraw), view-only and distinct from the saved document.
+        let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
+        assert!(html.contains(r#"id="zoom""#));
+        assert!(html.contains(r#"id="zoom-px""#));
+        assert!(html.contains("editorClampTilePixels("));
+        assert!(html.contains("resizeCanvas("));
+        assert!(html.contains("let tileSize = 40"));
+        assert!(html.contains("tilePixels: tileSize"));
     }
 
     #[test]
@@ -1377,7 +1408,9 @@ mod tests {
         // model, and outlines focused cells.
         let html = editor_page(r#"{"id":"x","title":"T"}"#).0;
         assert!(html.contains(r#"new URLSearchParams(window.location.search).get("subregion")"#));
-        assert!(html.contains("editorDrawPlan(doc, { z: Z, tilePixels: TILE, focusSubregion })"));
+        assert!(
+            html.contains("editorDrawPlan(doc, { z: Z, tilePixels: tileSize, focusSubregion })")
+        );
         assert!(html.contains("if (op.focused) {"));
     }
 }
